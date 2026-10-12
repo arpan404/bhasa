@@ -207,6 +207,43 @@ impl Query<'_> {
                 ),
             ]));
         }
+        for alias in &self.expansion.modules.type_aliases {
+            let file = &self.files[alias.owner];
+            let declared = file
+                .source
+                .get(alias.target_span.start - file.base..alias.target_span.end - file.base)
+                .unwrap_or("");
+            let nominal_location = self
+                .program
+                .records
+                .iter()
+                .filter(|record| !crate::collections::is_collection(&record.name))
+                .map(|record| (&record.name, record.span))
+                .chain(
+                    self.program
+                        .enums
+                        .iter()
+                        .map(|item| (&item.name, item.span)),
+                )
+                .find(|(name, _)| {
+                    self.expansion.generics.display_names(name) == alias.canonical_target
+                })
+                .map_or(Value::Null, |(_, span)| self.location(span));
+            declarations.push(Value::object([
+                ("name", alias.name.clone().into()),
+                ("kind", "type_alias".into()),
+                ("private", alias.private.into()),
+                ("location", self.location(alias.span)),
+                ("name_location", self.location(alias.name_span)),
+                ("target_location", self.location(alias.target_span)),
+                ("declared_target", declared.into()),
+                (
+                    "canonical_target",
+                    self.display(&alias.canonical_target).into(),
+                ),
+                ("canonical_target_location", nominal_location),
+            ]));
+        }
         declarations.sort_by_key(|value| {
             (
                 value
@@ -405,10 +442,77 @@ pub(crate) fn run(source: Option<&Path>) -> i32 {
             ("declarations", query.declarations()),
             (
                 "declaration_scope",
-                "checked concrete declarations; unused generic templates are omitted".into(),
+                "checked concrete declarations and validated type aliases; unused generic templates are omitted".into(),
             ),
             ("diagnostics", Value::Array(Vec::new())),
         ]),
         0,
     )
+}
+
+#[cfg(test)]
+mod alias_inspect_tests {
+    use super::*;
+    #[test]
+    fn checked_alias_inspection_includes_unused_private_and_declared_targets() {
+        let source="# 🌍\ntype Count=int\ntype Again=Count\nprivate type Bytes=buffer\ntype Unused=List[int]\nstruct Point{value:int}\ntype Item=Point\ndef type(value:int)->int{return value}\ndef main(){}\n";
+        let files = vec![SourceFile {
+            path: "aliases.bh".into(),
+            source: source.into(),
+            base: 0,
+            imports: Vec::new(),
+            import_spans: Vec::new(),
+        }];
+        let expansion = crate::expand_files(&files).unwrap();
+        let checked = expansion.check().unwrap();
+        let query = Query {
+            files: &files,
+            tokens: vec![crate::lexer::lex_rust(source).unwrap()],
+            program: &checked.program,
+            expansion: &expansion,
+        };
+        let declarations = query.declarations();
+        let aliases: Vec<_> = declarations
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item.get("kind").and_then(Value::as_str) == Some("type_alias"))
+            .collect();
+        assert_eq!(aliases.len(), 5);
+        let again = aliases
+            .iter()
+            .find(|item| item.get("name").and_then(Value::as_str) == Some("Again"))
+            .unwrap();
+        assert_eq!(
+            again.get("declared_target").and_then(Value::as_str),
+            Some("Count")
+        );
+        assert_eq!(
+            again.get("canonical_target").and_then(Value::as_str),
+            Some("int")
+        );
+        assert!(!declarations.to_string().contains("__bhm_"));
+        assert!(!declarations.to_string().contains("__bhg_"));
+        assert!(aliases
+            .iter()
+            .any(
+                |item| item.get("name").and_then(Value::as_str) == Some("Bytes")
+                    && item.get("private") == Some(&Value::Bool(true))
+            ));
+        let item = aliases
+            .iter()
+            .find(|item| item.get("name").and_then(Value::as_str) == Some("Item"))
+            .unwrap();
+        assert_eq!(
+            item.get("canonical_target_location")
+                .unwrap()
+                .get("span")
+                .unwrap()
+                .get("start")
+                .and_then(Value::as_i64),
+            Some(source.find("struct Point").unwrap() as i64)
+        );
+        assert_eq!(again.get("canonical_target_location"), Some(&Value::Null));
+        assert_eq!(declarations.to_string(), query.declarations().to_string());
+    }
 }

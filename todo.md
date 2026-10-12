@@ -21,6 +21,7 @@ after verified increments. Existing caches are preserved.
 - [x] Offline graph locks, scalar adapter review metadata and protected compiler outputs.
 - [x] Checked signature help and semantic tokens with guarded editor snapshots.
 - [x] Private Text, collection and JSON storage with copy-returning public APIs.
+- [x] Transparent nongeneric type aliases, checked alias editor identity and inspection metadata.
 - [ ] Eight dedicated chats implement remaining sections in `docs/status/backlog-lanes.md`; draft readiness does not complete a checkbox.
 
 Three workers may run alongside the coordinator in this session. The coordinator
@@ -67,7 +68,8 @@ tests and 38 editor tests. This evidence predates new work below.
 - [ ] Tuples and destructuring.
 - [ ] Type aliases, immutable declarations and constants.
   - [x] Binding-only immutable local `let` declarations.
-  - [ ] Transparent type aliases and compile-time constants.
+  - [x] Transparent nongeneric type aliases, including checked editor/API identity.
+  - [ ] Generic alias declarations and compile-time constants.
 - [ ] Compile-time evaluation.
 
 ## Functions, generics and control flow
@@ -262,5 +264,15 @@ Package/editor/private-storage increment: 558 reference / 583 hybrid tests,
 examples and five package tests per frontend, A/B/C at run.lm8cj8Lt, 32 native
 cache hits and four unchanged Rust adapter runs with zero Rust compilations.
 Two unchanged hybrid builds reuse archive ccabbe47a921bfdd320a4844960bfd84f5db48f3f5ae7d3b9013fdffdebff3ec
-with zero compilations. See `docs/status/integration.md` for scope and limitations.
-Aliases, owned transfers, streaming files and channels remain unintegrated drafts.
+with zero compilations. See `docs/status/integration-tools.md` for scope and limitations.
+Owned transfers, streaming files and channels remain unintegrated drafts.
+
+Transparent alias increment: 597 complete reference / 622 full-hybrid tests,
+93 LSP groups per configuration and 93 Node tests. Both Clippy configurations,
+formatting, fourteen release examples and five package tests per frontend pass.
+Independent corrected identity review passes 126 groups plus expansion allocation
+checks. A/B/C passes at run.DqAvmtmF; 34 native hits, four unchanged Rust adapter
+runs and two unchanged hybrid builds perform zero compilations. Matching archive
+is 366a75f3c915ffe34aa5529155ad732dc7b5e977320d34a7bc527ad931538b69.
+See `docs/status/integration.md`. Generic aliases, constants, ownership transfers,
+streaming files, channels and broader failure obligations remain open.

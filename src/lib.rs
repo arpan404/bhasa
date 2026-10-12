@@ -89,8 +89,10 @@ pub(crate) fn expand_files(
     files: &[project::SourceFile],
 ) -> Result<ExpandedFiles, Vec<Diagnostic>> {
     let modules = modules::expand_files(files)?;
-    let generics = generics::expand(&modules.source, &modules.boundaries)
-        .map_err(|errors| modules.map_diagnostics(errors))?;
+    let type_roots = modules.type_roots()?;
+    let generics =
+        generics::expand_with_type_roots(&modules.source, &modules.boundaries, &type_roots)
+            .map_err(|errors| modules.map_diagnostics(errors))?;
     Ok(ExpandedFiles { modules, generics })
 }
 pub(crate) fn check_files(

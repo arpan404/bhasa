@@ -441,12 +441,18 @@ impl Server {
             "textDocument/semanticTokens/full" => {
                 Ok(checked_semantic_tokens(uri, doc, &self.analyze(uri, doc)))
             }
-            "textDocument/documentSymbol" => Ok(Value::Array(
-                local_symbols(uri, &doc.source)
+            "textDocument/documentSymbol" => {
+                let analysis = self.analyze(uri, doc);
+                let mut symbols: Vec<_> = analysis
+                    .symbols
                     .into_iter()
-                    .map(|symbol| symbol.document_symbol())
-                    .collect(),
-            )),
+                    .filter(|symbol| symbol.uri == uri && symbol.kind != 13)
+                    .collect();
+                symbols.sort_by_key(|symbol| symbol.selection_span.start);
+                Ok(Value::Array(
+                    symbols.into_iter().map(Symbol::document_symbol).collect(),
+                ))
+            }
             _ => {
                 let pos = params
                     .get("position")
@@ -1161,6 +1167,15 @@ impl Server {
         // Conservative completeness check. In particular, an unused generic
         // body or nested generic type spelling must never be silently missed.
         for graph in &graphs {
+            let alias_markers: BTreeSet<_> = crate::expand_files(&graph.files)
+                .map(|map| {
+                    map.modules
+                        .type_aliases
+                        .iter()
+                        .map(|alias| alias.span.start)
+                        .collect()
+                })
+                .unwrap_or_default();
             for file in &graph.files {
                 let file_uri = if file.path.as_os_str().is_empty() {
                     graph.uri.clone()
@@ -1168,7 +1183,12 @@ impl Server {
                     self.file_uri(&file.path)
                 };
                 let tokens = crate::lexer::lex(&file.source).unwrap_or_default();
-                let markers = crate::modules::contextual_binding_markers(&tokens);
+                let mut markers = crate::modules::contextual_binding_markers(&tokens);
+                markers.extend(tokens.iter().enumerate().filter_map(|(index, token)| {
+                    alias_markers
+                        .contains(&(file.base + token.span.start))
+                        .then_some(index)
+                }));
                 for (index, token) in tokens.iter().enumerate() {
                     if !markers.contains(&index)
                         && matches!(&token.kind, TokenKind::Ident(name) if name == &target.name)
@@ -1404,6 +1424,7 @@ impl Symbol {
             ("kind".to_owned(), self.kind.into()),
             ("range".to_owned(), self.range),
             ("selectionRange".to_owned(), self.selection),
+            ("detail".to_owned(), self.detail.into()),
         ]);
         if !self.children.is_empty() {
             fields.insert(
@@ -1472,6 +1493,7 @@ impl Suggestion {
                 23 => 22,
                 10 => 13,
                 22 => 20,
+                26 => 25,
                 _ => 6,
             },
         }
@@ -1619,6 +1641,17 @@ impl Server {
         let file = &analysis.files[file_index];
         let global_offset = file.base + offset;
         let expansion = crate::expand_files(&analysis.files).ok();
+        if expansion.as_ref().is_some_and(|map| {
+            map.modules.type_aliases.iter().any(|alias| {
+                alias.span.start <= global_offset && global_offset < alias.span.start + "type".len()
+            })
+        }) {
+            return if completion {
+                empty_completion()
+            } else {
+                Value::Null
+            };
+        }
         let mut suggestions = BTreeMap::<String, Suggestion>::new();
         let locals = lexical_bindings(&analysis, file_index, global_offset, expansion.as_ref());
         if let Some(dot) = word.dot {
@@ -1740,9 +1773,19 @@ impl Server {
             let name = &doc.source[word.span.start..word.span.end];
             // Checked references disambiguate qualified calls and methods, while
             // lexical bindings take precedence over same-named declarations.
-            let value = suggestions
-                .get(name)
-                .map(|item| item.detail.clone())
+            let alias_detail = analysis.references.iter().find_map(|reference| {
+                if reference.uri != uri
+                    || reference.span.start > offset
+                    || offset >= reference.span.end
+                {
+                    return None;
+                }
+                find_symbol(&analysis.symbols, &reference.target)
+                    .filter(|symbol| symbol.kind == 26 && (symbol.uri == uri || !symbol.private))
+                    .map(|symbol| symbol.detail.clone())
+            });
+            let value = alias_detail
+                .or_else(|| suggestions.get(name).map(|item| item.detail.clone()))
                 .or_else(|| {
                     analysis
                         .references
@@ -1916,10 +1959,22 @@ fn checked_semantic_tokens(uri: &str, doc: &Document, analysis: &Analysis) -> Va
         return empty();
     };
     let markers = crate::modules::contextual_binding_markers(&tokens);
-    let keyword_spans: BTreeSet<_> = markers
+    let mut keyword_spans: BTreeSet<_> = markers
         .iter()
         .map(|index| (tokens[*index].span.start, tokens[*index].span.end))
         .collect();
+    if let Ok(map) = crate::expand_files(&analysis.files) {
+        for alias in &map.modules.type_aliases {
+            if let Some(file) = analysis.files.get(alias.owner) {
+                if file.path == doc.path.clone().unwrap_or_default() {
+                    keyword_spans.insert((
+                        alias.span.start - file.base,
+                        alias.span.start - file.base + 4,
+                    ));
+                }
+            }
+        }
+    }
     let mut sites: BTreeMap<(usize, usize), BTreeSet<(usize, usize)>> = BTreeMap::new();
     for reference in &analysis.references {
         if reference.uri != uri
@@ -1940,6 +1995,7 @@ fn checked_semantic_tokens(uri: &str, doc: &Document, analysis: &Analysis) -> Va
             8 => 6,
             13 if symbol.binding == Some(BindingKind::Parameter) => 7,
             13 => 8,
+            26 => 10,
             _ => continue,
         };
         let declaration = usize::from(symbol.uri == uri && symbol.selection_span == reference.span);
@@ -2732,6 +2788,55 @@ fn declaration_name(tokens: &[Token], keyword: TokenKind, name: &str, span: Span
 fn symbol_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
     let tokens = crate::lexer::lex(source)?;
     let mut bytes = source.as_bytes().to_vec();
+    let mut braces = 0usize;
+    for (index, token) in tokens.iter().enumerate() {
+        if braces == 0
+            && matches!(&token.kind, TokenKind::Ident(name) if name == "type")
+            && matches!(
+                tokens.get(index + 1).map(|token| &token.kind),
+                Some(TokenKind::Ident(_))
+            )
+            && tokens
+                .get(index + 2)
+                .is_some_and(|token| token.kind == TokenKind::Equal)
+        {
+            let end = tokens[index + 3..]
+                .iter()
+                .find(|token| {
+                    matches!(
+                        token.kind,
+                        TokenKind::Newline | TokenKind::Semicolon | TokenKind::Eof
+                    )
+                })
+                .map_or(source.len(), |token| {
+                    if token.kind == TokenKind::Semicolon {
+                        token.span.end
+                    } else {
+                        token.span.start
+                    }
+                });
+            let mut start = token.span.start;
+            if let Some(previous) = tokens[..index]
+                .iter()
+                .rev()
+                .find(|token| token.kind != TokenKind::Newline)
+            {
+                if matches!(&previous.kind, TokenKind::Ident(name) if name == "private") {
+                    start = previous.span.start;
+                }
+            }
+            for byte in &mut bytes[start..end] {
+                if !matches!(*byte, b'\r' | b'\n') {
+                    *byte = b' ';
+                }
+            }
+        }
+        match token.kind {
+            TokenKind::LeftBrace => braces += 1,
+            TokenKind::RightBrace => braces = braces.saturating_sub(1),
+            _ => {}
+        }
+    }
     let mut start = None;
     let mut depth = 0;
     for token in tokens {
@@ -3176,9 +3281,140 @@ fn checked_references(
         }
     }
     declarations(symbols, &index.targets, &mut index.references);
-    for local in index.locals {
+    for local in std::mem::take(&mut index.locals) {
         if !symbols.iter().any(|symbol| symbol.key == local.key) {
             symbols.push(local);
+        }
+    }
+    if let Some(expansion) = &index.expansion {
+        let modules = &expansion.modules;
+        let checked_keys: BTreeSet<_> = index.targets.values().map(String::as_str).collect();
+        let nominal_anchors: BTreeMap<_, BTreeSet<_>> = symbols
+            .iter()
+            .filter(|symbol| {
+                matches!(symbol.kind, 23 | 10) && checked_keys.contains(symbol.key.as_str())
+            })
+            .fold(BTreeMap::new(), |mut anchors, symbol| {
+                anchors
+                    .entry((
+                        symbol.uri.as_str(),
+                        symbol.selection_span.start,
+                        symbol.selection_span.end,
+                    ))
+                    .or_default()
+                    .insert(symbol.key.as_str());
+                anchors
+            });
+        for reference in &modules.type_alias_nominal_uses {
+            let Some(owner) = index
+                .files
+                .iter()
+                .rev()
+                .find(|file| file.base <= reference.declaration_span.start)
+            else {
+                continue;
+            };
+            let selection = Span::new(
+                reference.declaration_span.start - owner.base,
+                reference.declaration_span.end - owner.base,
+            );
+            let Some(keys) =
+                nominal_anchors.get(&(owner.uri.as_str(), selection.start, selection.end))
+            else {
+                continue;
+            };
+            if keys.len() != 1 {
+                continue;
+            }
+            let Some(file) = index
+                .files
+                .iter()
+                .rev()
+                .find(|file| file.base <= reference.span.start)
+            else {
+                continue;
+            };
+            let Some(token) = file.tokens.iter().rev().find(|token| {
+                token.span.start >= reference.span.start
+                    && token.span.end <= reference.span.end
+                    && matches!(token.kind, TokenKind::Ident(_))
+            }) else {
+                continue;
+            };
+            index.references.push(DefinitionReference {
+                uri: file.uri.clone(),
+                span: Span::new(token.span.start - file.base, token.span.end - file.base),
+                target: (*keys.first().unwrap()).to_owned(),
+            });
+        }
+        let mut aliases = BTreeMap::new();
+        for alias in &modules.type_aliases {
+            let Some(file) = files.get(alias.owner) else {
+                continue;
+            };
+            let file_uri = uri(&file.path);
+            let local = |span: Span| {
+                Span::new(
+                    span.start.saturating_sub(file.base),
+                    span.end.saturating_sub(file.base),
+                )
+            };
+            let selection = local(alias.name_span);
+            let key = format!("{file_uri}#type-alias:{}", selection.start);
+            aliases.insert(alias.internal_name.as_str(), key.clone());
+            symbols.push(Symbol {
+                name: alias.name.clone(),
+                key: key.clone(),
+                uri: file_uri.clone(),
+                kind: 26,
+                range: range(&file.source, local(alias.span)),
+                selection: range(&file.source, selection),
+                selection_span: selection,
+                children: Vec::new(),
+                detail: format!(
+                    "type {} = {}",
+                    alias.name,
+                    modules.display_names(&alias.canonical_target)
+                ),
+                private: alias.private,
+                binding: None,
+            });
+            index.references.push(DefinitionReference {
+                uri: file_uri,
+                span: selection,
+                target: key,
+            });
+        }
+        for reference in &modules.type_alias_uses {
+            let Some(key) = aliases.get(reference.internal_name.as_str()) else {
+                continue;
+            };
+            let Some(file) = index
+                .files
+                .iter()
+                .rev()
+                .find(|file| file.base <= reference.span.start)
+            else {
+                continue;
+            };
+            // A qualified use edits/selects only its final identifier. Its module
+            // prefix keeps its separate checked namespace identity.
+            let Some(token) = file.tokens.iter().rev().find(|token| {
+                token.span.start >= reference.span.start
+                    && token.span.end <= reference.span.end
+                    && matches!(token.kind, TokenKind::Ident(_))
+            }) else {
+                continue;
+            };
+            let span = Span::new(token.span.start - file.base, token.span.end - file.base);
+            index
+                .references
+                .retain(|existing| existing.uri != file.uri || existing.span != span);
+            index.references.push(DefinitionReference {
+                uri: file.uri.clone(),
+                span,
+                target: key.clone(),
+            });
         }
     }
     for file in files {

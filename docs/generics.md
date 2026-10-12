@@ -29,6 +29,11 @@ application; local variable types still infer normally. Multiple parameters use
 enclosing record's parameters work. `std` provides `Option[T]`, `Result[T]`,
 `Box[T]` and `option_or[T]`, alongside its existing concrete result types.
 
+A [type alias](aliases.md) can name a concrete application:
+`type IntBox = Box[int]`. `IntBox` and `Box[int]` share one specialization, and
+`IntBox(42)` uses the same constructor. An unused alias still instantiates and
+validates its concrete target. Generic alias parameters are unsupported.
+
 The Rust host resolves imports and lowers generic source before either the Rust
 or Bhasa semantic frontend. Diagnostics map back to the original files and use
 readable concrete names. The standalone Bhasa compiler seed does not yet perform

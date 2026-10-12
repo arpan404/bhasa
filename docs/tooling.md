@@ -39,19 +39,21 @@ advertises those choices during `initialize`.
 
 | Method | Behavior |
 | --- | --- |
-| `initialize`, `initialized` | Advertise full sync, UTF-16, formatting, symbols, definitions, references, rename, completion and hover |
+| `initialize`, `initialized` | Advertise full sync, UTF-16, formatting, symbols, definitions, references, rename, completion, hover, signature help and semantic tokens |
 | `textDocument/didOpen` | Keep source and version in memory and publish diagnostics |
 | `textDocument/didChange` | Replace source with each newer full-content update and republish diagnostics |
 | `textDocument/didSave` | Reload saved module information and republish diagnostics |
 | `textDocument/didClose` | Drop the editor buffer and clear diagnostics no longer needed by open roots |
 | `textDocument/formatting` | Return a whole-document edit from `format_source`, or no edits if unchanged |
-| `textDocument/documentSymbol` | Return functions, records with fields/methods, and enums with variants in source order |
+| `textDocument/documentSymbol` | Return functions, records with fields/methods, enums with variants, and validated type aliases in source order |
 | `textDocument/definition` | Resolve checked local bindings, declarations, global/method calls, record/enum constructors, case variants, and field accesses |
 | `textDocument/references` | Return checked declaration/use locations across loaded graphs rooted at open documents; honor `includeDeclaration` |
 | `textDocument/prepareRename` | Return the complete identifier range and placeholder for a supported checked target |
 | `textDocument/rename` | Return versioned `documentChanges` after in-memory checking and binding comparison; every edited file must be open |
 | `textDocument/completion` | Return up to 128 sorted visible names or accessible members with UTF-16 replacement edits |
 | `textDocument/hover` | Return a plaintext type or declaration signature and the identifier range |
+| `textDocument/signatureHelp` | Return checked call signatures and active argument positions |
+| `textDocument/semanticTokens/full` | Return checked UTF-16 token sites, including aliases and nominal RHS arguments |
 | `shutdown`, `exit` | Respond to shutdown, then exit successfully after the exit notification |
 
 Diagnostics include compiler codes, source `bhasa`, severity, document version
@@ -67,6 +69,15 @@ including cancellation, and returns MethodNotFound for unsupported requests.
 It does not advertise incremental edits. Ranged changes, malformed document
 notifications, and stale versions leave the current document unchanged.
 Formatting failures return RequestFailed without editing the document.
+
+[Type aliases](aliases.md) have their own checked source identity, including
+unused declarations. Completion, hover, definition, references, rename and
+semantic tokens preserve that identity. Canonical targets retain their nominal
+identity, including nested generic arguments on an alias RHS. Qualified aliases
+and nominal arguments select only the final identifier; their namespace prefixes
+remain separate. `inspect --json` includes declared and canonical target fields.
+These identities require a fully checked graph and follow the same privacy,
+lock and unsaved-buffer rules as other checked queries.
 
 ## References and rename
 

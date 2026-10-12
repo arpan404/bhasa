@@ -109,6 +109,7 @@ the current protocol and data limits.
 | `buffer`, `ints`, `List[T]`, `Map[K,V]` | Owned vectors and specialized typed collections; maps use int/str keys |
 | Named `struct` records, methods and nested fields | Borrowed `self` receivers and positional constructors; no inheritance or recursive layouts |
 | Explicit generic functions, records and enums | Compile-time specialization; no inferred type arguments, traits or method-specific parameters |
+| Transparent `type Name = Target` aliases | Concrete targets share identity and ownership; no alias type parameters |
 | Tagged `enum` values and exhaustive `match` | Named concrete variants and owned payloads; no guards, wildcards or match expressions |
 | `Text`, `StringList`, `StringIntMap`, `StringMap` | Local `std` package; concrete types, scalar UTF-8 indexing and linear map lookup |
 | JSON and HTTP/1.0/1.1 library helpers | Bounded input; optional TLS package; one request per connection; no chunking or keepalive |
@@ -120,7 +121,7 @@ the current protocol and data limits.
 | Owned TCP listeners and sockets | Synchronous with optional deadlines; numeric-address timed connect |
 | Verified TLS client/server sockets | Optional installed OpenSSL 3; explicit trust and identity checks; no mutual TLS or async I/O |
 | Metal, CUDA and Vulkan adapters | Trusted backend-specific kernels; no Bhasa GPU kernel syntax |
-| Local modules, aliases and `private` access | No registry or package initialization |
+| Local modules, import namespaces and `private` access | No registry or package initialization |
 | Rust adapters and explicit native link inputs | Trusted C ABI with integer parameters and integer or void results |
 | Native boolean tests | Isolated processes, filters, deadlines and JSON; no coverage or parallel runner |
 | Native artifact cache | Reuses unchanged complete outputs; frontend work still runs |
@@ -180,6 +181,7 @@ See [self-hosting](docs/self-hosting.md) for the scope of that evidence.
 
 - [Language reference](docs/language.md)
 - [Records and ownership](docs/records.md)
+- [Type aliases](docs/aliases.md)
 - [Commands and targets](docs/toolchain.md)
 - [Owned data, I/O and processes](docs/runtime.md)
 - [Structured concurrency](docs/concurrency.md)

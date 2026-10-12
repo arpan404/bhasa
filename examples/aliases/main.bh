@@ -1,0 +1,31 @@
+import "@std"
+
+type Count = int
+type Message = Text
+
+struct Point {
+    x: Count
+    y: Count
+}
+type Location = Point
+
+struct Bundle[T] {
+    value: T
+}
+type Label = Bundle[Message]
+
+def total(point: Location) -> Count {
+    return point.x + point.y
+}
+
+def main() {
+    let point: Location = Location(20, 22)
+    print(total(point))
+
+    let original: Message = text("Bhasa")
+    var copy: Message = original
+    copy.append(text(" aliases"))
+    let label: Label = Label(copy)
+    print(original.bytes())
+    print(label.value.bytes())
+}

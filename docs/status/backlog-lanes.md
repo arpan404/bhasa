@@ -16,6 +16,13 @@ storage changes pass all combined gates (558 reference inventory, 583 hybrid,
 A/B/C and unchanged cache reuse. integration.md records evidence. Next reviewed
 increments are aliases, TCP copy policy, owned transfer, files and channel parity;
 their isolated readiness does not mark checklist boxes complete.
+Transparent aliases and checked alias metadata now pass 597 reference/622 hybrid,
+93 LSP per configuration/93 Node, both Clippy modes, releases, A/B/C at
+run.DqAvmtmF and unchanged cache reuse. integration.md records final evidence;
+next actual source composition is corrected owned transfer/TCP/files. Channel
+target correction is independently approved for native manifest implementation.
+Explicit borrow host review and late-stage Result-parameter implementation are
+active. Workspace/public-host and S036 action corrections remain separate gates.
 
 ## Shared workflow
 

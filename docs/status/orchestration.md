@@ -1,5 +1,45 @@
 # Current compiler integration
 
+## October 12 transparent aliases integration
+
+Package/editor/private storage is committed and pushed as 621a977. Corrected
+transparent aliases, unused target validation, checked editor identities and
+inspection metadata pass all combined gates: 597 complete reference, 622 full
+hybrid, 93 LSP groups per configuration and 93 Node tests. Both Clippy modes,
+formatting, refreshed releases, fourteen examples/five package tests per frontend,
+A/B/C at run.DqAvmtmF and two unchanged builds pass. Archive
+366a75f3c915ffe34aa5529155ad732dc7b5e977320d34a7bc527ad931538b69
+matches frozen seeds; 34 native hits and four unchanged Rust adapter runs require
+zero compilations. All 56 frozen source hashes remain unchanged. Reviewed docs
+and runnable alias example are applied. Root is committing this verified increment;
+integration.md records scope and evidence, integration-tools.md preserves 621a977.
+
+Independent channel review reproduced real Clang target rejection (P1). The
+separate component-based target correction now passes root's original five-target
+replay and twelve malformed/platform/ABI refusals, preserving exact triples.
+Native parity is assigned to the existing native chat atop corrected owned/file
+seed composition. Incremental design evidence is retained for later. No channel
+integration checkbox is complete.
+
+S036 server/client review found malformed diagnostic admission, transient
+overlay-history and contextual marker gaps; the editor chat owns corrections.
+The custom client offers no edit. Workspace review reproduced 31 KiB to over
+19 MiB inventory amplification; the first preconstruction bound repairs it.
+A second narrow correction addresses public API wrapper depth and allocation
+before lossy path charging. Independent final review is in progress. Original
+failing source/evidence remains intact.
+
+Corrected owned host/native drafts pass independent ownership/cleanup review;
+root is composing actual editor/API support before shared integration. Explicit
+borrows are ratified in explicit-borrows-milestone.md; the isolated host handoff
+is ready and independently reviewed next. Result-parameter host implementation
+is assigned at the approved late phase: complete prior sema/local checks, source
+privacy, then parameter obligations; old emission validation precedes only new
+parameter diagnostics. GPU/platforms owns bounded configured toolchain capability
+inspection. Typed network/process/TLS drafts are packaged; actual listener gates
+wait for shared TCP copy integration. Sources remain isolated until their combined
+acceptance. Existing worker files are protected; no new chats were created.
+
 ## October 12 package, editor and private-storage integration
 
 Pending local result obligations are committed and pushed as 217e33d; their

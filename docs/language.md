@@ -11,7 +11,7 @@ arbitrary Rust API imports remain future work.
 ## Source and blocks
 
 Source files use `.bh`. They can contain leading import declarations, named
-`struct` and `enum` declarations, function definitions and `extern def` declarations.
+`struct`, `enum` and `type` alias declarations, function definitions and `extern def` declarations.
 Braces delimit record, enum, function, branch, match and loop bodies. Indentation is for
 readability.
 
@@ -90,6 +90,31 @@ its allocation. Function parameters borrow their containers synchronously and
 may modify their contents. A borrowed parameter cannot be rebound. Returning a
 borrowed container copies it so the result survives the call. See the
 [runtime reference](runtime.md) for operations and examples.
+
+## Type aliases
+
+Give a concrete type another name with `type Name = Target`:
+
+```bhasa
+struct Box[T] { value: T }
+type Count = int
+type IntBox = Box[Count]
+def main() {
+    let value: IntBox = Box[int](42)
+    print(value.value)
+}
+```
+
+An alias shares the target's exact type identity, specialization, ownership and
+runtime layout. Targets can be scalar, owned, record, enum, alias or concrete
+generic types. The alias takes no generic parameters. Its target occupies one
+logical token line, ending at a newline, semicolon or file EOF.
+
+Aliases are public by default; `private type Name = Target` is module-scoped.
+Targets resolve in the defining module, and the original nominal privacy remains
+intact. Every alias target is checked even when unused. Cycles, unknown targets,
+invalid generic arity and invalid concrete schemas reject. The [alias guide](aliases.md)
+covers bounds, constructors, checked editor identity and the runnable Text example.
 
 ## Records
 
@@ -209,8 +234,9 @@ collections, JSON and HTTP.
 Result-shaped enums with exactly `ok(payload)` and `error(payload)` support
 `var value = try expression` inside a compatible result-returning function.
 Error payloads must have identical concrete types; success payloads may differ.
-The compiler rejects direct discarded result values. Assigned failures may still
-go unhandled. See [error handling](errors.md) for syntax, cleanup, task rules
+The compiler rejects directly discarded result values and requires local result
+bindings to be exhaustively matched, directly returned or propagated with `try`.
+Copying or passing a bound result does not handle the original binding. See [error handling](errors.md) for syntax, cleanup, task rules
 and the distinction between returned errors and fatal traps.
 
 Generic functions, records and enums require explicit type arguments, such as

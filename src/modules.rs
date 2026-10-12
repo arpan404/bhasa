@@ -2,6 +2,7 @@
 //!
 //! The source map composes with the generic map. Member privacy is checked on
 //! typed expressions, never guessed from the spelling of a receiver variable.
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ast::{self, Span};
@@ -11,6 +12,7 @@ use crate::Diagnostic;
 
 const PREFIX: &str = "__bhm_";
 const MAX_LOWERED_BYTES: usize = 128 * 1024 * 1024;
+const MAX_ALIAS_TARGET_BYTES: usize = 16 * 1024 * 1024;
 type Result<T> = std::result::Result<T, Diagnostic>;
 
 #[derive(Debug, Clone)]
@@ -25,8 +27,37 @@ struct MemberPrivacy {
     fields: BTreeSet<String>,
     methods: BTreeSet<String>,
 }
+/// Source-only alias identity; canonical targets retain their original nominal IDs.
+#[derive(Debug, Clone)]
+pub struct TypeAliasInfo {
+    pub name: String,
+    pub internal_name: String,
+    pub canonical_target: String,
+    pub owner: usize,
+    pub private: bool,
+    pub span: Span,
+    pub name_span: Span,
+    pub target_span: Span,
+}
+#[derive(Debug, Clone)]
+pub struct TypeAliasUse {
+    pub internal_name: String,
+    pub span: Span,
+    pub type_context: bool,
+}
+/// Resolved source anchors for nominal names erased with an alias RHS.
+/// The editor still requires a successful checked graph for these references.
+#[derive(Debug, Clone)]
+pub struct TypeAliasNominalUse {
+    pub declaration_span: Span,
+    pub span: Span,
+}
 #[derive(Debug, Clone)]
 pub struct Expansion {
+    /// Original-source metadata for API inspection and editor symbol identity.
+    pub type_aliases: Vec<TypeAliasInfo>,
+    pub type_alias_uses: Vec<TypeAliasUse>,
+    pub type_alias_nominal_uses: Vec<TypeAliasNominalUse>,
     pub source: String,
     pub boundaries: Vec<usize>,
     mappings: Vec<Mapping>,
@@ -38,6 +69,41 @@ pub struct Expansion {
     identity: bool,
 }
 impl Expansion {
+    /// Canonical types requested even when their aliases have no source uses.
+    /// Root sites use lowered offsets, so the generic map composes normally.
+    pub fn type_roots(
+        &self,
+    ) -> std::result::Result<Vec<crate::generics::TypeRoot>, Vec<Diagnostic>> {
+        self.type_aliases
+            .iter()
+            .map(|alias| {
+                let index = self
+                    .mappings
+                    .partition_point(|mapping| mapping.original.end <= alias.target_span.start);
+                let mapping = self
+                    .mappings
+                    .get(index)
+                    .filter(|mapping| {
+                        mapping.linear
+                            && mapping.original.start <= alias.target_span.start
+                            && mapping.original.end >= alias.target_span.end
+                    })
+                    .ok_or_else(|| {
+                        vec![error(
+                            "invalid alias target source mapping",
+                            alias.target_span,
+                        )]
+                    })?;
+                Ok(crate::generics::TypeRoot {
+                    spelling: alias.canonical_target.clone(),
+                    span: Span::new(
+                        mapping.generated.start + alias.target_span.start - mapping.original.start,
+                        mapping.generated.start + alias.target_span.end - mapping.original.start,
+                    ),
+                })
+            })
+            .collect()
+    }
     pub fn is_identity(&self) -> bool {
         self.identity
     }
@@ -231,7 +297,12 @@ struct Binding {
     end: usize,
     type_only: bool,
 }
+struct TypeAlias {
+    target: Vec<Token>,
+    span: Span,
+}
 struct Module {
+    type_aliases: BTreeMap<String, TypeAlias>,
     tokens: Vec<Token>,
     declarations: BTreeMap<String, Declaration>,
     exports: BTreeMap<String, String>,
@@ -352,12 +423,16 @@ fn expand_inner(files: &[SourceFile]) -> Result<Expansion> {
             bindings: Vec::new(),
             type_tokens: BTreeSet::new(),
             private_members: BTreeMap::new(),
+            type_aliases: BTreeMap::new(),
         };
         collect(&mut module, owner)?;
-        enabled |= !module.modifiers.is_empty();
+        enabled |= !module.modifiers.is_empty() || !module.type_aliases.is_empty();
         modules.push(module);
     }
     let mut expansion = Expansion {
+        type_aliases: Vec::new(),
+        type_alias_uses: Vec::new(),
+        type_alias_nominal_uses: Vec::new(),
         source: String::new(),
         boundaries: Vec::new(),
         mappings: Vec::new(),
@@ -392,12 +467,13 @@ fn expand_inner(files: &[SourceFile]) -> Result<Expansion> {
                     module.tokens[declaration.index].span,
                 ));
             }
-            declaration.internal =
-                if declaration.kind == K::Extern || owner == 0 && declaration.name == "main" {
-                    declaration.name.clone()
-                } else {
-                    format!("{PREFIX}{owner}_{}", declaration.name)
-                };
+            declaration.internal = if declaration.kind == K::Extern
+                || owner == 0 && declaration.kind == K::Def && declaration.name == "main"
+            {
+                declaration.name.clone()
+            } else {
+                format!("{PREFIX}{owner}_{}", declaration.name)
+            };
             expansion
                 .names
                 .insert(declaration.internal.clone(), declaration.name.clone());
@@ -438,16 +514,118 @@ fn expand_inner(files: &[SourceFile]) -> Result<Expansion> {
             &mut active,
         )?;
     }
+    let canonical_aliases = canonical_aliases(&modules)?;
+    let mut erased_alias_spans = BTreeSet::new();
+    for (owner, module) in modules.iter().enumerate() {
+        for (name, alias) in &module.type_aliases {
+            let declaration = &module.declarations[name];
+            erased_alias_spans.insert((alias.span.start, alias.span.end));
+            expansion.type_aliases.push(TypeAliasInfo {
+                name: name.clone(),
+                internal_name: declaration.internal.clone(),
+                canonical_target: canonical_aliases[&declaration.internal].clone(),
+                owner,
+                private: declaration.private,
+                span: alias.span,
+                name_span: module.tokens[declaration.index].span,
+                target_span: alias
+                    .target
+                    .first()
+                    .unwrap()
+                    .span
+                    .join(alias.target.last().unwrap().span),
+            });
+        }
+    }
+    let nominal_declarations: BTreeMap<_, _> = modules
+        .iter()
+        .flat_map(|module| {
+            module
+                .declarations
+                .values()
+                .filter(|decl| matches!(decl.kind, K::Struct | K::Enum))
+                .map(|decl| (decl.internal.as_str(), module.tokens[decl.index].span))
+        })
+        .collect();
+    // Alias RHS references disappear from the parsed AST, but remain rename/
+    // navigation uses of their source-only alias declaration identities.
+    for module in &modules {
+        for alias in module.type_aliases.values() {
+            let mut index = 0;
+            while index < alias.target.len() {
+                let token = &alias.target[index];
+                let Some(name) = ident(token) else {
+                    index += 1;
+                    continue;
+                };
+                let (internal, span, consumed) = if alias
+                    .target
+                    .get(index + 1)
+                    .is_some_and(|t| t.kind == K::Dot)
+                {
+                    let target = module.aliases.get(name).and_then(|owner| {
+                        modules[*owner]
+                            .exports
+                            .get(ident(&alias.target[index + 2]).unwrap())
+                    });
+                    (target, token.span.join(alias.target[index + 2].span), 3)
+                } else {
+                    (module.scope.get(name), token.span, 1)
+                };
+                if let Some(declaration_span) =
+                    internal.and_then(|name| nominal_declarations.get(name.as_str()))
+                {
+                    expansion.type_alias_nominal_uses.push(TypeAliasNominalUse {
+                        declaration_span: *declaration_span,
+                        span,
+                    });
+                }
+                if let Some(internal) =
+                    internal.filter(|name| canonical_aliases.contains_key(*name))
+                {
+                    expansion.type_alias_uses.push(TypeAliasUse {
+                        internal_name: internal.clone(),
+                        span,
+                        type_context: true,
+                    });
+                }
+                index += consumed;
+            }
+        }
+    }
+    expansion.type_aliases.sort_by_key(|alias| alias.span.start);
+    expansion
+        .type_alias_nominal_uses
+        .sort_by_key(|reference| reference.span.start);
     let foreign_names: BTreeSet<_> = modules
         .iter()
         .flat_map(|module| module.declarations.keys().cloned())
         .collect();
-    let mut edits = Vec::new();
+    let mut edits: Vec<(Span, Cow<'_, str>)> = Vec::new();
     for module in &modules {
+        for alias in module.type_aliases.values() {
+            edits.push((
+                alias.span,
+                Cow::Owned(
+                    original[alias.span.start..alias.span.end]
+                        .bytes()
+                        .map(|byte| {
+                            if matches!(byte, b'\n' | b'\r') {
+                                byte as char
+                            } else {
+                                ' '
+                            }
+                        })
+                        .collect(),
+                ),
+            ));
+        }
         for modifier in &module.modifiers {
             edits.push((
                 module.tokens[*modifier].span,
-                " ".repeat(module.tokens[*modifier].span.end - module.tokens[*modifier].span.start),
+                Cow::Owned(" ".repeat(
+                    module.tokens[*modifier].span.end - module.tokens[*modifier].span.start,
+                )),
             ));
         }
         let mut index = 0;
@@ -519,7 +697,17 @@ fn expand_inner(files: &[SourceFile]) -> Result<Expansion> {
                             token.span.join(member_token.span),
                         ));
                     };
-                    edits.push((token.span.join(member_token.span), internal.clone()));
+                    if canonical_aliases.contains_key(internal) {
+                        expansion.type_alias_uses.push(TypeAliasUse {
+                            internal_name: internal.clone(),
+                            span: token.span.join(member_token.span),
+                            type_context,
+                        });
+                    }
+                    edits.push((
+                        token.span.join(member_token.span),
+                        Cow::Borrowed(canonical_aliases.get(internal).unwrap_or(internal).as_str()),
+                    ));
                     index += 3;
                     continue;
                 }
@@ -529,8 +717,18 @@ fn expand_inner(files: &[SourceFile]) -> Result<Expansion> {
                 ));
             }
             if let Some(internal) = module.scope.get(name) {
-                if internal != name {
-                    edits.push((token.span, internal.clone()));
+                if canonical_aliases.contains_key(internal) {
+                    expansion.type_alias_uses.push(TypeAliasUse {
+                        internal_name: internal.clone(),
+                        span: token.span,
+                        type_context,
+                    });
+                }
+                if internal != name || canonical_aliases.contains_key(internal) {
+                    edits.push((
+                        token.span,
+                        Cow::Borrowed(canonical_aliases.get(internal).unwrap_or(internal).as_str()),
+                    ));
                 }
             } else if foreign_names.contains(name) {
                 return Err(error(format!("declaration '{name}' is not visible in this module; import its public namespace"),token.span));
@@ -554,7 +752,12 @@ fn expand_inner(files: &[SourceFile]) -> Result<Expansion> {
                 Span::new(cursor, span.start),
                 true,
             )?;
-            append(&mut expansion, replacement, *span, false)?;
+            append(
+                &mut expansion,
+                replacement,
+                *span,
+                erased_alias_spans.contains(&(span.start, span.end)),
+            )?;
             cursor = span.end;
             edit_index += 1;
         }
@@ -573,6 +776,9 @@ fn expand_inner(files: &[SourceFile]) -> Result<Expansion> {
         )?;
         cursor = end + 1;
     }
+    expansion
+        .type_alias_uses
+        .sort_by_key(|use_| use_.span.start);
     Ok(expansion)
 }
 fn append(expansion: &mut Expansion, text: &str, original: Span, linear: bool) -> Result<()> {
@@ -661,6 +867,291 @@ fn resolve(
     Ok(())
 }
 
+fn append_alias_spelling(value: &mut String, text: &str, span: Span) -> Result<()> {
+    if value
+        .len()
+        .checked_add(text.len())
+        .is_none_or(|length| length > 65536)
+    {
+        return Err(error("type alias spelling exceeds 64 KiB", span));
+    }
+    value.push_str(text);
+    Ok(())
+}
+
+// Resolve in the defining module, before substituting at any caller site.
+// Canonical names retain nominal privacy and feed generic identity directly.
+fn canonical_aliases(modules: &[Module]) -> Result<BTreeMap<String, String>> {
+    let declarations: BTreeMap<_, _> = modules
+        .iter()
+        .enumerate()
+        .flat_map(|(owner, module)| {
+            module
+                .declarations
+                .values()
+                .map(move |decl| (decl.internal.clone(), (owner, decl)))
+        })
+        .collect();
+    fn resolve_alias(
+        name: &str,
+        modules: &[Module],
+        declarations: &BTreeMap<String, (usize, &Declaration)>,
+        active: &mut BTreeSet<String>,
+        cache: &mut BTreeMap<String, String>,
+        depth: usize,
+        cache_bytes: &mut usize,
+    ) -> Result<String> {
+        if let Some(value) = cache.get(name) {
+            return Ok(value.clone());
+        }
+        let (owner, decl) = declarations[name];
+        let alias = &modules[owner].type_aliases[&decl.name];
+        if depth >= 64 || !active.insert(name.to_owned()) {
+            return Err(error("cyclic or excessively deep type alias", alias.span));
+        }
+        #[allow(clippy::too_many_arguments)] // Explicit bounded resolver context.
+        fn ty(
+            tokens: &[Token],
+            index: &mut usize,
+            owner: usize,
+            public: bool,
+            modules: &[Module],
+            declarations: &BTreeMap<String, (usize, &Declaration)>,
+            active: &mut BTreeSet<String>,
+            cache: &mut BTreeMap<String, String>,
+            depth: usize,
+            cache_bytes: &mut usize,
+        ) -> Result<String> {
+            let token = tokens
+                .get(*index)
+                .ok_or_else(|| error("expected alias target type", tokens.last().unwrap().span))?;
+            if depth >= 64 {
+                return Err(error("type alias nesting exceeds 64", token.span));
+            }
+            *index += 1;
+            let mut arity = 0;
+            let mut value = match &token.kind {
+                K::IntType => "int".to_owned(),
+                K::FloatType => "float".to_owned(),
+                K::BoolType => "bool".to_owned(),
+                K::StrType => "str".to_owned(),
+                K::VoidType => "void".to_owned(),
+                K::Ident(name) => {
+                    let module = &modules[owner];
+                    let internal = if tokens.get(*index).is_some_and(|t| t.kind == K::Dot) {
+                        *index += 1;
+                        let member = tokens
+                            .get(*index)
+                            .and_then(ident)
+                            .ok_or_else(|| error("expected qualified target type", token.span))?;
+                        *index += 1;
+                        let target = module
+                            .aliases
+                            .get(name)
+                            .ok_or_else(|| error("unknown target namespace", token.span))?;
+                        modules[*target]
+                            .exports
+                            .get(member)
+                            .cloned()
+                            .ok_or_else(|| {
+                                error("target type is private or not exported", token.span)
+                            })?
+                    } else if let Some(internal) = module.scope.get(name) {
+                        internal.clone()
+                    } else if matches!(
+                        name.as_str(),
+                        "buffer"
+                            | "ints"
+                            | "tcp_listener"
+                            | "tcp_socket"
+                            | "tls_socket"
+                            | "task"
+                            | "List"
+                            | "Map"
+                    ) {
+                        name.clone()
+                    } else {
+                        return Err(error(
+                            format!("unknown alias target type '{name}'"),
+                            token.span,
+                        ));
+                    };
+                    if let Some(&(target_owner, target_decl)) = declarations.get(&internal) {
+                        if public && target_decl.private {
+                            return Err(error(
+                                "public type alias cannot expose a private declaration",
+                                token.span,
+                            ));
+                        }
+                        if modules[target_owner]
+                            .type_aliases
+                            .contains_key(&target_decl.name)
+                        {
+                            resolve_alias(
+                                &internal,
+                                modules,
+                                declarations,
+                                active,
+                                cache,
+                                depth + 1,
+                                cache_bytes,
+                            )?
+                        } else if matches!(target_decl.kind, K::Struct | K::Enum) {
+                            let target_module = &modules[target_owner];
+                            let open = next(&target_module.tokens, target_decl.index + 1);
+                            if target_module
+                                .tokens
+                                .get(open)
+                                .is_some_and(|t| t.kind == K::LeftBracket)
+                            {
+                                let close =
+                                    target_module.pairs.get(&open).copied().ok_or_else(|| {
+                                        error("unclosed generic target declaration", token.span)
+                                    })?;
+                                arity = target_module.tokens[open + 1..close]
+                                    .iter()
+                                    .filter(|t| ident(t).is_some())
+                                    .count();
+                            }
+                            internal
+                        } else {
+                            return Err(error("type alias target must be a type", token.span));
+                        }
+                    } else {
+                        arity = match internal.as_str() {
+                            "List" => 1,
+                            "Map" => 2,
+                            _ => 0,
+                        };
+                        internal
+                    }
+                }
+                _ => return Err(error("expected alias target type", token.span)),
+            };
+            let mut arguments = 0;
+            if tokens.get(*index).is_some_and(|t| t.kind == K::LeftBracket) {
+                if arity == 0 {
+                    return Err(error(
+                        "alias target does not accept generic arguments",
+                        token.span,
+                    ));
+                }
+                *index += 1;
+                append_alias_spelling(&mut value, "[", token.span)?;
+                loop {
+                    if arguments >= arity {
+                        return Err(error(
+                            "alias target has excess generic arguments",
+                            tokens.get(*index).map_or(token.span, |token| token.span),
+                        ));
+                    }
+                    arguments += 1;
+                    let argument = ty(
+                        tokens,
+                        index,
+                        owner,
+                        public,
+                        modules,
+                        declarations,
+                        active,
+                        cache,
+                        depth + 1,
+                        cache_bytes,
+                    )?;
+                    append_alias_spelling(&mut value, &argument, token.span)?;
+                    match tokens.get(*index).map(|t| &t.kind) {
+                        Some(K::Comma) => {
+                            // Match ordinary generic syntax: one trailing comma
+                            // before the closing bracket adds no argument.
+                            if tokens
+                                .get(*index + 1)
+                                .is_some_and(|token| token.kind == K::RightBracket)
+                            {
+                                *index += 2;
+                                append_alias_spelling(&mut value, "]", token.span)?;
+                                break;
+                            }
+                            if arguments >= arity {
+                                return Err(error(
+                                    "alias target has excess generic arguments",
+                                    tokens
+                                        .get(*index + 1)
+                                        .map_or(token.span, |token| token.span),
+                                ));
+                            }
+                            *index += 1;
+                            append_alias_spelling(&mut value, ",", token.span)?;
+                        }
+                        Some(K::RightBracket) => {
+                            *index += 1;
+                            append_alias_spelling(&mut value, "]", token.span)?;
+                            break;
+                        }
+                        _ => return Err(error("expected ',' or ']' in alias target", token.span)),
+                    }
+                }
+            }
+            if arguments != arity {
+                return Err(error(
+                    "alias target requires its concrete generic arguments",
+                    token.span,
+                ));
+            }
+            if value.len() > 65536 {
+                return Err(error("type alias spelling exceeds 64 KiB", token.span));
+            }
+            Ok(value)
+        }
+        let mut index = 0;
+        let value = ty(
+            &alias.target,
+            &mut index,
+            owner,
+            !decl.private,
+            modules,
+            declarations,
+            active,
+            cache,
+            depth + 1,
+            cache_bytes,
+        )?;
+        if index != alias.target.len() {
+            return Err(error(
+                "unexpected token after alias target type",
+                alias.target[index].span,
+            ));
+        }
+        active.remove(name);
+        *cache_bytes = cache_bytes
+            .checked_add(value.len())
+            .filter(|bytes| *bytes <= MAX_ALIAS_TARGET_BYTES)
+            .ok_or_else(|| {
+                error(
+                    "canonical alias targets exceed the 16 MiB budget",
+                    alias.span,
+                )
+            })?;
+        cache.insert(name.to_owned(), value.clone());
+        Ok(value)
+    }
+    let mut cache = BTreeMap::new();
+    let mut cache_bytes = 0;
+    for (name, &(owner, decl)) in &declarations {
+        if modules[owner].type_aliases.contains_key(&decl.name) {
+            resolve_alias(
+                name,
+                modules,
+                &declarations,
+                &mut BTreeSet::new(),
+                &mut cache,
+                0,
+                &mut cache_bytes,
+            )?;
+        }
+    }
+    Ok(cache)
+}
+
 fn collect(module: &mut Module, owner: usize) -> Result<()> {
     let mut index = 0;
     while index < module.tokens.len() {
@@ -673,6 +1164,77 @@ fn collect(module: &mut Module, owner: usize) -> Result<()> {
             private = true;
             module.modifiers.insert(index);
             index = next(&module.tokens, index + 1);
+        }
+        // Contextual top-level syntax leaves ordinary functions named type intact.
+        if ident(&module.tokens[index]) == Some("type")
+            && module.tokens.get(index + 1).and_then(ident).is_some()
+        {
+            let keyword = index;
+            let name_index = index + 1;
+            let name = ident(&module.tokens[name_index]).unwrap().to_owned();
+            if module
+                .tokens
+                .get(index + 2)
+                .is_some_and(|t| t.kind == K::LeftBracket)
+            {
+                return Err(error(
+                    "generic type aliases are not supported",
+                    module.tokens[name_index].span,
+                ));
+            }
+            if !module
+                .tokens
+                .get(index + 2)
+                .is_some_and(|t| t.kind == K::Equal)
+            {
+                return Err(error(
+                    "expected '=' after type alias name",
+                    module.tokens[name_index].span,
+                ));
+            }
+            let start = index + 3;
+            let mut end = start;
+            while end < module.tokens.len()
+                && !separator(&module.tokens[end].kind)
+                && module.tokens[end].kind != K::Eof
+            {
+                end += 1;
+            }
+            if end == start {
+                return Err(error(
+                    "expected a type alias target",
+                    module.tokens[name_index].span,
+                ));
+            }
+            if module.declarations.contains_key(&name) {
+                return Err(error(
+                    format!("duplicate declaration '{name}'"),
+                    module.tokens[name_index].span,
+                ));
+            }
+            let span = module.tokens[keyword]
+                .span
+                .join(module.tokens[end - 1].span);
+            module.type_aliases.insert(
+                name.clone(),
+                TypeAlias {
+                    target: module.tokens[start..end].to_vec(),
+                    span,
+                },
+            );
+            module.declarations.insert(
+                name.clone(),
+                Declaration {
+                    name,
+                    internal: String::new(),
+                    private,
+                    index: name_index,
+                    kind: K::Ident("type".to_owned()),
+                },
+            );
+            module.protected.extend(keyword..end);
+            index = end;
+            continue;
         }
         let kind = module
             .tokens
@@ -771,6 +1333,12 @@ fn collect(module: &mut Module, owner: usize) -> Result<()> {
                 declaration_kind.clone()
             },
         };
+        if module.type_aliases.contains_key(&name) {
+            return Err(error(
+                format!("duplicate declaration '{name}'"),
+                module.tokens[name_index].span,
+            ));
+        }
         // Keep duplicate declarations in the source for the ordinary checker.
         module.declarations.insert(name.clone(), declaration);
         if let Some(open) = generic_open {
@@ -1545,6 +2113,7 @@ mod try_marker_tests {
             bindings: Default::default(),
             type_tokens: Default::default(),
             private_members: Default::default(),
+            type_aliases: Default::default(),
         };
         super::collect_bindings(&mut module);
         module.bindings

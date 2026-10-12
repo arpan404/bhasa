@@ -3788,3 +3788,908 @@ fn checked_editor_entry_symlink_retains_requested_outer_package_lock() {
     assert_eq!(result(&output, 2), &Value::Null);
     assert!(decoded_semantic(result(&output, 3)).is_empty());
 }
+
+#[test]
+fn checked_alias_editor_distinguishes_unused_aliases_nominal_targets_and_type_names() {
+    let source="struct Point{value:int}\ntype Item=Point\ntype Other=Item\ntype Unused=List[int]\ndef type(value:int)->int{return value}\ndef main(){var type=7;let item:Other=Item(1);print(item.value+type)}\n";
+    let mut messages = start();
+    messages.push(open(URI, source, 1));
+    messages.push(editor_request(
+        2,
+        "textDocument/definition",
+        URI,
+        source,
+        source.find("Other=Item").unwrap() + 6,
+    ));
+    messages.push(editor_request(
+        3,
+        "textDocument/definition",
+        URI,
+        source,
+        source.find("=Item(1)").unwrap() + 1,
+    ));
+    messages.push(editor_request(
+        4,
+        "textDocument/hover",
+        URI,
+        source,
+        source.find("item:Other").unwrap() + 5,
+    ));
+    messages.push(request(
+        5,
+        "textDocument/documentSymbol",
+        document_params(URI),
+    ));
+    messages.push(semantic_request(6, URI));
+    messages.push(editor_request(
+        7,
+        "textDocument/hover",
+        URI,
+        source,
+        source.find("type Item").unwrap(),
+    ));
+    let output = exchange(messages);
+    assert_selection(result(&output, 2), URI, source, "type Item", "Item");
+    assert_selection(result(&output, 3), URI, source, "type Item", "Item");
+    assert_eq!(hover_text(result(&output, 4)), Some("type Other = Point"));
+    let names: Vec<_> = result(&output, 5)
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item.get("name").unwrap().as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"Unused"));
+    assert!(names.contains(&"Point"));
+    assert!(names.contains(&"type"));
+    assert_eq!(
+        semantic_site(
+            result(&output, 6),
+            source,
+            source.find("type Item").unwrap()
+        ),
+        Some((9, 0))
+    );
+    assert_eq!(
+        semantic_site(
+            result(&output, 6),
+            source,
+            source.find("Item=Point").unwrap()
+        ),
+        Some((10, 1))
+    );
+    assert_eq!(
+        semantic_site(
+            result(&output, 6),
+            source,
+            source.find("=Item(1)").unwrap() + 1
+        ),
+        Some((10, 0))
+    );
+    assert_eq!(
+        semantic_site(
+            result(&output, 6),
+            source,
+            source.find("var type").unwrap() + 4
+        ),
+        Some((8, 1))
+    );
+    assert_eq!(result(&output, 7), &Value::Null);
+}
+
+#[test]
+fn checked_alias_editor_qualified_navigation_and_rename_preserve_namespaces_and_utf16() {
+    let workspace = Workspace::new("alias editor graph");
+    let library =
+        "# 🌍\r\nstruct Point{value:int}\r\ntype Item=Point\r\nprivate type Hidden=buffer\r\n";
+    let source="import \"library.bh\" as lib\ndef main(){let item:lib.Item=lib.Item(1);print(item.value)}\n";
+    let main = workspace.write("main.bh", source);
+    let lib = workspace.write("library.bh", library);
+    let main_uri = file_uri(&main);
+    let lib_uri = file_uri(&lib);
+    let mut messages = start();
+    messages.push(open(&main_uri, source, 4));
+    messages.push(open(&lib_uri, library, 9));
+    messages.push(editor_request(
+        2,
+        "textDocument/definition",
+        &main_uri,
+        source,
+        source.find("lib.Item=lib").unwrap() + 4,
+    ));
+    messages.push(refactor_at(
+        3,
+        "textDocument/references",
+        &lib_uri,
+        library,
+        "Item=Point",
+        None,
+    ));
+    messages.push(refactor_at(
+        4,
+        "textDocument/rename",
+        &lib_uri,
+        library,
+        "Item=Point",
+        Some("Entry"),
+    ));
+    messages.push(editor_request(
+        5,
+        "textDocument/completion",
+        &main_uri,
+        source,
+        source.find("lib.Item=lib").unwrap() + 4,
+    ));
+    let output = exchange(messages);
+    assert_selection(result(&output, 2), &lib_uri, library, "type Item", "Item");
+    assert_eq!(result(&output, 3).as_array().unwrap().len(), 3);
+    let changes = result(&output, 4)
+        .get("documentChanges")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    let main_change = changes
+        .iter()
+        .find(|change| {
+            change
+                .get("textDocument")
+                .unwrap()
+                .get("uri")
+                .and_then(Value::as_str)
+                == Some(main_uri.as_str())
+        })
+        .unwrap();
+    let renamed = apply_rename(source, main_change);
+    assert!(renamed.contains("item:lib.Entry=lib.Entry(1)"));
+    assert!(!completion_labels(result(&output, 5)).contains(&"Hidden"));
+}
+
+#[test]
+fn checked_alias_editor_shadows_and_capture_rejection_preserve_identity() {
+    let source = "type Count=int\ndef main(){var Count=2;var value:Count=Count;print(value)}\n";
+    let mut messages = start();
+    messages.push(open(URI, source, 1));
+    messages.push(refactor_at(
+        2,
+        "textDocument/references",
+        URI,
+        source,
+        "Count=int",
+        None,
+    ));
+    messages.push(refactor_at(
+        3,
+        "textDocument/rename",
+        URI,
+        source,
+        "Count=int",
+        Some("Number"),
+    ));
+    messages.push(editor_request(
+        4,
+        "textDocument/definition",
+        URI,
+        source,
+        source.find("=Count;").unwrap() + 1,
+    ));
+    let output = exchange(messages);
+    assert_eq!(result(&output, 2).as_array().unwrap().len(), 2);
+    let changes = result(&output, 3)
+        .get("documentChanges")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    let renamed = apply_rename(source, &changes[0]);
+    assert!(renamed.contains("var Count = 2") || renamed.contains("var Count=2"));
+    assert!(renamed.contains("value:Number=Count"));
+    assert_selection(result(&output, 4), URI, source, "var Count", "Count");
+    let collision = "type Count=int\ntype Number=bool\ndef main(){var value:Count=1}\n";
+    let mut messages = start();
+    messages.push(open(URI, collision, 1));
+    messages.push(refactor_at(
+        2,
+        "textDocument/rename",
+        URI,
+        collision,
+        "Count=int",
+        Some("Number"),
+    ));
+    assert_eq!(error_code(response(&exchange(messages), 2)), -32803);
+}
+
+#[test]
+fn checked_alias_formatter_preserves_declared_spelling_comments_and_canonical_types() {
+    let source="# alias docs\nstruct Box[T]{value:T}\ntype Number=int;type Entry=Box[Number,] # target\ndef type(value:int)->int{return value}\ndef main(){let type=2;var entry:Entry=Entry(type);print(entry.value)}\n";
+    let formatted = bhasa::format::format_source(source).unwrap();
+    assert!(formatted.contains("type Number = int"));
+    assert!(formatted.contains("Box[Number,]"));
+    assert!(formatted.contains("# target"));
+    assert_eq!(bhasa::format::format_source(&formatted).unwrap(), formatted);
+    let original = bhasa::check(source).unwrap();
+    let updated = bhasa::check(&formatted).unwrap();
+    assert_eq!(
+        original.program.records.len(),
+        updated.program.records.len()
+    );
+    assert_eq!(
+        original.program.functions.len(),
+        updated.program.functions.len()
+    );
+    assert_eq!(
+        bhasa::codegen::emit_llvm(&original, "aarch64-apple-darwin").unwrap(),
+        bhasa::codegen::emit_llvm(&updated, "aarch64-apple-darwin").unwrap()
+    );
+}
+
+#[test]
+fn checked_alias_editor_nominal_rhs_navigation_and_rename_preserve_alias_declarations() {
+    let source="struct Point{value:int}\ntype Item=Point;type Other=Item\ndef main(){var item:Other=Item(1);print(item.value)}\n";
+    let mut messages = start();
+    messages.push(open(URI, source, 1));
+    messages.push(editor_request(
+        2,
+        "textDocument/definition",
+        URI,
+        source,
+        source.find("=Point").unwrap() + 1,
+    ));
+    messages.push(refactor_at(
+        3,
+        "textDocument/rename",
+        URI,
+        source,
+        "Point{",
+        Some("Coordinate"),
+    ));
+    let output = exchange(messages);
+    assert_selection(result(&output, 2), URI, source, "struct Point", "Point");
+    let changes = result(&output, 3)
+        .get("documentChanges")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    let renamed = apply_rename(source, &changes[0]);
+    assert!(renamed.contains("type Item=Coordinate"));
+    assert!(renamed.contains("type Other=Item"));
+    assert!(renamed.contains("item:Other=Item(1)"));
+}
+
+#[test]
+fn checked_alias_editor_same_names_in_different_modules_remain_distinct() {
+    let workspace = Workspace::new("alias editor identical names");
+    let source="import \"left.bh\" as left\nimport \"right.bh\" as right\ndef main(){var a:left.Item=left.Item(1);var b:right.Item=right.Item(2);print(a.value+b.value)}\n";
+    let library = "struct Point{value:int}\ntype Item=Point\n";
+    let main = workspace.write("main.bh", source);
+    let left = workspace.write("left.bh", library);
+    let right = workspace.write("right.bh", library);
+    let main_uri = file_uri(&main);
+    let left_uri = file_uri(&left);
+    let right_uri = file_uri(&right);
+    let mut messages = start();
+    messages.push(open(&main_uri, source, 1));
+    messages.push(open(&left_uri, library, 1));
+    messages.push(open(&right_uri, library, 1));
+    messages.push(editor_request(
+        2,
+        "textDocument/definition",
+        &main_uri,
+        source,
+        source.find("left.Item=").unwrap() + 5,
+    ));
+    messages.push(editor_request(
+        3,
+        "textDocument/definition",
+        &main_uri,
+        source,
+        source.find("right.Item=").unwrap() + 6,
+    ));
+    messages.push(refactor_at(
+        4,
+        "textDocument/rename",
+        &left_uri,
+        library,
+        "Item=Point",
+        Some("Entry"),
+    ));
+    let output = exchange(messages);
+    assert_selection(result(&output, 2), &left_uri, library, "type Item", "Item");
+    assert_selection(result(&output, 3), &right_uri, library, "type Item", "Item");
+    let changes = result(&output, 4)
+        .get("documentChanges")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert!(!changes.iter().any(|change| change
+        .get("textDocument")
+        .unwrap()
+        .get("uri")
+        .and_then(Value::as_str)
+        == Some(right_uri.as_str())));
+    let main_change = changes
+        .iter()
+        .find(|change| {
+            change
+                .get("textDocument")
+                .unwrap()
+                .get("uri")
+                .and_then(Value::as_str)
+                == Some(main_uri.as_str())
+        })
+        .unwrap();
+    let renamed = apply_rename(source, main_change);
+    assert!(renamed.contains("left.Entry"));
+    assert!(renamed.contains("right.Item"));
+}
+
+#[test]
+fn checked_alias_editor_generic_type_shadows_never_become_alias_uses() {
+    let source="type Value=int\ndef echo[Value](value:Value)->Value{return value}\ndef main(){print(echo[bool](true))}\n";
+    let mut messages = start();
+    messages.push(open(URI, source, 1));
+    messages.push(refactor_at(
+        2,
+        "textDocument/references",
+        URI,
+        source,
+        "Value=int",
+        None,
+    ));
+    messages.push(editor_request(
+        3,
+        "textDocument/definition",
+        URI,
+        source,
+        source.find("value:Value").unwrap() + 6,
+    ));
+    messages.push(refactor_at(
+        4,
+        "textDocument/prepareRename",
+        URI,
+        source,
+        "Value=int",
+        None,
+    ));
+    let output = exchange(messages);
+    assert_eq!(result(&output, 2).as_array().unwrap().len(), 1);
+    assert_eq!(result(&output, 3), &Value::Null);
+    // The existing completeness policy refuses unindexed generic template
+    // identifiers rather than editing a generic parameter by name.
+    assert_eq!(result(&output, 4), &Value::Null);
+}
+
+#[test]
+fn checked_alias_editor_type_annotations_win_over_value_shadows_only_at_alias_sites() {
+    for name in ["Count", "type"] {
+        let source = format!(
+            "type {name}=int\ndef main(){{var {name}=2;var value:{name}={name};print(value)}}\n"
+        );
+        let mut messages = start();
+        messages.push(open(URI, &source, 1));
+        messages.push(editor_request(
+            2,
+            "textDocument/hover",
+            URI,
+            &source,
+            source.find(&format!("value:{name}")).unwrap() + 6,
+        ));
+        messages.push(editor_request(
+            3,
+            "textDocument/hover",
+            URI,
+            &source,
+            source.find(&format!("={name};")).unwrap() + 1,
+        ));
+        messages.push(refactor_at(
+            4,
+            "textDocument/references",
+            URI,
+            &source,
+            &format!("{name}=int"),
+            None,
+        ));
+        let output = exchange(messages);
+        assert_eq!(
+            hover_text(result(&output, 2)),
+            Some(format!("type {name} = int").as_str())
+        );
+        assert_eq!(
+            hover_text(result(&output, 3)),
+            Some(format!("{name}: int").as_str())
+        );
+        assert_eq!(result(&output, 4).as_array().unwrap().len(), 2);
+    }
+}
+
+#[test]
+fn checked_alias_editor_enum_owners_keep_alias_identity_and_private_uses_fail_closed() {
+    let workspace = Workspace::new("alias enum privacy");
+    let library =
+        "enum Status{some(value:int);none}\ntype Public=Status\nprivate type Hidden=int\n";
+    let source="import \"library.bh\" as lib\ndef main(){var result=lib.Public.some(1);match result{case lib.Public.some(value){print(value)}case lib.Public.none{}}}\n";
+    let main = workspace.write("main.bh", source);
+    let lib = workspace.write("library.bh", library);
+    let main_uri = file_uri(&main);
+    let lib_uri = file_uri(&lib);
+    let mut messages = start();
+    messages.push(open(&main_uri, source, 1));
+    messages.push(editor_request(
+        2,
+        "textDocument/definition",
+        &main_uri,
+        source,
+        source.find("lib.Public.some(1)").unwrap() + 4,
+    ));
+    messages.push(editor_request(
+        3,
+        "textDocument/definition",
+        &main_uri,
+        source,
+        source.find("lib.Public.some(value)").unwrap() + 11,
+    ));
+    messages.push(editor_request(
+        4,
+        "textDocument/hover",
+        &main_uri,
+        source,
+        source.find("lib.Public.some(1)").unwrap() + 4,
+    ));
+    let private = "import \"library.bh\" as lib\ndef main(){var value:lib.Hidden=1}\n";
+    messages.push(change(&main_uri, private, 2));
+    messages.push(editor_request(
+        5,
+        "textDocument/hover",
+        &main_uri,
+        private,
+        private.find("Hidden").unwrap(),
+    ));
+    messages.push(semantic_request(6, &main_uri));
+    let output = exchange(messages);
+    assert_selection(
+        result(&output, 2),
+        &lib_uri,
+        library,
+        "type Public",
+        "Public",
+    );
+    assert_selection(result(&output, 3), &lib_uri, library, "some(value", "some");
+    assert_eq!(hover_text(result(&output, 4)), Some("type Public = Status"));
+    assert_eq!(result(&output, 5), &Value::Null);
+    assert!(decoded_semantic(result(&output, 6)).is_empty());
+}
+
+#[test]
+fn checked_alias_editor_locked_module_metadata_follows_unsaved_dependency_versions() {
+    let workspace = Workspace::new("locked-alias-editor");
+    workspace.write(
+        "bhasa.toml",
+        "[package]\nname=\"locked-alias\"\nversion=\"0.1.0\"\nentry=\"main.bh\"\n",
+    );
+    let main = workspace.write("main.bh", "import \"a.bh\" as a\ndef main(){}\n");
+    let source = "import \"b.bh\" as lib\ndef first(value:lib.Count)->lib.Count{return value}\n";
+    let module = workspace.write("a.bh", source);
+    let library = "# 🌍\r\ntype Count=int\r\nprivate type Hidden=buffer\r\n";
+    let dependency = workspace.write("b.bh", library);
+    create_editor_lock(&main, &workspace.file("bhasa.lock"));
+    let lock = fs::read(workspace.file("bhasa.lock")).unwrap();
+    let module_uri = file_uri(&module);
+    let dependency_uri = file_uri(&dependency);
+    let overlay = library.replace("Count=int", "Count=bool");
+    let mut messages = start();
+    messages.push(open(&module_uri, source, 4));
+    messages.push(open(&dependency_uri, &overlay, 9));
+    messages.push(editor_request(
+        2,
+        "textDocument/definition",
+        &module_uri,
+        source,
+        source.find("lib.Count").unwrap() + 4,
+    ));
+    messages.push(editor_request(
+        3,
+        "textDocument/hover",
+        &module_uri,
+        source,
+        source.find("lib.Count").unwrap() + 4,
+    ));
+    messages.push(semantic_request(4, &module_uri));
+    messages.push(refactor_at(
+        5,
+        "textDocument/rename",
+        &dependency_uri,
+        &overlay,
+        "Count=bool",
+        Some("Number"),
+    ));
+    let output = exchange(messages);
+    assert_selection(
+        result(&output, 2),
+        &dependency_uri,
+        &overlay,
+        "type Count",
+        "Count",
+    );
+    assert_eq!(hover_text(result(&output, 3)), Some("type Count = bool"));
+    assert_eq!(
+        semantic_site(
+            result(&output, 4),
+            source,
+            source.find("lib.Count").unwrap() + 4
+        ),
+        Some((10, 0))
+    );
+    let changes = result(&output, 5)
+        .get("documentChanges")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert_eq!(changes.len(), 2);
+    for change in changes {
+        let document = change.get("textDocument").unwrap();
+        let target = document.get("uri").and_then(Value::as_str).unwrap();
+        assert!(target == dependency_uri || target == module_uri);
+        let version = if target == dependency_uri { 9 } else { 4 };
+        assert_eq!(
+            document.get("version").and_then(Value::as_i64),
+            Some(version)
+        );
+    }
+    assert_eq!(fs::read(workspace.file("bhasa.lock")).unwrap(), lock);
+    assert!(bhasa::project::load_unparsed(Some(&module)).is_err());
+}
+
+#[test]
+fn checked_alias_editor_locked_saved_unpinned_and_stale_alias_graphs_refuse_metadata() {
+    let workspace = Workspace::new("locked-alias-refusal");
+    workspace.write(
+        "bhasa.toml",
+        "[package]\nname=\"locked-alias\"\nversion=\"0.1.0\"\nentry=\"main.bh\"\n",
+    );
+    let source = "type Count=int\ndef first(value:Count)->Count{return value}\n";
+    let leaf = workspace.write("leaf.bh", source);
+    let other = workspace.write("other.bh", "def other()->int{return 1}\n");
+    let main = workspace.write(
+        "main.bh",
+        "import \"leaf.bh\" as leaf\nimport \"other.bh\" as other\ndef main(){}\n",
+    );
+    create_editor_lock(&main, &workspace.file("bhasa.lock"));
+    let unpinned = workspace.write("extra.bh", source);
+    for path in [&unpinned, &leaf] {
+        if path == &leaf {
+            fs::write(&other, "def other()->int{return 2}\n").unwrap();
+        }
+        let uri = file_uri(path);
+        let mut messages = start();
+        messages.push(open(&uri, source, 1));
+        messages.push(editor_request(
+            2,
+            "textDocument/definition",
+            &uri,
+            source,
+            source.find("value:Count").unwrap() + 6,
+        ));
+        messages.push(editor_request(
+            3,
+            "textDocument/hover",
+            &uri,
+            source,
+            source.find("value:Count").unwrap() + 6,
+        ));
+        messages.push(semantic_request(4, &uri));
+        messages.push(request(
+            5,
+            "textDocument/documentSymbol",
+            document_params(&uri),
+        ));
+        let output = exchange(messages);
+        assert_eq!(result(&output, 2), &Value::Null);
+        assert_eq!(result(&output, 3), &Value::Null);
+        assert!(decoded_semantic(result(&output, 4)).is_empty());
+        assert!(result(&output, 5)
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item.get("kind").and_then(Value::as_i64) != Some(26)));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn checked_alias_editor_duplicate_canonical_overlays_refuse_then_recover_alias_identity() {
+    let workspace = Workspace::new("alias-duplicate-overlays");
+    let source = "type Count=int\ndef first(value:Count)->Count{return value}\n";
+    let real = workspace.write("z.bh", source);
+    let alias = workspace.file("a.bh");
+    std::os::unix::fs::symlink("z.bh", &alias).unwrap();
+    let real_uri = file_uri(&real);
+    let alias_uri = path_uri(&workspace.path().canonicalize().unwrap().join("a.bh"));
+    let overlay = source.replace("Count=int", "Count=bool");
+    let mut messages = start();
+    messages.push(open(&real_uri, source, 4));
+    messages.push(open(&alias_uri, &overlay, 9));
+    messages.push(editor_request(
+        2,
+        "textDocument/hover",
+        &real_uri,
+        source,
+        source.find("value:Count").unwrap() + 6,
+    ));
+    messages.push(semantic_request(3, &real_uri));
+    messages.push(notification(
+        "textDocument/didClose",
+        document_params(&alias_uri),
+    ));
+    messages.push(editor_request(
+        4,
+        "textDocument/hover",
+        &real_uri,
+        source,
+        source.find("value:Count").unwrap() + 6,
+    ));
+    messages.push(editor_request(
+        5,
+        "textDocument/definition",
+        &real_uri,
+        source,
+        source.find("value:Count").unwrap() + 6,
+    ));
+    let output = exchange(messages);
+    assert_eq!(result(&output, 2), &Value::Null);
+    assert!(decoded_semantic(result(&output, 3)).is_empty());
+    assert_eq!(hover_text(result(&output, 4)), Some("type Count = int"));
+    assert_selection(result(&output, 5), &real_uri, source, "type Count", "Count");
+}
+
+#[test]
+fn checked_alias_rhs_nested_unused_nominals_have_definition_semantics_and_complete_rename() {
+    let source="# 🌍\r\nstruct Point{value:int}\r\nstruct Box[T]{value:T}\r\nstruct Pair[A,B]{left:A;right:B}\r\ntype Item=Pair[Box[Point],Point]\r\ndef main(){}\r\n";
+    let nested = source.find("Box[Point]").unwrap() + 4;
+    let repeated = source.find("],Point]").unwrap() + 2;
+    let mut messages = start();
+    messages.push(open(URI, source, 9));
+    for (id, site) in [
+        (2, nested),
+        (3, repeated),
+        (4, source.find("=Pair").unwrap() + 1),
+        (5, source.find("Pair[Box").unwrap() + 5),
+    ] {
+        messages.push(editor_request(
+            id,
+            "textDocument/definition",
+            URI,
+            source,
+            site,
+        ));
+    }
+    messages.push(semantic_request(6, URI));
+    messages.push(refactor_at(
+        7,
+        "textDocument/references",
+        URI,
+        source,
+        "Point{",
+        None,
+    ));
+    messages.push(refactor_at(
+        8,
+        "textDocument/rename",
+        URI,
+        source,
+        "Point{",
+        Some("Coordinate"),
+    ));
+    let output = exchange(messages);
+    for id in [2, 3] {
+        assert_selection(result(&output, id), URI, source, "struct Point", "Point");
+    }
+    assert_selection(result(&output, 4), URI, source, "struct Pair", "Pair");
+    assert_selection(result(&output, 5), URI, source, "struct Box", "Box");
+    for site in [nested, repeated] {
+        assert_eq!(
+            semantic_site(result(&output, 6), source, site),
+            Some((1, 0))
+        );
+    }
+    assert_eq!(result(&output, 7).as_array().unwrap().len(), 3);
+    let changes = result(&output, 8)
+        .get("documentChanges")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert_eq!(changes.len(), 1);
+    assert_eq!(
+        changes[0]
+            .get("textDocument")
+            .unwrap()
+            .get("version")
+            .and_then(Value::as_i64),
+        Some(9)
+    );
+    let renamed = apply_rename(source, &changes[0]);
+    assert!(renamed.contains("type Item=Pair[Box[Coordinate],Coordinate]"));
+    bhasa::check(&renamed).unwrap();
+}
+
+#[test]
+fn checked_alias_rhs_chains_preserve_alias_identity_inside_generic_arguments() {
+    let source="struct Point{value:int}\nstruct Box[T]{value:T}\ntype Node=Point\ntype Item=Box[Node]\ntype Again=Item\ndef main(){}\n";
+    let mut messages = start();
+    messages.push(open(URI, source, 2));
+    messages.push(editor_request(
+        2,
+        "textDocument/definition",
+        URI,
+        source,
+        source.find("Box[Node]").unwrap() + 4,
+    ));
+    messages.push(editor_request(
+        3,
+        "textDocument/definition",
+        URI,
+        source,
+        source.find("=Point").unwrap() + 1,
+    ));
+    messages.push(semantic_request(4, URI));
+    messages.push(refactor_at(
+        5,
+        "textDocument/rename",
+        URI,
+        source,
+        "Node=",
+        Some("Vertex"),
+    ));
+    let output = exchange(messages);
+    assert_selection(result(&output, 2), URI, source, "type Node", "Node");
+    assert_selection(result(&output, 3), URI, source, "struct Point", "Point");
+    assert_eq!(
+        semantic_site(
+            result(&output, 4),
+            source,
+            source.find("Box[Node]").unwrap() + 4
+        ),
+        Some((10, 0))
+    );
+    let renamed = apply_rename(
+        source,
+        &result(&output, 5)
+            .get("documentChanges")
+            .unwrap()
+            .as_array()
+            .unwrap()[0],
+    );
+    assert!(renamed.contains("type Vertex=Point"));
+    assert!(renamed.contains("type Item=Box[Vertex]"));
+    assert!(renamed.contains("type Again=Item"));
+    bhasa::check(&renamed).unwrap();
+}
+
+#[test]
+fn checked_alias_rhs_qualified_nominals_distinguish_same_names_and_private_local_targets() {
+    let workspace = Workspace::new("alias-nested-qualified");
+    let left_source = "struct Point{value:int}\nstruct Box[T]{value:T}\n";
+    let right_source = "struct Point{value:int}\n";
+    let left = workspace.write("left.bh", left_source);
+    let right = workspace.write("right.bh", right_source);
+    let source="import \"left.bh\" as left\nimport \"right.bh\" as right\nstruct Point{value:int}\nprivate struct Hidden{value:int}\ntype Item=left.Box[right.Point]\nprivate type Local=left.Box[Hidden]\ndef main(){}\n";
+    let main = workspace.write("main.bh", source);
+    let uri = file_uri(&main);
+    let right_uri = file_uri(&right);
+    let mut messages = start();
+    messages.push(open(&uri, source, 4));
+    messages.push(open(&file_uri(&left), left_source, 5));
+    messages.push(open(&right_uri, right_source, 6));
+    messages.push(editor_request(
+        2,
+        "textDocument/definition",
+        &uri,
+        source,
+        source.find("right.Point]").unwrap() + 6,
+    ));
+    messages.push(editor_request(
+        3,
+        "textDocument/definition",
+        &uri,
+        source,
+        source.find("Box[Hidden]").unwrap() + 4,
+    ));
+    messages.push(semantic_request(4, &uri));
+    messages.push(refactor_at(
+        5,
+        "textDocument/rename",
+        &right_uri,
+        right_source,
+        "Point{",
+        Some("Coordinate"),
+    ));
+    let output = exchange(messages);
+    assert_selection(
+        result(&output, 2),
+        &right_uri,
+        right_source,
+        "struct Point",
+        "Point",
+    );
+    assert_selection(result(&output, 3), &uri, source, "struct Hidden", "Hidden");
+    assert_eq!(
+        semantic_site(
+            result(&output, 4),
+            source,
+            source.find("right.Point]").unwrap() + 6
+        ),
+        Some((1, 0))
+    );
+    let changes = result(&output, 5)
+        .get("documentChanges")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert_eq!(changes.len(), 2);
+    let change = changes
+        .iter()
+        .find(|c| {
+            c.get("textDocument")
+                .unwrap()
+                .get("uri")
+                .and_then(Value::as_str)
+                == Some(uri.as_str())
+        })
+        .unwrap();
+    let renamed = apply_rename(source, change);
+    assert!(renamed.contains("left.Box[right.Coordinate]"));
+    assert!(renamed.contains("struct Point{"));
+    assert!(!changes.iter().any(|c| c
+        .get("textDocument")
+        .unwrap()
+        .get("uri")
+        .and_then(Value::as_str)
+        == Some(file_uri(&left).as_str())));
+    let invalid = source.replace("private type Local", "type Local");
+    let mut messages = start();
+    messages.push(open(&uri, &invalid, 7));
+    messages.push(editor_request(
+        2,
+        "textDocument/definition",
+        &uri,
+        &invalid,
+        invalid.find("Box[Hidden]").unwrap() + 4,
+    ));
+    messages.push(semantic_request(3, &uri));
+    let output = exchange(messages);
+    assert_eq!(result(&output, 2), &Value::Null);
+    assert!(decoded_semantic(result(&output, 3)).is_empty());
+}
+
+#[test]
+fn checked_alias_rhs_generic_named_type_shadow_keeps_conservative_rename_refusal() {
+    let source="struct Point{value:int}\nstruct Box[Point]{value:Point}\ntype Item=Box[Point]\ndef main(){}\n";
+    let rhs = source.rfind("Box[Point]").unwrap() + 4;
+    let formal = source.find("Box[Point]").unwrap() + 4;
+    let mut messages = start();
+    messages.push(open(URI, source, 1));
+    messages.push(editor_request(
+        2,
+        "textDocument/definition",
+        URI,
+        source,
+        rhs,
+    ));
+    messages.push(semantic_request(3, URI));
+    messages.push(refactor_at(
+        4,
+        "textDocument/prepareRename",
+        URI,
+        source,
+        "Point{",
+        None,
+    ));
+    messages.push(editor_request(
+        5,
+        "textDocument/definition",
+        URI,
+        source,
+        formal,
+    ));
+    let output = exchange(messages);
+    assert_selection(result(&output, 2), URI, source, "struct Point", "Point");
+    assert_eq!(semantic_site(result(&output, 3), source, rhs), Some((1, 0)));
+    assert_eq!(result(&output, 4), &Value::Null);
+    assert_eq!(result(&output, 5), &Value::Null);
+}

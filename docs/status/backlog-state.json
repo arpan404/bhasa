@@ -1,38 +1,38 @@
 {
   "updated": "2026-10-12",
   "coordinator": "01a12ba1-6cad-7f00-a505-1eb6a34b6e41",
-  "sourceIntegration": "Package/scalar FFI, protected outputs, signature/semantic editor and private std storage pass all gates: 558 reference inventory resumed after app quit, 583 complete hybrid, 77 LSP each, 93 Node, both Clippy/formatting, refreshed releases, A/B/C run.lm8cj8Lt, 32 native hits, 4 unchanged Rust runs and two archive reuses with zero compiling. Archive ccabbe47a921bfdd320a4844960bfd84f5db48f3f5ae7d3b9013fdffdebff3ec. Preparing verified progress commit. Next aliases nested-RHS correction review, TCP runtime, owned host/native corrections, file/channel parity and workspaces/actions. No draft completion implies integration.",
+  "sourceIntegration": "Transparent aliases are fully verified:597 reference/622 hybrid,93 LSP each/93 Node, both Clippy/fmt, refreshed releases14 examples+5 tests each, A/B/C run.DqAvmtmF,34 native hits/four unchanged Rust adapter runs/two unchanged hybrid builds0Compiling. Matching archive366a75f3c915ffe34aa5529155ad732dc7b5e977320d34a7bc527ad931538b69 and56 frozen source hashes; root committing/pushing. Prior621a977 report archived integration-tools.md. Real Clang channel target P1 independently repaired; actual native source-bound manifest parity assigned after capacity failure. Corrected owned/editor/API composition and explicit-borrow independent host review active. Workspace amplification/public-boundary corrections under independent final review, S036 action corrections ongoing. Late Result-parameter host implementation approved/assigned with prior diagnostic precedence preserved. Typed network/process/TLS fixtures packaged; real listener gate waits shared TCP copy. Target capability inspection resumed after capacity failure. No other scoped completion claim.",
   "threads": [
     {
       "lane": "safety-errors",
       "threadId": "01a12e2c-e72a-7720-a922-6a5c7a033306",
       "hostId": "local",
       "title": "Bhasa error handling and safety",
-      "cursor": "f162c2d6-fa50-4030-9e57-400b8a7d8d12:3",
-      "status": "idle"
+      "cursor": "f162c2d6-fa50-4030-9e57-400b8a7d8d12:4",
+      "status": "active"
     },
     {
       "lane": "ownership-types",
       "threadId": "01a12e2c-fae4-7743-bb86-0c2a50e8a887",
       "hostId": "local",
       "title": "Bhasa ownership and core language",
-      "cursor": "430a7584-3bb8-41f3-ba91-d27f1b753398:1",
-      "status": "active"
+      "cursor": "430a7584-3bb8-41f3-ba91-d27f1b753398:3",
+      "status": "idle"
     },
     {
       "lane": "native-compiler",
       "threadId": "01a12e2d-07c5-7c40-bab3-8d50ed614b10",
       "hostId": "local",
       "title": "Bhasa compiler parity and performance",
-      "cursor": "a1cdda68-bfde-4dd8-b572-40489571e4cc:2",
-      "status": "idle"
+      "cursor": "a1cdda68-bfde-4dd8-b572-40489571e4cc:5",
+      "status": "active"
     },
     {
       "lane": "concurrency-async",
       "threadId": "01a12e2d-7701-7980-a579-93348eec37a0",
       "hostId": "local",
       "title": "Bhasa concurrency and async",
-      "cursor": "62f4cf6d-4ce4-432a-aed8-f05d7d851e17:1",
+      "cursor": "62f4cf6d-4ce4-432a-aed8-f05d7d851e17:2",
       "status": "active"
     },
     {
@@ -40,23 +40,23 @@
       "threadId": "01a12e2d-836d-7423-aabe-7b1cb0bcd41a",
       "hostId": "local",
       "title": "Bhasa standard library and backend services",
-      "cursor": "da040e31-e681-479b-965b-3198152313d5:1",
-      "status": "active"
+      "cursor": "da040e31-e681-479b-965b-3198152313d5:3",
+      "status": "notLoaded"
     },
     {
       "lane": "packages-ffi",
       "threadId": "01a12e2d-91de-7360-8243-c2c2033140a9",
       "hostId": "local",
       "title": "Bhasa packages and interoperability",
-      "cursor": "fed7b53e-b458-4c00-a741-ba21c7cb6121:1",
-      "status": "active"
+      "cursor": "fed7b53e-b458-4c00-a741-ba21c7cb6121:3",
+      "status": "idle"
     },
     {
       "lane": "editor-acceptance",
       "threadId": "01a12e2e-0f34-7b10-a5a7-412ddaeadefe",
       "hostId": "local",
       "title": "Bhasa editor tools and production acceptance",
-      "cursor": "9cac160f-207a-40e6-bd1c-d04cc59329ee:1",
+      "cursor": "9cac160f-207a-40e6-bd1c-d04cc59329ee:3",
       "status": "idle"
     },
     {
@@ -64,8 +64,8 @@
       "threadId": "01a12e2e-1eb8-7680-8b70-e57c410dd92b",
       "hostId": "local",
       "title": "Bhasa GPU and portable targets",
-      "cursor": "0bd7f91d-8deb-427c-8e95-c8453e73e49f:1",
-      "status": "notLoaded"
+      "cursor": "0bd7f91d-8deb-427c-8e95-c8453e73e49f:2",
+      "status": "active"
     }
   ],
   "automation": {

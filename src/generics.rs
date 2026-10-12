@@ -1246,7 +1246,62 @@ pub fn expand(
     source: &str,
     boundaries: &[usize],
 ) -> std::result::Result<Expansion, Vec<Diagnostic>> {
-    expand_inner(source, boundaries).map_err(|error| vec![error])
+    expand_inner(source, boundaries, &[]).map_err(|error| vec![error])
+}
+
+/// A canonical type requested by source metadata, without a runtime wrapper.
+/// The site is in the pre-specialization source and participates in source maps.
+#[derive(Debug, Clone)]
+pub struct TypeRoot {
+    pub spelling: String,
+    pub span: Span,
+}
+
+/// Specialize source uses and requested alias targets in one identity table.
+/// Unused target declarations therefore pass the ordinary semantic checker.
+pub fn expand_with_type_roots(
+    source: &str,
+    boundaries: &[usize],
+    roots: &[TypeRoot],
+) -> std::result::Result<Expansion, Vec<Diagnostic>> {
+    expand_inner(source, boundaries, roots).map_err(|error| vec![error])
+}
+
+fn parse_type_root(root: &TypeRoot) -> Result<TypeExpr> {
+    let parse = || {
+        let engine = Engine {
+            source: &root.spelling,
+            tokens: scan(&root.spelling, &[])?,
+            contextual_markers: BTreeSet::new(),
+            templates: Vec::new(),
+            by_name: BTreeMap::new(),
+            types: BTreeSet::new(),
+            instances: Vec::new(),
+            instance_names: BTreeMap::new(),
+        };
+        let mut index = 0;
+        let expression = engine.type_expr(&mut index, 0)?;
+        if index != engine.tokens.len() {
+            return Err(error(
+                "G001",
+                "unexpected token after requested alias target",
+                engine.span(index),
+            ));
+        }
+        Ok(expression)
+    };
+    let mut expression = parse().map_err(|mut error: Diagnostic| {
+        error.span = root.span;
+        error
+    })?;
+    fn locate(expression: &mut TypeExpr, span: Span) {
+        expression.span = span;
+        for argument in &mut expression.args {
+            locate(argument, span);
+        }
+    }
+    locate(&mut expression, root.span);
+    Ok(expression)
 }
 
 /// Uninstantiated template declaration shapes for editor symbols. Type parameter
@@ -1282,7 +1337,7 @@ pub fn template_program(
     result().map_err(|error| vec![error])
 }
 
-fn expand_inner(source: &str, boundaries: &[usize]) -> Result<Expansion> {
+fn expand_inner(source: &str, boundaries: &[usize], roots: &[TypeRoot]) -> Result<Expansion> {
     let tokens = scan(source, boundaries)?;
     let mut engine = Engine {
         source,
@@ -1296,7 +1351,7 @@ fn expand_inner(source: &str, boundaries: &[usize]) -> Result<Expansion> {
     };
     engine.discover()?;
     let has_arguments = engine.tokens.iter().any(|token| token.text(source) == "[");
-    if engine.templates.is_empty() && !has_arguments {
+    if engine.templates.is_empty() && !has_arguments && roots.is_empty() {
         return Ok(Expansion {
             source: source.to_owned(),
             boundaries: boundaries.to_vec(),
@@ -1317,6 +1372,32 @@ fn expand_inner(source: &str, boundaries: &[usize]) -> Result<Expansion> {
         .filter(|template| template.intrinsic.is_none())
     {
         engine.template_program(template)?;
+    }
+    for root in roots {
+        if root.spelling.len() > 65536 {
+            return Err(error(
+                "G006",
+                "requested alias target exceeds 64 KiB",
+                root.span,
+            ));
+        }
+        if root.span.start > root.span.end
+            || root.span.end > source.len()
+            || !source.is_char_boundary(root.span.start)
+            || !source.is_char_boundary(root.span.end)
+        {
+            return Err(error(
+                "G001",
+                "invalid requested alias target source span",
+                Span::new(0, 0),
+            ));
+        }
+        let target = parse_type_root(root)?;
+        // These are legal whole alias targets, but existing generic arguments
+        // deliberately exclude void and task. Do not relax that argument rule.
+        if !target.args.is_empty() || !matches!(target.name.as_str(), "void" | "task") {
+            engine.concrete(&target, &BTreeMap::new(), &[])?;
+        }
     }
     let mut edits = engine.rewrite(0..engine.tokens.len(), &BTreeMap::new(), &[], None)?;
     for template in engine

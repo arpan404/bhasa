@@ -110,11 +110,13 @@ def main() { var point: math.Point = math.Point(1, 2) }
 
 Qualified calls, types, enum variants and explicit generic applications work.
 Declarations are public by default. Add `private` before a function, struct,
-enum, extern declaration, field or record method to restrict it to its defining
-module. A record with private fields cannot be constructed outside that module;
+enum, type alias, extern declaration, field or record method to restrict it to
+its defining module. A record with private fields cannot be constructed outside that module;
 provide a public factory. A private member stays private through chained access
 and generic specialization. Alias imports do not expose their members unqualified.
 There is no package initialization or implicit renaming.
+Type aliases resolve their targets in the defining module and preserve nominal
+privacy. See [type aliases](aliases.md) for exported names and concrete targets.
 
 Functions may call other functions regardless of their declaration order.
 Diagnostics retain the actual file, line, column, and local byte span, including
