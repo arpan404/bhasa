@@ -96,6 +96,10 @@ var value = join(job)
 print(value)
 ```
 
+A compatible result can also be consumed by `var value = try join(job)` or
+`var value = try await(job)`. Propagation rejects any other live task because its
+error return would leave that task unconsumed. See [errors](errors.md).
+
 Nested expressions such as `print(join(job))` and `print(await(job))` are rejected. Keeping
 consumption at statement boundaries makes control-flow ownership explicit until
 the compiler implements richer ownership analysis.

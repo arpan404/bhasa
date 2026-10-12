@@ -44,6 +44,14 @@
       }
     },
     {
+      "match": "(?<==)[ \\t]*(try)\\b(?=[ \\t]+(?!and\\b|or\\b|not\\b|true\\b|false\\b)[A-Za-z_])",
+      "captures": {
+        "1": {
+          "name": "keyword.control.bhasa"
+        }
+      }
+    },
+    {
       "name": "keyword.control.bhasa",
       "match": "\\b(?:extern|private|as|var|if|else|while|for|in|break|continue|return|import|struct|enum|match|case)\\b"
     },

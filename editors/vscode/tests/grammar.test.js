@@ -44,3 +44,14 @@ test("grammar recognizes iteration keywords without matching identifier substrin
   const control = grammar.patterns.find((pattern) => pattern.name === "keyword.control.bhasa");
   assert.deepEqual("for item in items { break; continue } before inner breakage continued".match(new RegExp(control.match, "g")), ["for", "in", "break", "continue"]);
 });
+
+
+test("grammar highlights contextual initializer propagation while keeping ordinary try names", () => {
+  const pattern = grammar.patterns.find((pattern) => pattern.captures?.[1]?.name === "keyword.control.bhasa");
+  const expression = new RegExp(pattern.match);
+  assert.equal("var value = try read()".match(expression)[1], "try");
+  assert.equal("var value=\ttry\tresult".match(expression)[1], "try");
+  for (const source of ["var value=try(1)", "var value=try[int](1)", "var value=try.member", "var value=try and flag", "var value=try or flag", "return try read()", "var value=try\nread()", "var value=try # comment\nread()"] ) {
+    assert.equal(expression.test(source), false, source);
+  }
+});

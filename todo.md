@@ -15,7 +15,9 @@ after verified increments. Existing caches are preserved.
 - [x] Add stepped/descending ranges with safe cursor advancement and complete host lowering.
 - [x] Add checked local definitions, references and versioned rename with editor providers.
 - [x] Snapshot iteration for buffer/ints/Map keys, including cleanup and worker safety.
-- [ ] Next: typed file errors and explicit initializer propagation; prepared in `docs/status/errors-milestone.md`.
+- [x] Typed file errors, explicit initializer propagation and immediate Result-discard rejection.
+- [ ] Binding-only immutable locals are drafted under `docs/status/immutable-bindings-milestone.md`; not yet integrated.
+- [ ] Eight dedicated chats implement remaining sections in `docs/status/backlog-lanes.md`; draft readiness does not complete a checkbox.
 
 Three workers may run alongside the coordinator in this session. The coordinator
 owns integration, checklist updates and commits. Workers have disjoint ownership;
@@ -72,7 +74,12 @@ tests and 38 editor tests. This evidence predates new work below.
 - [x] Stepped/descending ranges with overflow-ending cursors.
 - [x] Map/buffer/ints snapshot iteration.
 - [ ] Convenient explicit Result propagation and typed runtime errors.
+  - [x] Entire-initializer `try` with typed error compatibility, ownership cleanup and task guards.
+  - [x] Typed whole-file read/write wrappers with private Error metadata and exact native codes.
+  - [ ] Broader propagation positions and consistent typed stream/network/process errors.
 - [ ] Stronger enforcement of unused failure results.
+  - [x] Reject immediately discarded result-shaped expressions.
+  - [ ] Track assigned/passed/aggregated failures through control flow and calls.
 
 ## Collections and text
 
@@ -214,9 +221,17 @@ The coordinator records completed increments and their verification here.
   Evidence: `docs/status/integration-systems.md` and `systems-tooling-milestone.md`.
   Git history records this progress commit's identity.
 
-- Current collection increment: 441 reference / 454 full-hybrid tests, 56 LSP
+- `c4f8957`: collection increment; 441 reference / 454 full-hybrid tests, 56 LSP
   and 80 editor tests; both Clippy configurations, formatting, refreshed releases
   and A/B/C pass. Sanitizers/allocation counters cover snapshots and owned task
   exits. Release smoke records 28 native hits; four unchanged Rust adapter runs
   and two hybrid builds perform zero compilations. Evidence:
-  `docs/status/integration.md` and `collections-iteration-milestone.md`.
+  `docs/status/integration-collections.md` and `collections-iteration-milestone.md`.
+
+- Typed-error increment: 457 reference / 471 full-hybrid tests, 57 LSP and 81 editor
+  tests; both Clippy configurations, formatting, refreshed releases and A/B/C pass.
+  O0/O2 sanitizers/allocation counters verify error propagation and typed file I/O,
+  including injected read/write/close failures. Release smoke records 30 native
+  hits; four unchanged Rust adapter runs and two unchanged hybrid builds perform
+  zero compilations. Evidence: `docs/status/integration.md` and `errors-milestone.md`.
+  Binding-only let and eight new backlog chats remain unintegrated work.

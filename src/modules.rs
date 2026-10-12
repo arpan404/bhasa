@@ -32,6 +32,7 @@ pub struct Expansion {
     mappings: Vec<Mapping>,
     names: BTreeMap<String, String>,
     members: BTreeMap<String, MemberPrivacy>,
+    private_enums: BTreeMap<String, usize>,
     files: Vec<Span>,
     original_len: usize,
     identity: bool,
@@ -41,7 +42,7 @@ impl Expansion {
         self.identity
     }
     pub fn has_member_privacy(&self) -> bool {
-        !self.members.is_empty()
+        !self.members.is_empty() || !self.private_enums.is_empty()
     }
     pub fn map_span(&self, span: Span) -> Span {
         let position = |offset: usize, end: bool| {
@@ -192,6 +193,21 @@ impl Expansion {
                 }
             }
             _ => {}
+        });
+        visit_program_statements(program, &mut |statement| {
+            if let ast::StmtKind::TryVar {
+                value, try_span, ..
+            } = &statement.kind
+            {
+                if let Some(ty @ ast::Type::Enum(_)) = value.ty {
+                    let name = generic_original_name(&program.type_name(ty));
+                    if let Some(&defining) = self.private_enums.get(&name) {
+                        if owner(*try_span) != Some(defining) {
+                            errors.push(Diagnostic::new("M005",format!("enum '{}' is private to its defining module; try cannot inspect its payload",self.original_name(&name)),*try_span));
+                        }
+                    }
+                }
+            }
         });
         if errors.is_empty() {
             Ok(())
@@ -347,6 +363,7 @@ fn expand_inner(files: &[SourceFile]) -> Result<Expansion> {
         mappings: Vec::new(),
         names: BTreeMap::new(),
         members: BTreeMap::new(),
+        private_enums: BTreeMap::new(),
         files: files
             .iter()
             .map(|file| Span::new(file.base, file.base + file.source.len()))
@@ -387,6 +404,11 @@ fn expand_inner(files: &[SourceFile]) -> Result<Expansion> {
             module
                 .scope
                 .insert(declaration.name.clone(), declaration.internal.clone());
+            if declaration.private && declaration.kind == K::Enum {
+                expansion
+                    .private_enums
+                    .insert(declaration.internal.clone(), owner);
+            }
             if !declaration.private {
                 module
                     .exports
@@ -1031,15 +1053,108 @@ fn mark_type_inner(module: &mut Module, index: usize, depth: usize) -> usize {
     }
     index
 }
+/// Contextual propagation markers, identified only in complete var headers.
+/// The parser owns the immediate marker/operand predicate; lowering protects
+/// these identifiers while still rewriting every name in the operand.
+pub(crate) fn try_initializer_markers(tokens: &[Token]) -> BTreeSet<usize> {
+    let mut markers = BTreeSet::new();
+    for (index, token) in tokens.iter().enumerate() {
+        if token.kind != K::Var {
+            continue;
+        }
+        let name = next(tokens, index + 1);
+        if tokens.get(name).and_then(ident).is_none() {
+            continue;
+        }
+        let mut cursor = name + 1;
+        if tokens
+            .get(cursor)
+            .is_some_and(|token| token.kind == K::Colon)
+        {
+            cursor = next(tokens, cursor + 1);
+            if !tokens.get(cursor).is_some_and(|token| {
+                matches!(
+                    token.kind,
+                    K::Ident(_)
+                        | K::IntType
+                        | K::FloatType
+                        | K::BoolType
+                        | K::StrType
+                        | K::VoidType
+                )
+            }) {
+                continue;
+            }
+            cursor += 1;
+            while tokens.get(cursor).is_some_and(|token| token.kind == K::Dot) {
+                if tokens.get(cursor + 1).and_then(ident).is_none() {
+                    break;
+                }
+                cursor += 2;
+            }
+            if tokens
+                .get(cursor)
+                .is_some_and(|token| token.kind == K::LeftBracket)
+            {
+                let mut depth = 0usize;
+                while cursor < tokens.len() {
+                    match tokens[cursor].kind {
+                        K::LeftBracket => {
+                            depth += 1;
+                            if depth > 64 {
+                                break;
+                            }
+                        }
+                        K::RightBracket => {
+                            depth = depth.saturating_sub(1);
+                            if depth == 0 {
+                                cursor += 1;
+                                break;
+                            }
+                        }
+                        K::Ident(_)
+                        | K::IntType
+                        | K::FloatType
+                        | K::BoolType
+                        | K::StrType
+                        | K::VoidType
+                        | K::Dot
+                        | K::Comma
+                        | K::Newline => {}
+                        _ => break,
+                    }
+                    cursor += 1;
+                }
+            }
+        }
+        if tokens
+            .get(cursor)
+            .is_some_and(|token| token.kind == K::Equal)
+            && crate::parser::starts_try_initializer(tokens, cursor + 1)
+        {
+            markers.insert(cursor + 1);
+        }
+    }
+    markers
+}
+
 fn collect_bindings(module: &mut Module) {
+    module
+        .protected
+        .extend(try_initializer_markers(&module.tokens));
     let mut braces = Vec::new();
+    let mut expression_depth = 0usize;
     for index in 0..module.tokens.len() {
         match module.tokens[index].kind {
+            K::LeftParen | K::LeftBracket => expression_depth += 1,
+            K::RightParen | K::RightBracket => {
+                expression_depth = expression_depth.saturating_sub(1)
+            }
             K::LeftBrace => braces.push(index),
             K::RightBrace => {
                 braces.pop();
             }
-            K::For => {
+            K::For if expression_depth == 0 => {
                 let name_index = next(&module.tokens, index + 1);
                 let Some(name) = module.tokens.get(name_index).and_then(ident) else {
                     continue;
@@ -1065,7 +1180,9 @@ fn collect_bindings(module: &mut Module) {
                     });
                 }
             }
-            K::Var => {
+            // Declarations are statements, never expressions. Malformed nested
+            // annotations must not create thousands of synthetic local scopes.
+            K::Var if expression_depth == 0 => {
                 let name_index = next(&module.tokens, index + 1);
                 let Some(name) = module.tokens.get(name_index).and_then(ident) else {
                     continue;
@@ -1101,7 +1218,7 @@ fn collect_bindings(module: &mut Module) {
                     type_only: false,
                 });
             }
-            K::Case => {
+            K::Case if expression_depth == 0 => {
                 let mut cursor = index + 1;
                 while cursor < module.tokens.len()
                     && !matches!(
@@ -1170,6 +1287,16 @@ pub(crate) fn visit_program_spans(program: &mut ast::Program, map: &impl Fn(Span
         for statement in body {
             statement.span = map(statement.span);
             match &mut statement.kind {
+                ast::StmtKind::TryVar {
+                    name_span,
+                    try_span,
+                    value,
+                    ..
+                } => {
+                    *name_span = map(*name_span);
+                    *try_span = map(*try_span);
+                    expr(value, map);
+                }
                 ast::StmtKind::Var { value, .. }
                 | ast::StmtKind::Assign { value, .. }
                 | ast::StmtKind::Expr(value) => expr(value, map),
@@ -1290,6 +1417,7 @@ fn visit_program_expressions(program: &ast::Program, visit: &mut impl FnMut(&ast
         for statement in body {
             match &statement.kind {
                 ast::StmtKind::Var { value, .. }
+                | ast::StmtKind::TryVar { value, .. }
                 | ast::StmtKind::Assign { value, .. }
                 | ast::StmtKind::Expr(value) => expr(value, visit),
                 ast::StmtKind::FieldAssign { target, value } => {
@@ -1350,5 +1478,90 @@ fn visit_program_expressions(program: &ast::Program, visit: &mut impl FnMut(&ast
                 block(body, visit);
             }
         }
+    }
+}
+
+fn visit_program_statements(program: &ast::Program, visit: &mut impl FnMut(&ast::Stmt)) {
+    fn block(body: &ast::Block, visit: &mut impl FnMut(&ast::Stmt)) {
+        for statement in body {
+            visit(statement);
+            match &statement.kind {
+                ast::StmtKind::If {
+                    then_block,
+                    else_block,
+                    ..
+                } => {
+                    block(then_block, visit);
+                    if let Some(body) = else_block {
+                        block(body, visit)
+                    }
+                }
+                ast::StmtKind::While { body, .. } | ast::StmtKind::For { body, .. } => {
+                    block(body, visit)
+                }
+                ast::StmtKind::Match { arms, .. } => {
+                    for arm in arms {
+                        block(&arm.body, visit)
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    for function in &program.functions {
+        if let Some(body) = &function.body {
+            block(body, visit)
+        }
+    }
+    for record in &program.records {
+        for method in &record.methods {
+            if let Some(body) = &method.body {
+                block(body, visit)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod try_marker_tests {
+    fn bindings(text: &str) -> Vec<super::Binding> {
+        let tokens = crate::lexer::lex_rust(text).unwrap();
+        let mut module = super::Module {
+            pairs: super::pairs(&tokens),
+            tokens,
+            declarations: Default::default(),
+            exports: Default::default(),
+            scope: Default::default(),
+            aliases: Default::default(),
+            protected: Default::default(),
+            modifiers: Default::default(),
+            bindings: Default::default(),
+            type_tokens: Default::default(),
+            private_members: Default::default(),
+        };
+        super::collect_bindings(&mut module);
+        module.bindings
+    }
+
+    #[test]
+    fn malformed_nested_var_headers_do_not_protect_a_propagation_marker() {
+        let text = format!(
+            "def main(){{{}{}=try source}}",
+            "var x:T[".repeat(4000),
+            "]".repeat(4000)
+        );
+        let tokens = crate::lexer::lex_rust(&text).unwrap();
+        assert!(super::try_initializer_markers(&tokens).is_empty());
+        assert_eq!(bindings(&text).len(), 1);
+    }
+
+    #[test]
+    fn expression_delimiters_do_not_hide_subsequent_statement_bindings() {
+        let text = "def main(){var initial=make[List[int]](nested(1));for item in range(3){var loop=1}match Some.ok(1){case Some.ok(value){var branch=1}}}";
+        let names: Vec<_> = bindings(text)
+            .into_iter()
+            .map(|binding| binding.name)
+            .collect();
+        assert_eq!(names, ["initial", "item", "loop", "value", "branch"]);
     }
 }

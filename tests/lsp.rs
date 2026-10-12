@@ -2732,3 +2732,42 @@ fn rename_accepts_existing_contextual_locals_and_builtin_named_members() {
     bhasa::check(&apply_rename(source, &changes[0])).unwrap();
     assert_eq!(result(&output, 3), &Value::Null);
 }
+
+#[test]
+fn propagated_success_bindings_have_checked_hover_references_and_rename() {
+    let source="enum R{ok(payload:buffer);error(problem:buffer)}\ndef read()->R{return R.ok(buffer(\"x\"))}\ndef run()->R{var value=try read();append(value,\"!\");return R.ok(value)}\ndef main(){}\n";
+    let mut messages = start();
+    messages.push(open(URI, source, 1));
+    messages.push(editor_request(
+        2,
+        "textDocument/hover",
+        URI,
+        source,
+        source.find("append(value").unwrap() + 8,
+    ));
+    messages.push(refactor_at(
+        3,
+        "textDocument/references",
+        URI,
+        source,
+        "value=try",
+        None,
+    ));
+    messages.push(refactor_at(
+        4,
+        "textDocument/rename",
+        URI,
+        source,
+        "value=try",
+        Some("contents"),
+    ));
+    let output = exchange(messages);
+    assert_eq!(hover_text(result(&output, 2)), Some("value: buffer"));
+    assert_eq!(result(&output, 3).as_array().unwrap().len(), 3);
+    let changes = result(&output, 4)
+        .get("documentChanges")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    bhasa::check(&apply_rename(source, &changes[0])).unwrap();
+}

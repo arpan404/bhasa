@@ -452,7 +452,7 @@ fn compile_inner(
                     204 => "compiler nesting limit exceeded",
                     205 => "invalid return path or unreachable statement",
                     206 => "integer literal is outside the signed 64-bit range",
-                    207 => "fallible operation requires its status to be used",
+                    207 => "fallible operation or result value must be used",
                     208 => "task must be joined exactly once in its declaring block",
                     209 => "worker must be a global one-argument Bhasa function with supported non-task types and no reachable foreign calls or pooled scheduling/awaiting",
                     210 => "foreign printf declaration conflicts with runtime printing",
@@ -463,6 +463,8 @@ fn compile_inner(
                     215 => "invalid enum variant constructor or match pattern",
                     216 => "match must cover every enum variant exactly once",
                     217 => "float literal cannot be represented as finite binary64",
+                    218 => "try requires an enum with exactly ok(value) and error(value)",
+                    219 => "try requires a compatible result return type with the same error payload",
                     _ => return Err("frontend returned an unknown diagnostic code".to_owned()),
                 };
                 Ok(Diagnostic::new(

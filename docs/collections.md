@@ -86,7 +86,11 @@ def main() {
 
 Elements and map values can be scalars, buffers, integer arrays, records, enums, handles, or other concrete collections. `void`, task handles, and recursive schemas are rejected. The existing aggregate-depth and generic-instantiation limits apply.
 
-Lists support owned-snapshot `for` iteration. There are no custom/borrowed iterators, borrowed element views, fixed arrays, dynamic buffer/Text keys, user-defined hashing, or capacity controls yet. Map iteration and ordering are not part of the current contract. Allocation failures stop the program.
+Lists and Maps support owned-snapshot `for` iteration. Maps yield keys in
+unspecified order and snapshot their values too. See [iteration](iteration.md)
+for mutation and cleanup rules. Custom/borrowed iterators, borrowed element views,
+fixed arrays, dynamic buffer/Text keys, user-defined hashing and capacity controls
+remain unavailable. Allocation failures stop the program.
 
 Collections are not synchronized. Typed tasks acquire independent collection copies before submission and transfer owned results back through join/await; they do not share mutable collection storage.
 

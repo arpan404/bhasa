@@ -1555,8 +1555,8 @@ impl Server {
             }
             for keyword in [
                 "var", "def", "struct", "enum", "if", "else", "while", "for", "in", "break",
-                "continue", "return", "match", "case", "private", "import", "true", "false", "int",
-                "float", "bool", "str", "buffer", "ints", "List", "Map",
+                "continue", "return", "try", "match", "case", "private", "import", "true", "false",
+                "int", "float", "bool", "str", "buffer", "ints", "List", "Map",
             ] {
                 suggestions
                     .entry(keyword.into())
@@ -1875,6 +1875,7 @@ fn visit_expressions<'a>(block: &'a Block, visit: &mut impl FnMut(&'a Expr)) {
     for statement in block {
         match &statement.kind {
             StmtKind::Var { value, .. }
+            | StmtKind::TryVar { value, .. }
             | StmtKind::Assign { value, .. }
             | StmtKind::Expr(value) => expr(value, visit),
             StmtKind::FieldAssign { target, value } => {
@@ -2101,6 +2102,24 @@ fn lexical_bindings(
                             name,
                             inferred,
                             Span::new(statement.span.start, value.span.start),
+                            value.span.end,
+                            block,
+                        );
+                    }
+                }
+                StmtKind::TryVar {
+                    name,
+                    name_span,
+                    annotation,
+                    value,
+                    success_type,
+                    ..
+                } => {
+                    if let Some(block) = scope(statement.span.start) {
+                        add(
+                            name,
+                            success_type.or(*annotation),
+                            *name_span,
                             value.span.end,
                             block,
                         );
@@ -2892,6 +2911,23 @@ impl ReferenceIndex<'_> {
                     }
                     self.expression(value);
                     self.local_declaration(name, Span::new(statement.span.start, value.span.start));
+                }
+                StmtKind::TryVar {
+                    name,
+                    name_span,
+                    annotation,
+                    value,
+                    ..
+                } => {
+                    if let Some(ty) = annotation {
+                        self.type_reference(
+                            *ty,
+                            Span::new(name_span.end, value.span.start),
+                            TokenKind::Colon,
+                        );
+                    }
+                    self.expression(value);
+                    self.local_declaration(name, *name_span);
                 }
                 StmtKind::Assign { name, value } => {
                     self.local_use(name, Span::new(statement.span.start, value.span.start));

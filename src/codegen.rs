@@ -1269,6 +1269,16 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
                 let value = self.acquire(value);
                 self.bind(name, &value, statement.span, true)?;
             }
+            StmtKind::TryVar {
+                name,
+                annotation,
+                value,
+                try_span,
+                success_type,
+                ..
+            } => {
+                self.try_initializer(name, value, *annotation, *success_type, *try_span)?;
+            }
             StmtKind::Assign { name, value } => {
                 let local = self.local(name, statement.span)?;
                 if local.ty.is_owned() && !local.owned {
@@ -1310,6 +1320,19 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
             }
             StmtKind::Expr(expression) => {
                 let value = self.expression(expression)?;
+                if let Type::Enum(id) = value.ty {
+                    if self
+                        .module
+                        .enumeration(id, expression.span)?
+                        .result_shape()
+                        .is_some()
+                    {
+                        return Err(error(
+                            "discarded result-shaped enum in checked AST",
+                            expression.span,
+                        ));
+                    }
+                }
                 self.release(&value);
             }
             StmtKind::Return(expression) => {
@@ -1509,6 +1532,116 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
                 self.terminate(format!("br label %{label}"));
             }
         }
+        Ok(())
+    }
+
+    fn try_initializer(
+        &mut self,
+        name: &str,
+        expression: &Expr,
+        annotation: Option<Type>,
+        success_type: Option<Type>,
+        span: Span,
+    ) -> Result<()> {
+        let value = self.expression(expression)?;
+        let Type::Enum(source_id) = value.ty else {
+            return Err(error(
+                "try operand must be a result-shaped enum in checked AST",
+                span,
+            ));
+        };
+        let Type::Enum(target_id) = self.return_type else {
+            return Err(error(
+                "try caller must return a result-shaped enum in checked AST",
+                span,
+            ));
+        };
+        let source = self
+            .module
+            .enumeration(source_id, span)?
+            .result_shape()
+            .ok_or_else(|| error("invalid try operand enum shape in checked AST", span))?;
+        let target = self
+            .module
+            .enumeration(target_id, span)?
+            .result_shape()
+            .ok_or_else(|| error("invalid try return enum shape in checked AST", span))?;
+        if source.error != target.error
+            || success_type != Some(source.success)
+            || annotation.is_some_and(|ty| ty != source.success)
+        {
+            return Err(error("inconsistent try payload types in checked AST", span));
+        }
+        self.module.enum_helpers.insert(source_id);
+        self.module.enum_helpers.insert(target_id);
+        // This statement owns one SSA snapshot. No hidden source identifier is
+        // introduced, since `try` remains a legal ordinary identifier.
+        let value = self.acquire(value);
+        let tag_pointer = self.fresh();
+        self.instruction(format!(
+            "{tag_pointer} = getelementptr %bhasa.enum.{source_id}, ptr {}, i32 0, i32 0",
+            value.operand
+        ));
+        let tag = self.fresh();
+        self.instruction(format!("{tag} = load i64, ptr {tag_pointer}"));
+        let payload_pointer = self.fresh();
+        self.instruction(format!(
+            "{payload_pointer} = getelementptr %bhasa.enum.{source_id}, ptr {}, i32 0, i32 1",
+            value.operand
+        ));
+        let payload = self.fresh();
+        self.instruction(format!("{payload} = load ptr, ptr {payload_pointer}"));
+        let success = self.label();
+        let failure = self.label();
+        let invalid = self.label();
+        self.terminate(format!("switch i64 {tag}, label %{invalid} [ i64 {}, label %{success} i64 {}, label %{failure} ]", source.ok_index, source.error_index));
+        self.start_block(&invalid);
+        self.module.needs_trap = true;
+        self.instruction("call void @llvm.trap()");
+        self.terminate("unreachable");
+
+        self.start_block(&failure);
+        let field = self.fresh();
+        self.instruction(format!("{field} = getelementptr %bhasa.enum.{source_id}.variant.{}, ptr {payload}, i32 0, i32 0", source.error_index));
+        let loaded = self.fresh();
+        self.instruction(format!(
+            "{loaded} = load {}, ptr {field}",
+            llvm_type(source.error)
+        ));
+        // Acquire before destroying either the source enum or caller locals.
+        let failure_value = self.acquire(Value::new(source.error, loaded));
+        let target_payload = self.fresh();
+        self.instruction(format!(
+            "{target_payload} = call ptr @bhasa.enum.{target_id}.variant.{}.new()",
+            target.error_index
+        ));
+        let field = self.fresh();
+        self.instruction(format!("{field} = getelementptr %bhasa.enum.{target_id}.variant.{}, ptr {target_payload}, i32 0, i32 0", target.error_index));
+        self.instruction(format!(
+            "store {} {}, ptr {field}",
+            llvm_type(target.error),
+            failure_value.operand
+        ));
+        let result = self.fresh();
+        self.instruction(format!(
+            "{result} = call ptr @bhasa.enum.{target_id}.new(i64 {}, ptr {target_payload})",
+            target.error_index
+        ));
+        self.release(&value);
+        self.drop_locals(true);
+        self.terminate(format!("ret ptr {result}"));
+
+        self.start_block(&success);
+        let field = self.fresh();
+        self.instruction(format!("{field} = getelementptr %bhasa.enum.{source_id}.variant.{}, ptr {payload}, i32 0, i32 0", source.ok_index));
+        let loaded = self.fresh();
+        self.instruction(format!(
+            "{loaded} = load {}, ptr {field}",
+            llvm_type(source.success)
+        ));
+        let success_value = self.acquire(Value::new(source.success, loaded));
+        self.release(&value);
+        self.bind(name, &success_value, span, true)?;
         Ok(())
     }
 

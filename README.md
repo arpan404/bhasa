@@ -10,7 +10,7 @@ The language has named records and methods, tagged enums and exhaustive matches,
 owned buffers and integer vectors, file and console I/O, subprocesses, structured
 typed worker threads, a bounded task executor, synchronous TCP/TLS with deadlines,
 explicit compile-time generics, binary64 floats, generic lists/maps, and GPU host adapters. A local
-standard library provides UTF-8 text, typed collections, generic Option/Result, JSON and bounded HTTP/HTTPS.
+standard library provides UTF-8 text, typed collections, generic Option/Result, JSON, typed file errors and bounded HTTP/HTTPS.
 Allocations have deterministic cleanup; the Bhasa runtime has no
 garbage collector. This is still a developing language. Its ownership rules do
 not provide Rust's complete borrowing model, and no C-like speed or Go-like
@@ -144,7 +144,8 @@ borrowed and fields use `self.field`. `tcp_listen(port)` keeps its IPv4-loopback
 default. `tcp_listen_on(host, port)` accepts explicit numeric IPv4/IPv6 addresses,
 including wildcard addresses, and returns an owned handle whose status must be
 checked. See [records](docs/records.md) and [networking](docs/network.md).
-The [backend guide](docs/backend.md) covers concrete Result/Option types,
+The [error guide](docs/errors.md) covers typed file errors, explicit propagation
+and fatal traps. The [backend guide](docs/backend.md) covers concrete Result/Option types,
 UTF-8 text, collections and HTTP. The [integration report](docs/status/integration.md)
 records verification and platform limits. See [numbers](docs/status/numbers.md),
 [collections](docs/collections.md), [native testing](docs/testing.md) and

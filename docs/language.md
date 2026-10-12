@@ -193,6 +193,13 @@ generic language types. The package also supplies `Option[T]`, `Result[T]`,
 [backend libraries](backend.md) for their payloads and use with text,
 collections, JSON and HTTP.
 
+Result-shaped enums with exactly `ok(payload)` and `error(payload)` support
+`var value = try expression` inside a compatible result-returning function.
+Error payloads must have identical concrete types; success payloads may differ.
+The compiler rejects direct discarded result values. Assigned failures may still
+go unhandled. See [error handling](errors.md) for syntax, cleanup, task rules
+and the distinction between returned errors and fatal traps.
+
 Generic functions, records and enums require explicit type arguments, such as
 `identity[int](42)` or `Option[buffer].some(buffer("value"))`. The Rust host
 specializes these declarations before either frontend parses and checks the

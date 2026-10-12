@@ -76,7 +76,9 @@ rejects discarding a status as a standalone expression, but assigning it to an
 unused variable is currently permitted. These builtins retain integer status
 results. Applications and libraries can use concrete or generic `Result[T]`
 enums with exhaustive `match`; [backend libraries](backend.md) use these typed
-results. Error propagation is explicit.
+results. `var value = try operation()` propagates a compatible error through
+normal cleanup. [Typed file I/O](io.md) provides owned Errors without changing
+these integer ABIs; [error handling](errors.md) specifies the language rules.
 
 ## Arguments and subprocesses
 

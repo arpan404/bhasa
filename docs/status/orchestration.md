@@ -73,7 +73,15 @@ Next error increment is ratified in errors-milestone.md. Agents prepared isolate
 ignored drafts while collection sources remained frozen: packages owns Rust
 TryVar/checking/emission; frontend_parity owns native parity; rust_cache owns
 typed file errors. Root prepared host visitors, contextual lowering, opaque
-private-enum checks and independent integration. Drafts are not yet applied.
+private-enum checks and independent integration. Collection commit `c4f8957` is pushed. Exact frozen drafts are now applied and
+focused compiler/host/I/O verification passes. The complete reference suite passes
+454 tests. Review repaired multiline marker protection, then bounded malformed
+annotation scans and added original-file generic diagnostic regressions. Final
+host gates pass 143 unit / four integration / 57 LSP tests. Sources are frozen;
+the fresh native archive is 7a7944799d8c66f70b045e91efb9f030e981159840facd69db6c05a58057324e.
+Complete hybrid acceptance is running. Refreshed reference release, Clippy,
+A/B/C and unchanged-cache gates remain pending. Coordinator owns Cargo/Git;
+workers are read-only while preparing a future immutable-binding design.
 
 ## Completed iteration and editor milestone
 
@@ -265,3 +273,24 @@ hashes preprocessed C input to include SDK and CPATH header contents. Runtime
 process/SIGPIPE fixes passed focused and combined sanitizers. LSP/JSON/formatter
 integration passed the full suites. CUDA/Vulkan hardware and local Wasm execution
 remain unverified; these finite checks do not establish production readiness.
+
+## Typed errors accepted and full-backlog chats active
+
+Final frozen error sources pass 457 reference / 471 hybrid tests, 57 LSP / 81
+editor tests, both Clippy configurations, formatting, refreshed releases and
+A/B/C at run.jhI8MeqT. Thirty native hits, four unchanged Rust adapter runs and
+two unchanged hybrid builds verify zero-compilation reuse. Final archive is
+3e95a9e4f6b732970b6bb9bb8d42fbd33723adbc43efb080cf7b482cac1e559f; its source
+exactly matches run.IHQjCDCp. Scoped error acceptance is complete.
+
+The user's new request explicitly authorizes dedicated chats for all remaining
+backlog work, superseding the old bounded no-extra-chat note. Eight new chats
+are active under backlog-lanes.md and backlog-state.json. Initial compact waits
+confirm active implementation; root owns shared integration/Cargo/Git. Lanes
+prepare isolated drafts and their own status files. No completed historical
+assignments or old heartbeat were restarted.
+
+Binding-only let drafts are complete but unapplied under immutable-bindings-
+milestone.md. Independent review caught same-spelled `let let` editor identity;
+root repaired the host draft and still owes actual builds/editor acceptance.
+Do not treat any draft or active chat as integrated completion.

@@ -1,6 +1,6 @@
 # Typed errors and explicit propagation
 
-Prepared increment following collection snapshot iteration. Preserve the Rust
+Integrated and verified increment following collection snapshot iteration (`c4f8957`). Preserve the Rust
 host, both frontends, existing Result APIs, native ABIs and caches.
 
 ## Propagation contract
@@ -72,3 +72,10 @@ messages, injected read/close/write/flush faults and native status preservation.
 Run O0/O2 sanitizer/allocation checks, focused gates, frozen combined suites,
 refreshed releases, self-rebuild and unchanged cache reuse. Only the coordinator
 runs Cargo with two build jobs and one test thread; workers do not commit.
+
+## Completion
+
+All scoped acceptance criteria pass in the coordinator's final reference/hybrid
+suites, 457/471 tests, and release/self-rebuild/cache gates. See integration.md
+for evidence and limits. Assigned-failure tracking, nested propagation and typed
+network/stream/process APIs remain separate backlog work.

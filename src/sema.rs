@@ -952,6 +952,11 @@ impl Checker {
         }
     }
 
+    fn result_shape(&self, ty: Type) -> Option<ResultShape> {
+        let Type::Enum(id) = ty else { return None };
+        self.enums.get(&id)?.result_shape()
+    }
+
     fn check_statement(&mut self, statement: &mut Stmt) -> Flow {
         match &mut statement.kind {
             StmtKind::Var {
@@ -1014,6 +1019,77 @@ impl Checker {
                     }
                 }
             }
+            StmtKind::TryVar {
+                name,
+                name_span,
+                annotation,
+                value,
+                try_span,
+                success_type,
+            } => {
+                // Joining may consume the one task supplying this result. Any
+                // other task would escape its lexical block on the error edge.
+                let actual = if matches!(&value.kind, ExprKind::Call { name, .. } if matches!(name.as_str(), "join" | "await"))
+                {
+                    self.check_join(value)
+                } else {
+                    self.check_expression(value)
+                };
+                self.check_outstanding_tasks(true, *try_span);
+                let source = actual.and_then(|ty| self.result_shape(ty));
+                let target = self.result_shape(self.return_type);
+                if actual.is_some() && source.is_none() {
+                    self.error(
+                        "S035",
+                        "try requires an enum with exactly ok(value) and error(value) variants",
+                        value.span,
+                    );
+                }
+                if target.is_none() {
+                    self.error("S035", "try requires the enclosing function to return an enum with exactly ok(value) and error(value) variants", *try_span);
+                }
+                if let (Some(source), Some(target)) = (source, target) {
+                    if source.error != target.error {
+                        self.error(
+                            "S035",
+                            format!(
+                                "try error payload requires {}, found {}",
+                                self.type_name(target.error),
+                                self.type_name(source.error)
+                            ),
+                            *try_span,
+                        );
+                    }
+                }
+                *success_type = source.map(|shape| shape.success);
+                let ty = match *annotation {
+                    Some(Type::Void) => {
+                        self.error("S011", "a variable cannot have type void", *name_span);
+                        None
+                    }
+                    Some(Type::Task) => {
+                        self.error(
+                            "S019",
+                            "task handle types must be inferred from spawn",
+                            *name_span,
+                        );
+                        None
+                    }
+                    Some(expected) => {
+                        self.check_known_type(expected, *name_span);
+                        self.require_type(
+                            *success_type,
+                            expected,
+                            value.span,
+                            "try success initializer",
+                        );
+                        Some(expected)
+                    }
+                    None => *success_type,
+                };
+                self.declare_local(name, ty, *name_span);
+                return Flow::NEXT.branch(Flow::RETURN);
+            }
             StmtKind::Assign { name, value } => {
                 if self.lookup_local(name) == Some(Some(Type::Task)) {
                     self.error(
@@ -1060,6 +1136,12 @@ impl Checker {
                     self.check_join(expression);
                 } else {
                     self.check_expression(expression);
+                }
+                if expression
+                    .ty
+                    .is_some_and(|ty| self.result_shape(ty).is_some())
+                {
+                    self.error("S022", "a result-shaped enum value must be used; bind, match, return or propagate it", expression.span);
                 }
                 if let ExprKind::Call { name, .. } = &expression.kind {
                     if crate::builtins::must_use(name) {
@@ -1760,6 +1842,20 @@ fn normalize_enum_types(program: &mut Program) {
                     }
                     expression(value, ids);
                 }
+                StmtKind::TryVar {
+                    annotation,
+                    success_type,
+                    value,
+                    ..
+                } => {
+                    if let Some(value) = annotation {
+                        ty(value, ids);
+                    }
+                    if let Some(value) = success_type {
+                        ty(value, ids);
+                    }
+                    expression(value, ids);
+                }
                 StmtKind::Assign { value, .. } | StmtKind::Expr(value) => expression(value, ids),
                 StmtKind::FieldAssign { target, value } => {
                     expression(target, ids);
@@ -1926,6 +2022,7 @@ fn call_graph(program: &Program) -> BTreeMap<String, BTreeSet<String>> {
         for statement in statements {
             match &statement.kind {
                 StmtKind::Var { value, .. }
+                | StmtKind::TryVar { value, .. }
                 | StmtKind::Assign { value, .. }
                 | StmtKind::Expr(value) => expression(value, calls),
                 StmtKind::FieldAssign { target, value } => {
@@ -2790,6 +2887,7 @@ mod tests {
             for statement in block {
                 match &statement.kind {
                     StmtKind::Var { value, .. }
+                    | StmtKind::TryVar { value, .. }
                     | StmtKind::Assign { value, .. }
                     | StmtKind::Expr(value)
                     | StmtKind::Return(Some(value)) => visit_expr(value),

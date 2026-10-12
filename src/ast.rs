@@ -206,6 +206,20 @@ fn remap_block(block: &mut Block, ids: &[usize]) {
                 }
                 remap_expression(value, ids);
             }
+            StmtKind::TryVar {
+                annotation,
+                success_type,
+                value,
+                ..
+            } => {
+                if let Some(ty) = annotation {
+                    remap_type(ty, ids);
+                }
+                if let Some(ty) = success_type {
+                    remap_type(ty, ids);
+                }
+                remap_expression(value, ids);
+            }
             StmtKind::Assign { value, .. } | StmtKind::Expr(value) => {
                 remap_expression(value, ids);
             }
@@ -291,6 +305,48 @@ pub struct EnumDecl {
     pub variants: Vec<EnumVariant>,
     pub span: Span,
 }
+/// The concrete enum protocol accepted by initializer propagation and bare-discard checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResultShape {
+    pub ok_index: usize,
+    pub error_index: usize,
+    pub success: Type,
+    pub error: Type,
+}
+impl EnumDecl {
+    pub fn result_shape(&self) -> Option<ResultShape> {
+        if self.variants.len() != 2 {
+            return None;
+        }
+        let (ok_index, ok) = self
+            .variants
+            .iter()
+            .enumerate()
+            .find(|(_, variant)| variant.name == "ok")?;
+        let (error_index, error) = self
+            .variants
+            .iter()
+            .enumerate()
+            .find(|(_, variant)| variant.name == "error")?;
+        let [success] = ok.fields.as_slice() else {
+            return None;
+        };
+        let [failure] = error.fields.as_slice() else {
+            return None;
+        };
+        if matches!(success.ty, Type::Void | Type::Task)
+            || matches!(failure.ty, Type::Void | Type::Task)
+        {
+            return None;
+        }
+        Some(ResultShape {
+            ok_index,
+            error_index,
+            success: success.ty,
+            error: failure.ty,
+        })
+    }
+}
 #[derive(Debug, Clone)]
 pub struct EnumVariant {
     pub name: String,
@@ -338,6 +394,16 @@ pub enum StmtKind {
         name: String,
         annotation: Option<Type>,
         value: Expr,
+    },
+    /// Only an entire variable initializer may propagate an error.
+    TryVar {
+        name: String,
+        name_span: Span,
+        annotation: Option<Type>,
+        value: Expr,
+        try_span: Span,
+        /// Filled by checking; value.ty remains the operand enum type.
+        success_type: Option<Type>,
     },
     Assign {
         name: String,
@@ -499,6 +565,16 @@ mod tests {
     fn block_expression_types(block: &mut Block, visit: &mut impl FnMut(&mut Type)) {
         for statement in block {
             match &mut statement.kind {
+                StmtKind::TryVar {
+                    value,
+                    success_type,
+                    ..
+                } => {
+                    if let Some(ty) = success_type {
+                        visit(ty);
+                    }
+                    expression_types(value, visit);
+                }
                 StmtKind::Var { value, .. }
                 | StmtKind::Assign { value, .. }
                 | StmtKind::Expr(value) => expression_types(value, visit),

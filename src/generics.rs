@@ -149,6 +149,16 @@ impl Expansion {
             for statement in body {
                 statement.span = expansion.map_span(statement.span);
                 match &mut statement.kind {
+                    ast::StmtKind::TryVar {
+                        name_span,
+                        try_span,
+                        value,
+                        ..
+                    } => {
+                        *name_span = expansion.map_span(*name_span);
+                        *try_span = expansion.map_span(*try_span);
+                        expression(expansion, value);
+                    }
                     ast::StmtKind::Var { value, .. }
                     | ast::StmtKind::Assign { value, .. }
                     | ast::StmtKind::Expr(value) => expression(expansion, value),
@@ -567,6 +577,7 @@ struct Edit {
 struct Engine<'a> {
     source: &'a str,
     tokens: Vec<Token>,
+    try_markers: BTreeSet<usize>,
     templates: Vec<Template>,
     by_name: BTreeMap<String, usize>,
     types: BTreeSet<String>,
@@ -1007,6 +1018,10 @@ impl Engine<'_> {
                 index += 1;
                 continue;
             }
+            if self.try_markers.contains(&self.span(index).start) {
+                index += 1;
+                continue;
+            }
             let name = self.text(index).to_owned();
             let mut previous = index;
             while previous > range.start && self.tokens[previous - 1].kind == Kind::Newline {
@@ -1245,6 +1260,7 @@ pub fn template_program(
         let mut engine = Engine {
             source,
             tokens: scan(source, boundaries)?,
+            try_markers: try_marker_spans(source),
             templates: Vec::new(),
             by_name: BTreeMap::new(),
             types: BTreeSet::new(),
@@ -1270,6 +1286,7 @@ fn expand_inner(source: &str, boundaries: &[usize]) -> Result<Expansion> {
     let tokens = scan(source, boundaries)?;
     let mut engine = Engine {
         source,
+        try_markers: try_marker_spans(source),
         tokens,
         templates: Vec::new(),
         by_name: BTreeMap::new(),
@@ -1421,4 +1438,14 @@ fn expand_inner(source: &str, boundaries: &[usize]) -> Result<Expansion> {
         original_len: source.len(),
         identity: false,
     })
+}
+
+fn try_marker_spans(source: &str) -> BTreeSet<usize> {
+    let Ok(tokens) = crate::lexer::lex_rust(source) else {
+        return BTreeSet::new();
+    };
+    crate::modules::try_initializer_markers(&tokens)
+        .into_iter()
+        .map(|index| tokens[index].span.start)
+        .collect()
 }

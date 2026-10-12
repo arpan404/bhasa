@@ -1,0 +1,55 @@
+import "text.bh"
+
+enum ErrorDomain {
+    os
+}
+
+struct Error {
+    private domain_value: ErrorDomain
+    private code_value: int
+    private operation_value: str
+    private message_value: Text
+
+    def domain(self) -> ErrorDomain { return self.domain_value }
+    def code(self) -> int { return self.code_value }
+    def operation(self) -> str { return self.operation_value }
+    def message(self) -> Text { return self.message_value }
+}
+
+enum IoResult[T] {
+    ok(value: T)
+    error(error: Error)
+}
+
+private def file_error(code: int, operation: str, message: str) -> Error {
+    return Error(ErrorDomain.os(), code, operation, text(message))
+}
+
+# Read all bytes. The native destination changes only after read and close
+# succeed; on error the temporary destination is dropped with this scope.
+def file_read(path: buffer) -> IoResult[buffer] {
+    var contents = buffer()
+    var status = read_file(path, contents)
+    if status != 0 {
+        return IoResult[buffer].error(file_error(status, "read_file", "file read failed"))
+    }
+    return IoResult[buffer].ok(contents)
+}
+
+def file_read_str(path: str) -> IoResult[buffer] {
+    return file_read(buffer(path))
+}
+
+# A write can truncate or leave partial output on failure. Success means all
+# bytes and close completed, without promising fsync durability.
+def file_write(path: buffer, contents: buffer) -> IoResult[int] {
+    var status = write_file(path, contents)
+    if status != 0 {
+        return IoResult[int].error(file_error(status, "write_file", "file write failed"))
+    }
+    return IoResult[int].ok(len(contents))
+}
+
+def file_write_str(path: str, contents: buffer) -> IoResult[int] {
+    return file_write(buffer(path), contents)
+}

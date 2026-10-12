@@ -21,7 +21,8 @@
 # 208 task ownership, 209 unsafe task worker, 210 external symbol conflict,
 # 211 unknown record, 212 duplicate/schema, 213 recursive/deep record,
 # 214 overlapping record/field argument borrows, 215 enum/variant/pattern,
-# 216 duplicate or missing exhaustive match arms, 217 nonfinite float literal.
+# 216 duplicate or missing exhaustive match arms, 217 nonfinite float literal,
+# 218 invalid try operand shape, 219 incompatible try return/error type.
 
 def be_kind(tokens: ints, ctx: ints) -> int { return bh_token_kind(tokens, get(ctx, 0)) }
 def be_next(ctx: ints) { set(ctx, 0, get(ctx, 0) + 1) }
@@ -1417,6 +1418,86 @@ def be_for(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buffe
     be_cleanup(body, ctx, saved); set(ctx, 7, saved)
 }
 
+# Contextual only at an entire variable initializer. Calls/member access and
+# ordinary values named try remain ordinary expressions.
+def be_try_initializer(source: buffer, tokens: ints, ctx: ints) -> bool {
+    var token = get(ctx, 0)
+    return bh_token_kind(tokens, token) == 1 and same(bh_token_text(source, tokens, token), "try") and bh_token_kind(tokens, token + 1) == 1
+}
+# A result shape is structural, but its payload types remain concrete nominal
+# types. Return the requested variant only after validating the entire shape.
+def be_result_variant(source: buffer, tokens: ints, ctx: ints, ty: int, success: bool) -> int {
+    var info = be_enum_info(ctx, ty)
+    if info < 0 { return -1 }
+    if get(ctx, info + 3) != 2 { return -1 }
+    var ok = -1; var error = -1; var variant = get(ctx, info + 2)
+    while variant >= 0 {
+        if get(ctx, variant + 2) != 1 { return -1 }
+        var name = bh_token_text(source, tokens, get(ctx, variant + 1))
+        if same(name, "ok") { ok = variant } else {
+            if same(name, "error") { error = variant } else { return -1 }
+        }
+        variant = get(ctx, variant)
+    }
+    if ok < 0 or error < 0 { return -1 }
+    if success { return ok }
+    return error
+}
+def be_try(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buffer, allocations: buffer, body: buffer) -> buffer {
+    var marker = get(ctx, 0); be_next(ctx)
+    # Direct join/await may consume a task before checking the error-only exit.
+    be_statement_expression(tokens, ctx, 1)
+    var value = be_expression(source, tokens, ctx, errors, globals, allocations, body, 1)
+    var ty = get(ctx, 14); var owned = get(ctx, 15); var depth = get(ctx, 23)
+    if len(errors) != 0 { return buffer() }
+    var ok = be_result_variant(source, tokens, ctx, ty, true)
+    var error = be_result_variant(source, tokens, ctx, ty, false)
+    if ok < 0 { be_error_at(tokens, errors, 218, marker); return buffer() }
+    var result_type = get(ctx, 5)
+    var propagated = be_result_variant(source, tokens, ctx, result_type, false)
+    if propagated < 0 { be_error_at(tokens, errors, 219, marker); return buffer() }
+    var error_type = get(ctx, ty - 100 + 6 + get(ctx, error + 3) * 3)
+    var propagated_type = get(ctx, result_type - 100 + 6 + get(ctx, propagated + 3) * 3)
+    if error_type != propagated_type { be_error_at(tokens, errors, 219, marker); return buffer() }
+    be_pending_tasks(tokens, ctx, errors, -1)
+    if len(errors) != 0 { return buffer() }
+    value = be_own(body, ctx, ty, value, owned)
+    var pointer = be_field_pointer(body, ctx, ty, value, 0)
+    var tag = be_field_load(body, ctx, 1, pointer)
+    var condition = be_reg(ctx)
+    var line = buffer(); append(line, condition); append(line, " = icmp eq i64 "); append(line, tag); append(line, ", "); append(line, to_buffer(get(ctx, ok + 4))); be_line(body, line)
+    var success_label = be_label(ctx); var error_label = be_label(ctx)
+    be_branch(body, ctx, condition, success_label, error_label)
+    be_start(body, ctx, error_label)
+    var invalid = be_reg(ctx)
+    line = buffer(); append(line, invalid); append(line, " = icmp ne i64 "); append(line, tag); append(line, ", "); append(line, to_buffer(get(ctx, error + 4))); be_line(body, line)
+    be_trap(body, ctx, invalid)
+    pointer = be_field_pointer(body, ctx, ty, value, get(ctx, error + 3))
+    var payload = be_field_load(body, ctx, error_type, pointer)
+    payload = be_own(body, ctx, error_type, payload, 0)
+    var result = be_reg(ctx)
+    line = buffer(); append(line, result); append(line, " = call ptr @bhasa.record."); append(line, to_buffer(result_type)); append(line, ".new()"); be_line(body, line)
+    pointer = be_field_pointer(body, ctx, result_type, result, 0)
+    line = buffer("store i64 "); append(line, to_buffer(get(ctx, propagated + 4))); append(line, ", ptr "); append(line, pointer); be_line(body, line)
+    pointer = be_field_pointer(body, ctx, result_type, result, get(ctx, propagated + 3))
+    line = buffer("store "); append(line, be_llvm_type(error_type)); append(line, " "); append(line, payload); append(line, ", ptr "); append(line, pointer); be_line(body, line)
+    # The acquired error survives destruction of the operand and every caller
+    # local, including hidden loop/match snapshots. Cleanup does not change the
+    # compile-time ownership facts retained for the success branch.
+    be_release(body, ty, value, 1)
+    be_cleanup(body, ctx, -1)
+    line = buffer("ret ptr "); append(line, result); be_line(body, line); set(ctx, 4, 1)
+    be_start(body, ctx, success_label)
+    var success_type = get(ctx, ty - 100 + 6 + get(ctx, ok + 3) * 3)
+    pointer = be_field_pointer(body, ctx, ty, value, get(ctx, ok + 3))
+    payload = be_field_load(body, ctx, success_type, pointer)
+    payload = be_own(body, ctx, success_type, payload, 0)
+    be_release(body, ty, value, 1)
+    var success_owned = 0; if be_owned(success_type) { success_owned = 1 }
+    be_meta(ctx, success_type, success_owned); set(ctx, 23, depth); set(ctx, 13, 0)
+    return payload
+}
+
 def be_statement(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buffer, allocations: buffer, body: buffer) {
     var kind = be_kind(tokens, ctx)
     if kind == 319 { be_for(source, tokens, ctx, errors, globals, allocations, body); return }
@@ -1429,8 +1510,13 @@ def be_statement(source: buffer, tokens: ints, ctx: ints, errors: ints, globals:
         var annotation = -1
         if be_kind(tokens, ctx) == 58 { be_next(ctx); annotation = be_type(source, tokens, ctx, errors) }
         be_expect(tokens, ctx, errors, 61)
-        be_statement_expression(tokens, ctx, 1)
-        var operand = be_expression(source, tokens, ctx, errors, globals, allocations, body, 1)
+        var operand = buffer()
+        if be_try_initializer(source, tokens, ctx) {
+            operand = be_try(source, tokens, ctx, errors, globals, allocations, body)
+        } else {
+            be_statement_expression(tokens, ctx, 1)
+            operand = be_expression(source, tokens, ctx, errors, globals, allocations, body, 1)
+        }
         var ty = get(ctx, 14); var owns = get(ctx, 15)
         if ty == 0 or (annotation >= 0 and annotation != ty) { be_error(tokens, ctx, errors, 201) }
         operand = be_own(body, ctx, ty, operand, owns)
@@ -1515,7 +1601,7 @@ def be_statement(source: buffer, tokens: ints, ctx: ints, errors: ints, globals:
         if not field_assignment { be_error(tokens, ctx, errors, 200); return }
         be_field_assignment(source, tokens, ctx, errors, globals, allocations, body, get(ctx, 20)); return
     }
-    if get(ctx, 13) == 1 { be_error(tokens, ctx, errors, 207) }
+    if get(ctx, 13) == 1 or be_result_variant(source, tokens, ctx, get(ctx, 14), true) >= 0 { be_error(tokens, ctx, errors, 207) }
     be_release(body, get(ctx, 14), operand, get(ctx, 15))
     be_end(tokens, ctx, errors)
 }

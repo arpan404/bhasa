@@ -37,6 +37,16 @@ pub fn parse_tokens(tokens: Vec<Token>) -> Result<Program, Vec<Diagnostic>> {
     .map_err(|error| vec![error])
 }
 
+/// Test the contextual marker at the start of a variable initializer.
+/// The caller establishes that grammar position; lookahead never skips a newline.
+pub fn starts_try_initializer(tokens: &[Token], index: usize) -> bool {
+    matches!(tokens.get(index).map(|token| &token.kind), Some(TokenKind::Ident(name)) if name == "try")
+        && matches!(
+            tokens.get(index + 1).map(|token| &token.kind),
+            Some(TokenKind::Ident(_))
+        )
+}
+
 struct Parser {
     tokens: Vec<Token>,
     cursor: usize,
@@ -331,7 +341,7 @@ impl Parser {
         let (kind, end, simple) = match self.current().kind {
             TokenKind::Var => {
                 self.advance();
-                let (name, _) = self.identifier("a variable name after 'var'")?;
+                let (name, name_span) = self.identifier("a variable name after 'var'")?;
                 let annotation = if self.take(&TokenKind::Colon).is_some() {
                     Some(self.type_name()?.0)
                 } else {
@@ -341,17 +351,27 @@ impl Parser {
                     &TokenKind::Equal,
                     "'=' and an initializer in a variable declaration",
                 )?;
+                let try_span =
+                    starts_try_initializer(&self.tokens, self.cursor).then(|| self.advance().span);
                 let value = self.expression(depth)?;
                 let end = value.span;
-                (
+                let kind = if let Some(try_span) = try_span {
+                    StmtKind::TryVar {
+                        name,
+                        name_span,
+                        annotation,
+                        value,
+                        try_span,
+                        success_type: None,
+                    }
+                } else {
                     StmtKind::Var {
                         name,
                         annotation,
                         value,
-                    },
-                    end,
-                    true,
-                )
+                    }
+                };
+                (kind, end, true)
             }
             TokenKind::Return => {
                 let keyword = self.advance();

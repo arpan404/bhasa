@@ -1,0 +1,22 @@
+import "@std" as io
+
+def file_count(path: buffer) -> io.IoResult[int] {
+    var contents = try io.file_read(path)
+    return io.IoResult[int].ok(len(contents))
+}
+
+def main() -> int {
+    if arg_count() != 2 {
+        print("usage: bhasa run examples/errors/main.bh -- path")
+        return 2
+    }
+    match file_count(arg(1)) {
+        case io.IoResult[int].ok(count) { print(count) }
+        case io.IoResult[int].error(error) {
+            print(error.message().bytes)
+            print(error.code())
+            return 1
+        }
+    }
+    return 0
+}

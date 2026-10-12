@@ -173,8 +173,10 @@ cannot replace an ancestor of a borrowed nested receiver. For example,
 
 Worker safety checks follow calls through methods, including recursive method
 graphs. A worker that can reach an extern function through a method is rejected.
-Direct `spawn(value.method(...))` is unsupported; a global `int -> int` worker can
-construct and use records under the existing worker rules.
+Direct `spawn(value.method(...))` is unsupported. A global typed worker can
+receive independently copied records and return owned results under the existing
+worker rules. See [concurrency](concurrency.md) for supported signatures and
+handle consumption.
 
 Run `bhasa run examples/records/methods.bh` for field mutation, copies and temporary
 receivers. It prints `42`, `43`, `52`, and `3`. The
