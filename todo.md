@@ -14,7 +14,8 @@ after verified increments. Existing caches are preserved.
 - [x] Add checked integer bitwise/shifts and hexadecimal/binary literals in both frontends.
 - [x] Add stepped/descending ranges with safe cursor advancement and complete host lowering.
 - [x] Add checked local definitions, references and versioned rename with editor providers.
-- [ ] Next: snapshot iteration for buffer/ints/Map keys; contract prepared in `docs/status/collections-iteration-milestone.md`.
+- [x] Snapshot iteration for buffer/ints/Map keys, including cleanup and worker safety.
+- [ ] Next: typed file errors and explicit initializer propagation; prepared in `docs/status/errors-milestone.md`.
 
 Three workers may run alongside the coordinator in this session. The coordinator
 owns integration, checklist updates and commits. Workers have disjoint ownership;
@@ -69,7 +70,7 @@ tests and 38 editor tests. This evidence predates new work below.
 - [ ] Nested match patterns, guards and match expressions.
 - [ ] Custom and borrowed iterator protocol.
 - [x] Stepped/descending ranges with overflow-ending cursors.
-- [ ] Map/buffer/ints snapshot iteration.
+- [x] Map/buffer/ints snapshot iteration.
 - [ ] Convenient explicit Result propagation and typed runtime errors.
 - [ ] Stronger enforcement of unused failure results.
 
@@ -205,10 +206,17 @@ The coordinator records completed increments and their verification here.
   and two unchanged hybrid builds perform zero compilations. Evidence:
   `docs/status/integration-typed-tasks.md` and `docs/status/typed-tasks-milestone.md`.
 
-- Current systems/refactoring increment: 433 reference / 445 full-hybrid tests,
+- `eb88560`: systems/refactoring increment; 433 reference / 445 full-hybrid tests,
   56 LSP and 80 editor tests; both Clippy configurations, formatting, refreshed
   releases and A/B/C pass. Sanitizers and allocation counters cover owned loop
   and task cleanup. Release smoke records 26 native hits; four unchanged Rust
   adapter runs and two unchanged hybrid builds perform zero compilations.
-  Evidence: `docs/status/integration.md` and `systems-tooling-milestone.md`.
+  Evidence: `docs/status/integration-systems.md` and `systems-tooling-milestone.md`.
   Git history records this progress commit's identity.
+
+- Current collection increment: 441 reference / 454 full-hybrid tests, 56 LSP
+  and 80 editor tests; both Clippy configurations, formatting, refreshed releases
+  and A/B/C pass. Sanitizers/allocation counters cover snapshots and owned task
+  exits. Release smoke records 28 native hits; four unchanged Rust adapter runs
+  and two hybrid builds perform zero compilations. Evidence:
+  `docs/status/integration.md` and `collections-iteration-milestone.md`.

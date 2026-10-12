@@ -37,21 +37,33 @@ element snapshot. Clearing, replacing or extending the source list cannot
 invalidate iteration. Mutating a yielded buffer or aggregate cannot alter the
 source or another iteration. A temporary returned list transfers its ownership
 to the loop. Snapshot creation costs time and memory proportional to the stored
-values; this is not a borrowed view. Map, buffer and ints iteration are not
-supported by this syntax.
+values. A snapshot owns its data; borrowed iteration is separate future work.
+
+Buffers, `ints` and Map keys use the same syntax:
+
+```bhasa
+for byte in buffer("Bhasa") { print(byte) } # int bytes, 0 through 255
+for number in numbers { print(number) }    # ints yields int values
+for key in scores { print(key) }           # Map[int,T] or Map[str,T] keys
+```
+
+Each source evaluates once. Buffer/ints traversal preserves element order; Map
+key order is unspecified. Clearing or replacing the original does not change
+the snapshot. Map snapshots also copy their values, including nested owned data,
+even though the loop yields only keys. Each snapshot key is visited once.
 
 The binding is mutable and visible only inside its body. It follows ordinary
 shadowing rules, and its ownership ends on each iteration.
 
 `break` exits the nearest enclosing `while` or `for`. `continue` starts its next
 iteration. Both statements destroy owned locals in every scope they leave.
-A list snapshot survives `continue` and is destroyed on `break`, `return` or
+A collection snapshot survives `continue` and is destroyed on `break`, `return` or
 normal completion. Nested branches and enum matches follow the same cleanup.
 
 Task handles created in an exited scope must already have been consumed with
 `join` or `await` in their creation block. Exiting a loop does not leave the
 surrounding scope, so an outer task can remain live and be joined afterward.
-Worker calls inside bounds, steps, list sources and bodies retain the normal transitive
+Worker calls inside bounds, steps, collection sources and bodies retain the normal transitive
 extern and pooled-task restrictions.
 
 The compiler rejects `break` or `continue` outside a loop and statements after
@@ -65,3 +77,6 @@ bhasa run examples/basics/iteration.bh
 ```
 
 Its output is `12`, `first!`, `second!`, `0` and `3`, one value per line.
+
+[Collection example](../examples/basics/collection_iteration.bh) prints `479`,
+`60` and `2`. Its loops remain valid while the original collections are mutated.

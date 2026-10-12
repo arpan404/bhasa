@@ -191,7 +191,7 @@ impl Expansion {
                                     expression(expansion, step);
                                 }
                             }
-                            ast::ForSource::List(value) => expression(expansion, value),
+                            ast::ForSource::Iterable(value) => expression(expansion, value),
                         }
                         block(expansion, body);
                     }

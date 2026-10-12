@@ -413,7 +413,7 @@ impl Parser {
                         );
                         ForSource::Range { start, end, step }
                     }
-                    kind => ForSource::List(Box::new(Expr { kind, ..value })),
+                    kind => ForSource::Iterable(Box::new(Expr { kind, ..value })),
                 };
                 let (body, end) = self.block(depth + 1)?;
                 (

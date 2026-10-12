@@ -32,6 +32,12 @@ bhasa_map *bhasa_rt_map_new(int64_t key_size, int64_t value_size,
 bhasa_map *bhasa_rt_map_clone(const bhasa_map *map);
 void bhasa_rt_map_free(bhasa_map *map);
 int64_t bhasa_rt_map_count(const bhasa_map *map);
+/* Internal compiler ABI: iterate an immutable owned snapshot. Start cursor at
+ * zero. Success clones one key into independent, uninitialized, eight-byte-
+ * aligned output storage and advances cursor; exhaustion returns zero without
+ * touching output. Cursor and output must not overlap each other or any map
+ * storage. Order is unspecified. Invalid cursors/storage stop the program. */
+int64_t bhasa_rt_map_next_key(const bhasa_map *snapshot, int64_t *cursor, void *output);
 void bhasa_rt_map_get(const bhasa_map *map, const void *key, void *output);
 void bhasa_rt_map_put(bhasa_map *map, const void *key, const void *value);
 int64_t bhasa_rt_map_contains(const bhasa_map *map, const void *key);

@@ -176,6 +176,43 @@ bhasa_map *bhasa_rt_map_new(int64_t key_size, int64_t value_size,
     return map;
 }
 int64_t bhasa_rt_map_count(const bhasa_map *map) { map_valid(map); return map->length; }
+static int storage_overlaps(const void *left, size_t left_size, const void *right, size_t right_size) {
+    if (left_size == 0 || right_size == 0) return 0;
+    uintptr_t a = (uintptr_t)left, b = (uintptr_t)right;
+    /* Subtraction avoids overflowing an end address. */
+    return a >= b ? a - b < right_size : b - a < left_size;
+}
+static void iteration_storage_valid(const bhasa_map *map, const void *storage, size_t size) {
+    require_slot(storage);
+    if ((uintptr_t)storage % 8 != 0 || size - 1 > UINTPTR_MAX - (uintptr_t)storage)
+        fail("invalid map iteration storage");
+    if (storage_overlaps(storage, size, map, sizeof(*map)) ||
+        storage_overlaps(storage, size, map->buckets, bytes_for(map->capacity, sizeof(bucket))) ||
+        storage_overlaps(storage, size, map->keys, bytes_for(map->capacity, map->key_stride)) ||
+        storage_overlaps(storage, size, map->values, bytes_for(map->capacity, map->value_stride)))
+        fail("map iteration storage must be independent");
+}
+int64_t bhasa_rt_map_next_key(const bhasa_map *snapshot, int64_t *cursor, void *output) {
+    map_valid(snapshot);
+    /* Validate all aliases before reading or updating the cursor. The output
+     * callback and cursor write must not corrupt the container or each other. */
+    iteration_storage_valid(snapshot, cursor, sizeof(*cursor));
+    iteration_storage_valid(snapshot, output, snapshot->key_stride);
+    if (storage_overlaps(cursor, sizeof(*cursor), output, snapshot->key_stride))
+        fail("map iteration storage must be independent");
+    int64_t index = *cursor;
+    if (index < 0 || index > snapshot->capacity) fail("invalid map iteration cursor");
+    while (index < snapshot->capacity) {
+        if (snapshot->buckets[index].state == 1) {
+            snapshot->key_clone(output, key_slot(snapshot, index));
+            *cursor = index + 1;
+            return 1;
+        }
+        ++index;
+    }
+    *cursor = snapshot->capacity;
+    return 0;
+}
 int64_t bhasa_rt_map_contains(const bhasa_map *map, const void *key) {
     map_valid(map); require_slot(key); int found; (void)locate(map, key, map->hash(key), &found); return found;
 }

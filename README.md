@@ -113,7 +113,7 @@ the current protocol and data limits.
 | `Text`, `StringList`, `StringIntMap`, `StringMap` | Local `std` package; concrete types, scalar UTF-8 indexing and linear map lookup |
 | JSON and HTTP/1.0/1.1 library helpers | Bounded input; optional TLS package; one request per connection; no chunking or keepalive |
 | Typed functions, forward calls and recursion | No overloads, closures or function values |
-| `var`, assignment, branches, `while`, `for`, `break`/`continue` | Half-open int ranges with signed steps and owned List snapshots; see [iteration](docs/iteration.md) |
+| `var`, assignment, branches, `while`, `for`, `break`/`continue` | Half-open int ranges with signed steps and owned List/buffer/ints/Map-key snapshots; see [iteration](docs/iteration.md) |
 | File/console I/O, arguments and subprocesses | Native macOS/Linux; explicit status values |
 | `spawn(worker(value))`, `join(task)` | One typed input, typed result (including void), independently acquired owned data and mandatory lexical joins |
 | `async_spawn(worker(value))`, `await(task)` | Four fixed workers, 64 queued jobs and blocking backpressure; no coroutines or I/O reactor |

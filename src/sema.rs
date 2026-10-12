@@ -1144,7 +1144,7 @@ impl Checker {
                         }
                         Some(Type::Int)
                     }
-                    ForSource::List(value) => {
+                    ForSource::Iterable(value) => {
                         let ty = self.check_expression(value);
                         let schema = match ty {
                             Some(Type::Record(id)) => self.records.get(&id).and_then(|record| {
@@ -1152,13 +1152,20 @@ impl Checker {
                             }),
                             _ => None,
                         };
-                        if let Some(crate::collections::Schema::List(ty)) = schema {
-                            Some(ty)
-                        } else {
-                            if ty.is_some() {
-                                self.error("S034", "for requires a List or range", value.span);
+                        match (ty, schema) {
+                            (Some(Type::Buffer | Type::Ints), _) => Some(Type::Int),
+                            (_, Some(crate::collections::Schema::List(element))) => Some(element),
+                            (_, Some(crate::collections::Schema::Map(key, _))) => Some(key),
+                            _ => {
+                                if ty.is_some() {
+                                    self.error(
+                                        "S034",
+                                        "for requires a buffer, ints, List, Map or range",
+                                        value.span,
+                                    );
+                                }
+                                None
                             }
-                            None
                         }
                     }
                 };
@@ -1795,7 +1802,7 @@ fn normalize_enum_types(program: &mut Program) {
                                 expression(step, ids);
                             }
                         }
-                        ForSource::List(value) => expression(value, ids),
+                        ForSource::Iterable(value) => expression(value, ids),
                     }
                     block(body, ids);
                 }
@@ -1955,7 +1962,7 @@ fn call_graph(program: &Program) -> BTreeMap<String, BTreeSet<String>> {
                                 expression(step, calls);
                             }
                         }
-                        ForSource::List(value) => expression(value, calls),
+                        ForSource::Iterable(value) => expression(value, calls),
                     }
                     block(body, calls);
                 }
@@ -2819,7 +2826,7 @@ mod tests {
                                     visit_expr(step);
                                 }
                             }
-                            ForSource::List(value) => visit_expr(value),
+                            ForSource::Iterable(value) => visit_expr(value),
                         }
                         visit_block(body);
                     }

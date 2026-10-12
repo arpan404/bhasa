@@ -57,9 +57,23 @@ A first hybrid run exposed a test assumption about diagnostic tokens; original
 mapping was correct. Exact per-frontend token/code/location checks and the full
 hybrid rerun pass. No implementation or acceptance criteria remain open within
 this increment. integration.md records evidence and platform/language limits.
-The broader backlog remains open. Collections snapshot iteration is the next
-prepared contract; no implementation assignment has started. All worker lanes
-are completed; no extra app chats or monitoring loops were created.
+The broader backlog remains open. The increment is committed and pushed as `eb88560`. Collections snapshot iteration
+is now active under collections-iteration-milestone.md: packages owns Rust
+AST/checking/emission; frontend_parity owns native emission; rust_cache owns the
+Map cursor runtime and guards. Root owns host visitors, independent acceptance,
+guides and integration. No extra app chats or monitoring loops were created.
+
+The collection increment is integrated and verified: 441 reference / 454 hybrid,
+56 LSP / 80 editor tests, both Clippy configurations, formatting, refreshed
+releases and A/B/C pass. Native source matches archive d38354856710fabdc825c0c98f05bb12dab2a48292baf2e9f8e42c76f0c96892.
+Release smoke has 28 native hits; four unchanged Rust adapter runs and two
+hybrid builds perform zero compilations. No scoped acceptance criteria remain.
+
+Next error increment is ratified in errors-milestone.md. Agents prepared isolated
+ignored drafts while collection sources remained frozen: packages owns Rust
+TryVar/checking/emission; frontend_parity owns native parity; rust_cache owns
+typed file errors. Root prepared host visitors, contextual lowering, opaque
+private-enum checks and independent integration. Drafts are not yet applied.
 
 ## Completed iteration and editor milestone
 

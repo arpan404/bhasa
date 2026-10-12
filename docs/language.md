@@ -349,11 +349,12 @@ for value in values { print(value) }
 end is exclusive and the default step is one. `range(start, end, step)` supports
 positive or negative steps. Arguments run once, left to right. Zero step traps;
 an overflow in cursor advancement ends iteration. There is no first-class
-range value. List iteration owns one
-deep source snapshot and a separate element snapshot per iteration. Mutating or
-replacing the source or binding cannot invalidate the internal cursor. Loop
-bindings are mutable and body-local. Other collection kinds cannot yet be
-iterated with `for`. The [iteration guide](iteration.md) specifies ownership,
+range value. List, buffer, ints and Map-key iteration own one deep source snapshot.
+List elements have their declared type, buffers yield int bytes (0 through 255),
+ints yields int values, and Map yields its int/str key type in unspecified order.
+Map snapshots copy values too. Mutating the original or reassigning the body
+binding cannot change traversal. Each yielded owned element has independent
+storage. Custom and borrowed iterators remain future work. The [iteration guide](iteration.md) specifies ownership,
 cleanup, task safety and costs. Exceptions are not implemented. Enum matching
 is described above.
 

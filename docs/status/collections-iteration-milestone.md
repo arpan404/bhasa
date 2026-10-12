@@ -1,7 +1,6 @@
 # Snapshot iteration for buffers, integer lists and Map keys
 
-Prepared next increment from `todo.md`; implementation has not started. It
-follows the integer/stepped-range/editor integration. Preserve both frontends,
+Integrated and verified increment from `todo.md`. It follows the integer/stepped-range/editor integration. Preserve both frontends,
 deterministic no-GC ownership, `.bh`, lowercase `bhasa.toml` and all caches.
 
 ## Contract
@@ -44,3 +43,18 @@ suites, refreshed releases, A/B/C and unchanged cache-reuse verification.
 
 Capacity/reservation guarantees, fallible lookup, pair destructuring and a
 custom/borrowed iterator protocol remain separate unchecked backlog entries.
+
+## Ownership and progress
+
+packages owns Rust AST/checking/emission and reference acceptance; frontend_parity
+owns native emission and parity acceptance; rust_cache owns the Map cursor ABI
+and independent C guards. Root owns host visitors, independent integration,
+guides and verification. Cargo operations remain serialized with two build jobs
+and one test thread. All lanes preserve caches and defer Git writes to root.
+
+## Integration result
+
+All acceptance criteria pass: 441 reference / 454 full-hybrid tests, 56 LSP /
+80 editor checks, both Clippy configurations, formatting, refreshed releases,
+A/B/C and unchanged native/Rust cache reuse. integration.md records independent
+review repairs, exact logs and platform limits. Sources are frozen for commit.

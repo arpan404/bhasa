@@ -457,7 +457,10 @@ fn emit_module(program: &CheckedProgram, target: &str) -> Result<String> {
             if (!module.record_helpers.is_empty() || !module.enum_helpers.is_empty())
                 && matches!(function.name.as_str(), "malloc" | "free")
             {
-                return Err(error("external allocator symbol conflicts with record storage; rename the foreign adapter", function.span));
+                return Err(error(
+                    "external allocator symbol conflicts with record storage; rename the foreign adapter",
+                    function.span,
+                ));
             }
             // A scalar source import cannot describe printf's variadic ABI.
             // Reject the collision instead of silently calling one symbol
@@ -637,7 +640,9 @@ impl Module<'_> {
             let size = if record.fields.is_empty() {
                 "1".to_owned()
             } else {
-                format!("ptrtoint (ptr getelementptr (%bhasa.record.{id}, ptr null, i32 1) to {size_ty})")
+                format!(
+                    "ptrtoint (ptr getelementptr (%bhasa.record.{id}, ptr null, i32 1) to {size_ty})"
+                )
             };
             output.push_str(&format!(
                 "define internal ptr @bhasa.record.{id}.new() {{\nentry:\n  %record = call ptr @malloc({size_ty} {size})\n  %failed = icmp eq ptr %record, null\n  br i1 %failed, label %failure, label %success\nfailure:\n  call void @llvm.trap()\n  unreachable\nsuccess:\n  ret ptr %record\n}}\n\n"
@@ -809,7 +814,9 @@ impl Module<'_> {
         let declaration = self.enumeration(id, Span::default())?.clone();
         self.needs_trap = true;
         let size_ty = allocation_size_type(target);
-        let mut output = format!("define internal ptr @bhasa.enum.{id}.new(i64 %tag, ptr %payload) {{\nentry:\n  %record = call ptr @malloc({size_ty} ptrtoint (ptr getelementptr (%bhasa.enum.{id}, ptr null, i32 1) to {size_ty}))\n  %failed = icmp eq ptr %record, null\n  br i1 %failed, label %failure, label %success\nfailure:\n  call void @llvm.trap()\n  unreachable\nsuccess:\n  %tag.addr = getelementptr %bhasa.enum.{id}, ptr %record, i32 0, i32 0\n  store i64 %tag, ptr %tag.addr\n  %payload.addr = getelementptr %bhasa.enum.{id}, ptr %record, i32 0, i32 1\n  store ptr %payload, ptr %payload.addr\n  ret ptr %record\n}}\n\n");
+        let mut output = format!(
+            "define internal ptr @bhasa.enum.{id}.new(i64 %tag, ptr %payload) {{\nentry:\n  %record = call ptr @malloc({size_ty} ptrtoint (ptr getelementptr (%bhasa.enum.{id}, ptr null, i32 1) to {size_ty}))\n  %failed = icmp eq ptr %record, null\n  br i1 %failed, label %failure, label %success\nfailure:\n  call void @llvm.trap()\n  unreachable\nsuccess:\n  %tag.addr = getelementptr %bhasa.enum.{id}, ptr %record, i32 0, i32 0\n  store i64 %tag, ptr %tag.addr\n  %payload.addr = getelementptr %bhasa.enum.{id}, ptr %record, i32 0, i32 1\n  store ptr %payload, ptr %payload.addr\n  ret ptr %record\n}}\n\n"
+        );
         for (index, variant) in declaration.variants.iter().enumerate() {
             if !variant.fields.is_empty() {
                 output.push_str(&format!("define internal ptr @bhasa.enum.{id}.variant.{index}.new() {{\nentry:\n  %payload = call ptr @malloc({size_ty} ptrtoint (ptr getelementptr (%bhasa.enum.{id}.variant.{index}, ptr null, i32 1) to {size_ty}))\n  %failed = icmp eq ptr %payload, null\n  br i1 %failed, label %failure, label %success\nfailure:\n  call void @llvm.trap()\n  unreachable\nsuccess:\n  ret ptr %payload\n}}\n\n"));
@@ -1516,7 +1523,19 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
         // The private scope holds the iteration snapshot through every continue.
         // Return drops it with all locals; break drops it at the common exit.
         self.scopes.push(BTreeMap::new());
-        let (start, end, list, step) = match source {
+        enum Iteration {
+            Indexed {
+                snapshot: String,
+                get: String,
+                element: Type,
+            },
+            Map {
+                snapshot: String,
+                output: String,
+                element: Type,
+            },
+        }
+        let (start, end, iterable, step) = match source {
             ForSource::Range { start, end, step } => {
                 let start = self.expression(start)?;
                 start.require(Type::Int, span)?;
@@ -1541,33 +1560,87 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
                 };
                 (start.operand, end.operand, None, step)
             }
-            ForSource::List(value) => {
-                let value = self.expression(value)?;
-                let Type::Record(id) = value.ty else {
-                    return Err(error("for requires List in checked AST", span));
+            ForSource::Iterable(expression) => {
+                let value = self.expression(expression)?;
+                let (element, count, get) = match value.ty {
+                    Type::Buffer | Type::Ints => {
+                        let kind = if value.ty == Type::Buffer {
+                            "buffer"
+                        } else {
+                            "ints"
+                        };
+                        let count = format!("@bhasa_rt_{kind}_len");
+                        let get = format!("@bhasa_rt_{kind}_get");
+                        self.module
+                            .runtime
+                            .insert(format!("declare i64 {count}(ptr)"));
+                        self.module
+                            .runtime
+                            .insert(format!("declare i64 {get}(ptr, i64)"));
+                        (Type::Int, Some(count), Some(get))
+                    }
+                    Type::Record(id) => {
+                        let schema = crate::collections::schema(self.module.record(id, span)?)
+                            .map_err(|message| error(message, span))?;
+                        let result = match schema {
+                            Some(crate::collections::Schema::List(element)) => (
+                                element,
+                                Some(format!("@bhasa.method.{id}.count")),
+                                Some(format!("@bhasa.method.{id}.get")),
+                            ),
+                            Some(crate::collections::Schema::Map(key, _)) => (key, None, None),
+                            None => {
+                                return Err(error("invalid iterable type in checked AST", span));
+                            }
+                        };
+                        self.module.record_helpers.insert(id);
+                        result
+                    }
+                    _ => return Err(error("invalid iterable type in checked AST", span)),
                 };
-                let schema = crate::collections::schema(self.module.record(id, span)?)
-                    .map_err(|message| error(message, span))?;
-                let Some(crate::collections::Schema::List(ty)) = schema else {
-                    return Err(error("for requires List in checked AST", span));
-                };
-                if element_type != Some(ty) {
-                    return Err(error("invalid List binding type in checked AST", span));
+                if element_type != Some(element) {
+                    return Err(error("invalid iterable binding type in checked AST", span));
                 }
-                self.module.record_helpers.insert(id);
                 let value = self.acquire(value);
                 self.bind("bhasa_rt_iteration_snapshot", &value, span, true)?;
-                let end = self.fresh();
-                self.instruction(format!(
-                    "{end} = call i64 @bhasa.method.{id}.count(ptr {})",
-                    value.operand
-                ));
-                ("0".into(), end, Some((id, value.operand, ty)), None)
+                if let (Some(count), Some(get)) = (count, get) {
+                    let end = self.fresh();
+                    self.instruction(format!("{end} = call i64 {count}(ptr {})", value.operand));
+                    (
+                        "0".into(),
+                        end,
+                        Some(Iteration::Indexed {
+                            snapshot: value.operand,
+                            get,
+                            element,
+                        }),
+                        None,
+                    )
+                } else {
+                    self.module
+                        .runtime
+                        .insert("declare i64 @bhasa_rt_map_next_key(ptr, ptr, ptr)".into());
+                    let output = self.fresh();
+                    // The opaque runtime ABI requires an eight-byte key slot,
+                    // including when a str pointer is narrower than i64.
+                    self.allocations
+                        .push_str(&format!("  {output} = alloca i64, align 8\n"));
+                    (
+                        "0".into(),
+                        "0".into(),
+                        Some(Iteration::Map {
+                            snapshot: value.operand,
+                            output,
+                            element,
+                        }),
+                        None,
+                    )
+                }
             }
         };
         let cursor = self.fresh();
         self.allocations
-            .push_str(&format!("  {cursor} = alloca i64\n"));
+            .push_str(&format!("  {cursor} = alloca i64, align 8\n"));
         self.instruction(format!("store i64 {start}, ptr {cursor}"));
         let condition = self.label();
         let iteration = self.label();
@@ -1578,7 +1651,14 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
         let index = self.fresh();
         self.instruction(format!("{index} = load i64, ptr {cursor}"));
         let valid = self.fresh();
-        if let Some((_, ascending)) = &step {
+        if let Some(Iteration::Map {
+            snapshot, output, ..
+        }) = &iterable
+        {
+            let found = self.fresh();
+            self.instruction(format!("{found} = call i64 @bhasa_rt_map_next_key(ptr {snapshot}, ptr {cursor}, ptr {output})"));
+            self.instruction(format!("{valid} = icmp ne i64 {found}, 0"));
+        } else if let Some((_, ascending)) = &step {
             let below = self.fresh();
             let above = self.fresh();
             self.instruction(format!("{below} = icmp slt i64 {index}, {end}"));
@@ -1597,15 +1677,33 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
             exit: exit.clone(),
         });
         self.scopes.push(BTreeMap::new());
-        let value = if let Some((id, snapshot, ty)) = list {
-            let value = self.fresh();
-            self.instruction(format!(
-                "{value} = call {} @bhasa.method.{id}.get(ptr {snapshot}, i64 {index})",
-                llvm_type(ty)
-            ));
-            Value::new(ty, value).owned()
-        } else {
-            Value::new(Type::Int, index)
+        let map_iteration = matches!(iterable, Some(Iteration::Map { .. }));
+        let value = match iterable {
+            Some(Iteration::Indexed {
+                snapshot,
+                get,
+                element,
+            }) => {
+                let value = self.fresh();
+                self.instruction(format!(
+                    "{value} = call {} {get}(ptr {snapshot}, i64 {index})",
+                    llvm_type(element)
+                ));
+                Value::new(element, value).owned()
+            }
+            Some(Iteration::Map {
+                output, element, ..
+            }) => {
+                // Exhaustion leaves output uninitialized. This block is only
+                // reachable after next_key succeeds; never load it beforehand.
+                let value = self.fresh();
+                self.instruction(format!(
+                    "{value} = load {}, ptr {output}",
+                    llvm_type(element)
+                ));
+                Value::new(element, value).owned()
+            }
+            None => Value::new(Type::Int, index),
         };
         self.bind(name, &value, span, true)?;
         self.block(body, false)?;
@@ -1616,26 +1714,31 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
         self.scopes.pop();
         self.loops.pop();
         self.start_block(&advance);
-        let previous = self.fresh();
-        let next = self.fresh();
-        self.instruction(format!("{previous} = load i64, ptr {cursor}"));
-        if let Some((step, _)) = step {
-            self.module.intrinsics.insert("sadd");
-            let pair = self.fresh();
-            let overflow = self.fresh();
-            let store = self.label();
-            self.instruction(format!("{pair} = call {{ i64, i1 }} @llvm.sadd.with.overflow.i64(i64 {previous}, i64 {step})"));
-            self.instruction(format!("{next} = extractvalue {{ i64, i1 }} {pair}, 0"));
-            self.instruction(format!("{overflow} = extractvalue {{ i64, i1 }} {pair}, 1"));
-            // An out-of-range cursor ends iteration; user arithmetic still traps.
-            self.terminate(format!("br i1 {overflow}, label %{exit}, label %{store}"));
-            self.start_block(&store);
+        if map_iteration {
+            // The runtime scan advances the cursor and may skip empty buckets.
+            self.terminate(format!("br label %{condition}"));
         } else {
-            // Unit ranges and List indices satisfy index < end <= INT64_MAX.
-            self.instruction(format!("{next} = add nsw i64 {previous}, 1"));
+            let previous = self.fresh();
+            let next = self.fresh();
+            self.instruction(format!("{previous} = load i64, ptr {cursor}"));
+            if let Some((step, _)) = step {
+                self.module.intrinsics.insert("sadd");
+                let pair = self.fresh();
+                let overflow = self.fresh();
+                let store = self.label();
+                self.instruction(format!("{pair} = call {{ i64, i1 }} @llvm.sadd.with.overflow.i64(i64 {previous}, i64 {step})"));
+                self.instruction(format!("{next} = extractvalue {{ i64, i1 }} {pair}, 0"));
+                self.instruction(format!("{overflow} = extractvalue {{ i64, i1 }} {pair}, 1"));
+                // An out-of-range cursor ends iteration; user arithmetic still traps.
+                self.terminate(format!("br i1 {overflow}, label %{exit}, label %{store}"));
+                self.start_block(&store);
+            } else {
+                // Unit ranges and sequence indices satisfy index < end <= INT64_MAX.
+                self.instruction(format!("{next} = add nsw i64 {previous}, 1"));
+            }
+            self.instruction(format!("store i64 {next}, ptr {cursor}"));
+            self.terminate(format!("br label %{condition}"));
         }
-        self.instruction(format!("store i64 {next}, ptr {cursor}"));
-        self.terminate(format!("br label %{condition}"));
         self.start_block(&exit);
         self.drop_locals(false);
         self.scopes.pop();
@@ -1731,7 +1834,7 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
                 return Err(error(
                     "unresolved method call in checked AST",
                     expression.span,
-                ))
+                ));
             }
         };
         value.require(expected, expression.span)?;
@@ -2075,7 +2178,9 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
             self.instruction(format!("{result} = call ptr @bhasa.record.{id}.new()"));
             for (index, field) in fields.iter().enumerate() {
                 let pointer = self.fresh();
-                self.instruction(format!("{pointer} = getelementptr %bhasa.record.{id}, ptr {result}, i32 0, i32 {index}"));
+                self.instruction(format!(
+                    "{pointer} = getelementptr %bhasa.record.{id}, ptr {result}, i32 0, i32 {index}"
+                ));
                 self.instruction(format!(
                     "store {} {}, ptr {pointer}",
                     llvm_type(field.ty),
@@ -2113,7 +2218,10 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
                 || matches!(signature.params[0], Type::Void | Type::Task)
                 || signature.return_type == Type::Task
             {
-                return Err(error("spawn requires a defined global one-argument Bhasa worker; method receivers are unsupported", span));
+                return Err(error(
+                    "spawn requires a defined global one-argument Bhasa worker; method receivers are unsupported",
+                    span,
+                ));
             }
             let [argument] = worker_args.as_slice() else {
                 return Err(error("worker requires one argument", span));
@@ -3060,7 +3168,10 @@ mod tests {
                 output.status.success(),
                 "native main must truncate its result to i32"
             );
-            assert_eq!(String::from_utf8(output.stdout).unwrap(), "-9223372036854775808\n9223372036854775807\n-2\n-1\n-9223372036854775807\n9223372036854775806\n-9223372036854775808\n-9223372036854775807\ntrue\ntrue\ntrue\ntrue\n7\n9\n");
+            assert_eq!(
+                String::from_utf8(output.stdout).unwrap(),
+                "-9223372036854775808\n9223372036854775807\n-2\n-1\n-9223372036854775807\n9223372036854775806\n-9223372036854775808\n-9223372036854775807\ntrue\ntrue\ntrue\ntrue\n7\n9\n"
+            );
         }
     }
 

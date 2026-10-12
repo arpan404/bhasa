@@ -247,7 +247,7 @@ fn remap_block(block: &mut Block, ids: &[usize]) {
                             remap_expression(step, ids);
                         }
                     }
-                    ForSource::List(value) => remap_expression(value, ids),
+                    ForSource::Iterable(value) => remap_expression(value, ids),
                 }
                 if let Some(ty) = element_type {
                     remap_type(ty, ids);
@@ -380,8 +380,9 @@ pub enum ForSource {
         end: Box<Expr>,
         step: Option<Box<Expr>>,
     },
-    /// The loop owns a deep snapshot of this List and each yielded element.
-    List(Box<Expr>),
+    /// The loop owns a deep snapshot of this collection and each yielded value.
+    /// Buffers and ints yield integers; Maps yield their int/str keys.
+    Iterable(Box<Expr>),
 }
 #[derive(Debug, Clone)]
 pub struct Expr {
@@ -539,7 +540,7 @@ mod tests {
                                 expression_types(step, visit);
                             }
                         }
-                        ForSource::List(value) => expression_types(value, visit),
+                        ForSource::Iterable(value) => expression_types(value, visit),
                     }
                     block_expression_types(body, visit);
                 }

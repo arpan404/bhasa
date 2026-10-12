@@ -1277,7 +1277,7 @@ def be_for(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buffe
     if get(ctx, 8) >= 128 { be_error_at(tokens, errors, 204, for_token); return }
     var saved = get(ctx, 7)
     var start = buffer("0"); var end = buffer(); var step = buffer("1"); var snapshot = buffer()
-    var element_type = 1; var list_type = 0
+    var element_type = 1; var iterable_type = 0; var iterable_kind = 0
     be_statement_expression(tokens, ctx, 0)
     var lookahead = get(ctx, 0); var parentheses = 0
     while bh_token_kind(tokens, lookahead) == 40 { lookahead = lookahead + 1; parentheses = parentheses + 1 }
@@ -1312,34 +1312,55 @@ def be_for(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buffe
         set(ctx, 9, saved_depth)
     } else {
         snapshot = be_expression(source, tokens, ctx, errors, globals, allocations, body, 1)
-        list_type = get(ctx, 14)
-        if be_collection_kind(ctx, list_type) != 1 { be_error_at(tokens, errors, 201, for_token); return }
-        element_type = get(ctx, list_type - 100 + 6)
-        snapshot = be_own(body, ctx, list_type, snapshot, get(ctx, 15))
+        iterable_type = get(ctx, 14)
+        iterable_kind = be_collection_kind(ctx, iterable_type)
+        if iterable_type == 4 or iterable_type == 5 { iterable_kind = iterable_type }
+        if iterable_kind == 0 { be_error_at(tokens, errors, 201, for_token); return }
+        if iterable_kind == 1 or iterable_kind == 2 { element_type = get(ctx, iterable_type - 100 + 6) }
+        snapshot = be_own(body, ctx, iterable_type, snapshot, get(ctx, 15))
         # A keyword cannot be named by source. The owned hidden local participates
         # in return cleanup and stays alive across every continue.
-        be_bind(source, tokens, ctx, errors, allocations, body, for_token, list_type, snapshot, 1)
-        end = be_reg(ctx)
-        var line = buffer(); append(line, end); append(line, " = call i64 @bhasa.method."); append(line, to_buffer(list_type)); append(line, ".count(ptr "); append(line, snapshot); append(line, ")"); be_line(body, line)
+        be_bind(source, tokens, ctx, errors, allocations, body, for_token, iterable_type, snapshot, 1)
+        if iterable_kind != 2 {
+            end = be_reg(ctx)
+            var line = buffer(); append(line, end); append(line, " = call i64 @")
+            if iterable_kind == 1 { append(line, "bhasa.method."); append(line, to_buffer(iterable_type)); append(line, ".count") }
+            if iterable_kind == 4 { append(line, "bhasa_rt_buffer_len") }
+            if iterable_kind == 5 { append(line, "bhasa_rt_ints_len") }
+            append(line, "(ptr "); append(line, snapshot); append(line, ")"); be_line(body, line)
+        }
     }
     if len(errors) != 0 { return }
     var retained = get(ctx, 7)
-    if list_type == 0 {
+    if iterable_kind == 0 {
         var zero_step = be_reg(ctx)
         var guard = buffer(); append(guard, zero_step); append(guard, " = icmp eq i64 "); append(guard, step); append(guard, ", 0"); be_line(body, guard)
         be_trap(body, ctx, zero_step)
     }
     var counter = be_reg(ctx)
-    var line = buffer(); append(line, counter); append(line, " = alloca i64"); be_line(allocations, line)
+    var line = buffer(); append(line, counter); append(line, " = alloca i64, align 8"); be_line(allocations, line)
     line = buffer("store i64 "); append(line, start); append(line, ", ptr "); append(line, counter); be_line(body, line)
+    var key_output = buffer()
+    if iterable_kind == 2 {
+        key_output = be_reg(ctx)
+        # Runtime key slots occupy eight bytes even when target pointers are smaller.
+        line = buffer(); append(line, key_output); append(line, " = alloca i64, align 8"); be_line(allocations, line)
+    }
     var condition_label = be_label(ctx); var loop_label = be_label(ctx); var step_label = be_label(ctx); var exit_label = be_label(ctx)
     be_jump(body, ctx, condition_label); be_start(body, ctx, condition_label)
     var index = be_reg(ctx)
     line = buffer(); append(line, index); append(line, " = load i64, ptr "); append(line, counter); be_line(body, line)
     var condition = be_reg(ctx)
-    if list_type != 0 {
+    if iterable_kind == 2 {
+        # The scan advances its own cursor. Exhaustion does not initialize output.
+        var found = be_reg(ctx)
+        line = buffer(); append(line, found); append(line, " = call i64 @bhasa_rt_map_next_key(ptr "); append(line, snapshot); append(line, ", ptr "); append(line, counter); append(line, ", ptr "); append(line, key_output); append(line, ")"); be_line(body, line)
+        line = buffer(); append(line, condition); append(line, " = icmp ne i64 "); append(line, found); append(line, ", 0"); be_line(body, line)
+    }
+    if iterable_kind != 0 and iterable_kind != 2 {
         line = buffer(); append(line, condition); append(line, " = icmp slt i64 "); append(line, index); append(line, ", "); append(line, end); be_line(body, line)
-    } else {
+    }
+    if iterable_kind == 0 {
         var ascending = be_reg(ctx); var descending = be_reg(ctx); var positive = be_reg(ctx)
         line = buffer(); append(line, ascending); append(line, " = icmp slt i64 "); append(line, index); append(line, ", "); append(line, end); be_line(body, line)
         line = buffer(); append(line, descending); append(line, " = icmp sgt i64 "); append(line, index); append(line, ", "); append(line, end); be_line(body, line)
@@ -1348,15 +1369,26 @@ def be_for(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buffe
     }
     be_branch(body, ctx, condition, loop_label, exit_label); be_start(body, ctx, loop_label)
     var value = index; var owns = 0
-    if list_type != 0 {
+    if iterable_kind == 2 {
+        # A key is available only on the successful edge of the scan.
         value = be_reg(ctx)
-        line = buffer(); append(line, value); append(line, " = call "); append(line, be_llvm_type(element_type)); append(line, " @bhasa.method."); append(line, to_buffer(list_type))
-        append(line, ".get(ptr "); append(line, snapshot); append(line, ", i64 "); append(line, index); append(line, ")"); be_line(body, line)
+        line = buffer(); append(line, value); append(line, " = load "); append(line, be_llvm_type(element_type)); append(line, ", ptr "); append(line, key_output); be_line(body, line)
+        if be_owned(element_type) { owns = 1 }
+    }
+    if iterable_kind != 0 and iterable_kind != 2 {
+        value = be_reg(ctx)
+        line = buffer(); append(line, value); append(line, " = call "); append(line, be_llvm_type(element_type)); append(line, " @")
+        if iterable_kind == 1 { append(line, "bhasa.method."); append(line, to_buffer(iterable_type)); append(line, ".get") }
+        if iterable_kind == 4 { append(line, "bhasa_rt_buffer_get") }
+        if iterable_kind == 5 { append(line, "bhasa_rt_ints_get") }
+        append(line, "(ptr "); append(line, snapshot); append(line, ", i64 "); append(line, index); append(line, ")"); be_line(body, line)
         if be_owned(element_type) { owns = 1 }
     }
     set(ctx, 8, get(ctx, 8) + 1)
     be_bind(source, tokens, ctx, errors, allocations, body, name, element_type, value, owns)
-    var loop = be_loop_push(ctx, exit_label, step_label, retained)
+    var continue_label = step_label
+    if iterable_kind == 2 { continue_label = condition_label }
+    var loop = be_loop_push(ctx, exit_label, continue_label, retained)
     be_block(source, tokens, ctx, errors, globals, allocations, body, false)
     if get(ctx, 4) == 0 {
         be_cleanup(body, ctx, retained)
@@ -1364,20 +1396,22 @@ def be_for(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buffe
     }
     set(ctx, 7, retained); set(ctx, 8, get(ctx, 8) - 1); set(ctx, 29, get(ctx, loop))
     be_start(body, ctx, step_label)
-    var next = be_reg(ctx)
-    if list_type != 0 {
-        # List length bounds make index + 1 representable.
-        line = buffer(); append(line, next); append(line, " = add i64 "); append(line, index); append(line, ", 1"); be_line(body, line)
-    } else {
-        # Advancing beyond the signed domain necessarily crosses the end bound.
-        # Exit without trapping or wrapping the cursor back into the range.
-        var pair = be_reg(ctx); var overflow = be_reg(ctx); var advance_label = be_label(ctx)
-        line = buffer(); append(line, pair); append(line, " = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 "); append(line, index); append(line, ", i64 "); append(line, step); append(line, ")"); be_line(body, line)
-        line = buffer(); append(line, next); append(line, " = extractvalue { i64, i1 } "); append(line, pair); append(line, ", 0"); be_line(body, line)
-        line = buffer(); append(line, overflow); append(line, " = extractvalue { i64, i1 } "); append(line, pair); append(line, ", 1"); be_line(body, line)
-        be_branch(body, ctx, overflow, exit_label, advance_label); be_start(body, ctx, advance_label)
+    if iterable_kind != 2 {
+        var next = be_reg(ctx)
+        if iterable_kind != 0 {
+            # Collection length bounds make index + 1 representable.
+            line = buffer(); append(line, next); append(line, " = add i64 "); append(line, index); append(line, ", 1"); be_line(body, line)
+        } else {
+            # Advancing beyond the signed domain necessarily crosses the end bound.
+            # Exit without trapping or wrapping the cursor back into the range.
+            var pair = be_reg(ctx); var overflow = be_reg(ctx); var advance_label = be_label(ctx)
+            line = buffer(); append(line, pair); append(line, " = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 "); append(line, index); append(line, ", i64 "); append(line, step); append(line, ")"); be_line(body, line)
+            line = buffer(); append(line, next); append(line, " = extractvalue { i64, i1 } "); append(line, pair); append(line, ", 0"); be_line(body, line)
+            line = buffer(); append(line, overflow); append(line, " = extractvalue { i64, i1 } "); append(line, pair); append(line, ", 1"); be_line(body, line)
+            be_branch(body, ctx, overflow, exit_label, advance_label); be_start(body, ctx, advance_label)
+        }
+        line = buffer("store i64 "); append(line, next); append(line, ", ptr "); append(line, counter); be_line(body, line)
     }
-    line = buffer("store i64 "); append(line, next); append(line, ", ptr "); append(line, counter); be_line(body, line)
     be_jump(body, ctx, condition_label)
     be_start(body, ctx, exit_label)
     be_cleanup(body, ctx, saved); set(ctx, 7, saved)
@@ -1556,7 +1590,7 @@ def be_declarations(ctx: ints) -> buffer {
     append(declarations, "declare ptr @bhasa_rt_tcp_listen(i64)\ndeclare ptr @bhasa_rt_tcp_listen_on(ptr, i64)\ndeclare ptr @bhasa_rt_tcp_listen_on_str(ptr, i64)\ndeclare ptr @bhasa_rt_tcp_connect(ptr, i64)\ndeclare ptr @bhasa_rt_tcp_connect_str(ptr, i64)\ndeclare ptr @bhasa_rt_tcp_accept(ptr)\ndeclare i64 @bhasa_rt_tcp_listener_status(ptr)\ndeclare i64 @bhasa_rt_tcp_socket_status(ptr)\ndeclare i64 @bhasa_rt_tcp_local_port(ptr)\ndeclare i64 @bhasa_rt_tcp_read(ptr, ptr, i64)\ndeclare i64 @bhasa_rt_tcp_write(ptr, ptr)\ndeclare ptr @bhasa_rt_tcp_listener_clone(ptr)\ndeclare void @bhasa_rt_tcp_listener_free(ptr)\ndeclare ptr @bhasa_rt_tcp_socket_clone(ptr)\ndeclare void @bhasa_rt_tcp_socket_free(ptr)\n")
     append(declarations, "declare i64 @bhasa_rt_utf8_valid(ptr)\ndeclare i64 @bhasa_rt_utf8_count(ptr)\ndeclare i64 @bhasa_rt_utf8_get(ptr, i64)\ndeclare ptr @bhasa_rt_utf8_slice(ptr, i64, i64)\ndeclare i64 @bhasa_rt_utf8_append(ptr, i64)\ndeclare ptr @bhasa_rt_tcp_accept_timeout(ptr, i64)\ndeclare ptr @bhasa_rt_tcp_connect_timeout(ptr, i64, i64)\ndeclare ptr @bhasa_rt_tcp_connect_timeout_str(ptr, i64, i64)\ndeclare i64 @bhasa_rt_tcp_read_timeout(ptr, ptr, i64, i64)\ndeclare i64 @bhasa_rt_tcp_write_timeout(ptr, ptr, i64)\ndeclare i64 @bhasa_rt_monotonic_millis()\n")
     append(declarations, "declare ptr @bhasa_rt_async_spawn_i64(ptr, i64)\ndeclare i64 @bhasa_rt_await_i64(ptr)\ndeclare ptr @bhasa_rt_tls_connect(ptr, i64, ptr, ptr, i64)\ndeclare ptr @bhasa_rt_tls_accept(ptr, ptr, ptr, i64)\ndeclare i64 @bhasa_rt_tls_status(ptr)\ndeclare i64 @bhasa_rt_tls_read(ptr, ptr, i64, i64)\ndeclare i64 @bhasa_rt_tls_write(ptr, ptr, i64)\ndeclare i64 @bhasa_rt_tls_shutdown(ptr, i64)\ndeclare ptr @bhasa_rt_tls_socket_clone(ptr)\ndeclare void @bhasa_rt_tls_socket_free(ptr)\n")
-    append(declarations, "declare ptr @bhasa_rt_list_new(i64, ptr, ptr)\ndeclare ptr @bhasa_rt_map_new(i64, i64, ptr, ptr, ptr, ptr, ptr, ptr)\ndeclare void @bhasa_rt_list_get(ptr, i64, ptr)\ndeclare void @bhasa_rt_list_push(ptr, ptr)\ndeclare void @bhasa_rt_list_set(ptr, i64, ptr)\ndeclare void @bhasa_rt_map_get(ptr, ptr, ptr)\ndeclare void @bhasa_rt_map_put(ptr, ptr, ptr)\ndeclare i64 @bhasa_rt_map_contains(ptr, ptr)\ndeclare i64 @bhasa_rt_map_remove(ptr, ptr)\ndeclare ptr @bhasa_rt_list_clone(ptr)\ndeclare void @bhasa_rt_list_free(ptr)\ndeclare i64 @bhasa_rt_list_count(ptr)\ndeclare void @bhasa_rt_list_clear(ptr)\ndeclare ptr @bhasa_rt_map_clone(ptr)\ndeclare void @bhasa_rt_map_free(ptr)\ndeclare i64 @bhasa_rt_map_count(ptr)\ndeclare void @bhasa_rt_map_clear(ptr)\ndeclare i64 @bhasa_rt_map_hash_i64(ptr)\ndeclare i64 @bhasa_rt_map_equal_i64(ptr, ptr)\ndeclare i64 @bhasa_rt_map_hash_str(ptr)\ndeclare i64 @bhasa_rt_map_equal_str(ptr, ptr)\n")
+    append(declarations, "declare ptr @bhasa_rt_list_new(i64, ptr, ptr)\ndeclare ptr @bhasa_rt_map_new(i64, i64, ptr, ptr, ptr, ptr, ptr, ptr)\ndeclare void @bhasa_rt_list_get(ptr, i64, ptr)\ndeclare void @bhasa_rt_list_push(ptr, ptr)\ndeclare void @bhasa_rt_list_set(ptr, i64, ptr)\ndeclare void @bhasa_rt_map_get(ptr, ptr, ptr)\ndeclare i64 @bhasa_rt_map_next_key(ptr, ptr, ptr)\ndeclare void @bhasa_rt_map_put(ptr, ptr, ptr)\ndeclare i64 @bhasa_rt_map_contains(ptr, ptr)\ndeclare i64 @bhasa_rt_map_remove(ptr, ptr)\ndeclare ptr @bhasa_rt_list_clone(ptr)\ndeclare void @bhasa_rt_list_free(ptr)\ndeclare i64 @bhasa_rt_list_count(ptr)\ndeclare void @bhasa_rt_list_clear(ptr)\ndeclare ptr @bhasa_rt_map_clone(ptr)\ndeclare void @bhasa_rt_map_free(ptr)\ndeclare i64 @bhasa_rt_map_count(ptr)\ndeclare void @bhasa_rt_map_clear(ptr)\ndeclare i64 @bhasa_rt_map_hash_i64(ptr)\ndeclare i64 @bhasa_rt_map_equal_i64(ptr, ptr)\ndeclare i64 @bhasa_rt_map_hash_str(ptr)\ndeclare i64 @bhasa_rt_map_equal_str(ptr, ptr)\n")
     append(declarations, "declare ptr @bhasa_rt_spawn_owned(ptr, ptr)\ndeclare ptr @bhasa_rt_async_spawn_owned(ptr, ptr)\ndeclare ptr @bhasa_rt_join_owned(ptr)\ndeclare ptr @bhasa_rt_await_owned(ptr)\ndeclare ptr @bhasa_rt_task_alloc(i64)\ndeclare void @bhasa_rt_task_free(ptr)\n")
     return declarations
 }

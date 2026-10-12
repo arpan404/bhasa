@@ -1906,7 +1906,7 @@ fn visit_expressions<'a>(block: &'a Block, visit: &mut impl FnMut(&'a Expr)) {
                             expr(step, visit);
                         }
                     }
-                    ForSource::List(value) => expr(value, visit),
+                    ForSource::Iterable(value) => expr(value, visit),
                 };
                 visit_expressions(body, visit);
             }
@@ -2128,7 +2128,7 @@ fn lexical_bindings(
                         ForSource::Range { end, step, .. } => {
                             step.as_ref().map_or(end.span.end, |step| step.span.end)
                         }
-                        ForSource::List(value) => value.span.end,
+                        ForSource::Iterable(value) => value.span.end,
                     };
                     if let Some(first) = body_scope(start, statement.span.end) {
                         add(
@@ -2937,7 +2937,7 @@ impl ReferenceIndex<'_> {
                                 self.expression(step);
                             }
                         }
-                        ForSource::List(value) => self.expression(value),
+                        ForSource::Iterable(value) => self.expression(value),
                     }
                     self.scopes.push(BTreeMap::new());
                     self.local_declaration(name, *name_span);

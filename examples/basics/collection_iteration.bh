@@ -1,0 +1,29 @@
+# Each loop holds an independent snapshot; Map key order is unspecified.
+def main() {
+    var data = buffer("Bhasa")
+    var total = 0
+    for byte in data {
+        total = total + byte
+    }
+    print(total)
+    var numbers = ints();
+    push(numbers, 10);
+    push(numbers, 20);
+    push(numbers, 30)
+    var sum = 0
+    for number in numbers {
+        sum = sum + number;
+        set(numbers, 0, 99)
+    }
+    print(sum)
+    var scores = Map[str, int]();
+    scores.put("alice", 4);
+    scores.put("bob", 7)
+    var count = 0
+    for name in scores {
+        count = count + 1;
+        scores.clear();
+        name = "changed"
+    }
+    print(count)
+}

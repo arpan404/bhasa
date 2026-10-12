@@ -1212,7 +1212,7 @@ pub(crate) fn visit_program_spans(program: &mut ast::Program, map: &impl Fn(Span
                                 expr(step, map);
                             }
                         }
-                        ast::ForSource::List(value) => expr(value, map),
+                        ast::ForSource::Iterable(value) => expr(value, map),
                     }
                     block(body, map);
                 }
@@ -1325,7 +1325,7 @@ fn visit_program_expressions(program: &ast::Program, visit: &mut impl FnMut(&ast
                                 expr(step, visit);
                             }
                         }
-                        ast::ForSource::List(value) => expr(value, visit),
+                        ast::ForSource::Iterable(value) => expr(value, visit),
                     }
                     block(body, visit);
                 }

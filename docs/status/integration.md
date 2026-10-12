@@ -1,88 +1,73 @@
 # Compiler integration status
 
-Verified October 11, 2026 on ARM64 macOS with Rust/Cargo 1.98.0 and Apple
-Clang 21.0.0. Integer bit operations, stepped ranges and checked editor
-refactoring are integrated. The user authorized the full backlog in `todo.md`,
-parallel internal agents, progress commits and pushing completed commits to
-https://github.com/arpan404/bhasa. Prior typed-task evidence is preserved in
-[integration-typed-tasks.md](integration-typed-tasks.md).
+Collection snapshot iteration is integrated on ARM64 macOS with Rust/Cargo 1.98.0
+and Apple Clang 21.0.0. The prior numeric/editor increment is preserved in
+[integration-systems.md](integration-systems.md). The user authorized the full
+backlog, parallel agents, progress commits and pushes to the configured remote.
 
 ## Delivered
 
-- Both frontends support integer `&`, `|`, `^`, `~`, `<<` and `>>`, with the
-  agreed precedence. Shift counts outside 0 through 63 trap before LLVM shifts.
-  Left shift wraps the bit pattern; right shift preserves its sign. Ordinary
-  arithmetic remains checked. Hexadecimal/binary integer spelling is retained,
-  validated against signed-i64 bounds and reported at original source spans.
-- `range(start, end, step)` evaluates arguments once, left to right. Positive
-  and negative steps select the corresponding exclusive bound. Zero traps,
-  including empty ranges. Cursor advancement overflow ends iteration through
-  normal cleanup. Mutating the visible binding cannot change traversal.
-  Continue, break, return, owned data and lexical typed tasks retain their rules.
-  Host visitors include steps in generic/module maps, privacy and worker graphs.
-- The language server resolves checked local definitions and references, and
-  provides checked rename across loaded graphs rooted at open documents.
-  It returns versioned edits only for open files, rechecks proposed programs
-  and compares declaration bindings to reject collisions and silent capture.
-  The extension verifies the entire open Bhasa document inventory, including
-  previously unedited importers, before converting edits. It validates UTF-16
-  tokens, synchronization admission limits, failed sends and close/reopen events.
-  Closed-document epoch history uses weak document keys.
-- Formatter/grammar support, examples, guides and `todo.md` reflect the new
-  behavior. Snapshot iteration over buffers, ints and Map keys is the prepared
-  next increment; implementation has not started.
+Both frontends accept `for value in buffer`, `ints`, List and Map expressions.
+Buffers yield int bytes 0 through 255; ints preserves integer order; Map yields
+its declared int/str key type in unspecified order. Sources evaluate once and
+retain independent deep snapshots, including Map values. Original mutation,
+replacement and mutable body bindings cannot alter traversal. All normal loop
+exits retain owned cleanup, lexical task consumption and worker graph checks.
+
+The internal Map cursor ABI clones a key only on success and leaves output
+untouched on exhaustion. It rejects invalid cursors, null/misaligned storage,
+address overflow and aliases with Map or cursor storage before mutation. The
+compiler loads only successful output and never increments the runtime-managed
+Map cursor. Both frontends use explicitly eight-byte-aligned cursor/key slots.
+
+AST/module/generic/editor visitors include the generalized Iterable source.
+Original List/range behavior remains checked. The collection example and guides
+explain snapshot costs and unspecified Map ordering. Custom/borrowed iterators
+and pair destructuring remain outside this increment.
 
 ## Verification
 
 | Gate | Evidence |
 | --- | --- |
-| Complete reference | 433 passed; build/verify-systems-reference.log |
-| Complete full hybrid | 445 passed; build/verify-systems-hybrid-final.log |
-| Integer/range contracts | Four integer and five range reference groups cover radix spans, bounds, precedence, strict types, corrupted checked AST, shift traps and a signed-range oracle; tests/integer_bits_reference.rs and stepped_ranges_reference.rs |
-| Independent integration | Three groups cover imported generics, source evaluation order, mutable bindings, nested exits, worker/privacy graphs, original-file diagnostic tokens and formatter preservation; tests/systems_integration.rs |
-| Owned execution | O0/O2 ASan/UBSan and atomic allocation counters cover loop snapshots, owned scratch data, early exits and typed tasks; focused and combined suites |
-| Native frontend parity | Fresh seed/native and hybrid acceptance, 26 rejection probes, six traps and equal self-rebuilt LLVM; tests/systems_bhasa.rs and build/systems-native |
-| Independent review | 115 reference/native probes; reverse host traversal/privacy/formatting review; checked refactor and synchronization review with retained regressions |
-| Editor | 56 LSP tests in both complete suites, 80 Node tests and syntax checks; build/verify-systems-lsp-final.log and build/verify-systems-editors-final.log |
-| Formatting/Clippy | Both configurations pass with warnings denied; build/verify-systems-fmt-final.log, verify-systems-clippy-reference.log and verify-systems-clippy-hybrid.log |
-| Refreshed releases | Both release compilers execute new/previous examples and five package tests; build/verify-systems-release-smoke.log |
-| Cache reuse | 26 native hits, four unchanged Rust adapter runs and two unchanged hybrid builds with zero compilations; build/verify-systems-release-smoke.log and verify-systems-unchanged-build-1.log / -2.log |
-| A → B → C | Compiler LLVM and committed example outputs match, including bitwise operations, stepped ranges and typed workers; build/verify-systems-selfhost.log; build/selfhost/run.xQ1qwOVL |
+| Complete reference | 441 passed; build/verify-collections-reference-final.log |
+| Complete hybrid | 454 passed; build/verify-collections-hybrid.log |
+| Focused final host/editor | Two imported/generic/task groups and 56 LSP tests pass, including buffer/ints/Map binding hover and rename; build/verify-collections-focused-final.log |
+| Reference contract | Four groups cover checked types, corrupt AST, task scopes, worker graph and O0/O2 sequence/key-set oracles; tests/collection_iteration_reference.rs |
+| Native parity | Fresh seed, reversed mutation, key-set/owned payload checks and self-rebuild; tests/collection_iteration_bhasa.rs; build/collection-iteration-native/probe.log |
+| Independent integration | Imported generics/method sources, typed nested tasks, owned early exits, privacy and transitive worker rejection; tests/collection_iteration_integration.rs |
+| Runtime guards | Strict C11 O0/O2 ASan/UBSan, allocation/clone/drop accounting and 20 isolated alias/cursor/storage failures; tests/collection_iteration_runtime.rs |
+| Ownership | O0/O2 sanitizers and atomic allocation counters cover Map values, snapshot mutation/free, nested loop exits and typed task frames |
+| Editor | 80 Node tests; build/verify-collections-editor.log |
+| Formatting/Clippy | Formatting and both Clippy configurations pass; build/verify-collections-fmt.log, verify-collections-clippy-reference.log / -hybrid.log |
+| Refreshed releases | Both refreshed releases execute eleven examples and five package tests; build/verify-collections-release-smoke.log |
+| Cache reuse | 28 native hits, four unchanged Rust adapter runs and two unchanged hybrid builds with zero compilations; build/verify-collections-release-smoke.log and unchanged-build-1.log / -2.log |
+| A → B → C | Compiler LLVM and committed outputs match at build/selfhost/run.nKvvmUf3; build/verify-collections-selfhost.log |
 
 Complete suites ran serially with two Cargo build jobs and one test thread.
-Compiler sources remained frozen. The first hybrid run exposed an integration
-assertion that assumed identical diagnostic tokens in both frontends. Mapping
-was correct: Rust highlights the invalid expression, while native highlights its
-consumed-expression cursor. The stricter frontend-specific token/code/location
-assertions pass both frontends, and the complete hybrid rerun passes.
+Compiler sources remained frozen. The sandbox prevented initial HTTP startup;
+the complete suite with local loopback permission passes. An independent test
+program initially used an unsupported worker arity and str comparison; the
+fixture was corrected to a single owned worker frame and explicit byte equality.
+The worker-restriction probe was strengthened to use a valid worker signature,
+and final focused/reference and complete hybrid checks pass.
 
-Editor review repaired unknown unsaved importer completeness, stale unedited
-importers, replacement amplification, repeated offset scans, contextual-name
-eligibility, unsynchronized over-limit documents and retained URI history.
-Final client checks ran after these repairs. Details and conservative refusals
-are in [systems-editor.md](systems-editor.md).
-
-Fresh archive key: `e1056ba67083f8c895adfeacf64eff9ff00162057017d1ae7f9ed44432dfcc81`.
-Its concatenated scanner/emitter source exactly matches the frozen sources.
-Both unchanged builds reuse that archive without compilation. `.bh`, exactly
-lowercase `bhasa.toml`, deterministic no-GC ownership, Rust host architecture
-and existing caches remain intact. The old heartbeat remains paused.
-
-Real Metal dispatch and TCP/TLS loopback pass. CUDA/Vulkan hardware tests skip
-because devices/drivers are unavailable. The local Clang lacks a wasm32 backend.
-Node editor tests use mocked VS Code APIs. No Linux/Windows-device, manual
-VS Code GUI or runnable WASI execution claim is made.
+Fresh archive key: `d38354856710fabdc825c0c98f05bb12dab2a48292baf2e9f8e42c76f0c96892`.
+Its source exactly matches the frozen scanner/emitter at build/hybrid/run.qoaL3rhV.
+The old heartbeat remains paused. Caches, .bh, exactly lowercase bhasa.toml and
+the accepted Rust host architecture remain intact.
 
 ## Remaining work
 
-The language remains experimental. The full backlog is in [todo.md](../../todo.md).
-The next prepared contract is
-[collections-iteration-milestone.md](collections-iteration-milestone.md).
-Rename does not crawl unknown importers or provide a workspace-wide index;
-ambiguous/uninstantiated generic tokens and foreign ABI declarations remain
-conservative refusals. General borrowing/lifetimes, owned parameters, channels,
-cancellation, coroutines/async I/O, fixed-width types, closures/traits, portable
-GPU kernels, runnable Wasm/embedded runtimes and the wider library/package/
-release ecosystem remain open. Foreign adapters are trusted native code with
-no automatic no-GC or thread-safety proof. Per-module incremental compilation
-and C/Go performance parity are not established.
+The complete remaining backlog is in [todo.md](../../todo.md). Typed file errors,
+initializer-only explicit propagation and immediate result-discard detection are
+prepared in [errors-milestone.md](errors-milestone.md); drafts stay outside tracked
+sources until this increment is committed. Assigned-failure analysis, borrowing,
+channels/cancellation, async I/O, fixed-width types, closures/traits, portable GPU
+kernels and the wider platform/library/package/release ecosystem remain open.
+
+Map copies values for key iteration and currently uses int/str keys. The C ABI
+trusts live foreign pointers and callbacks; it cannot validate arbitrary dangling
+pointers or prove native adapters safe. No Rust-equivalent safety proof or C/Go
+performance parity is claimed. Real Metal/TCP/TLS pass; CUDA/Vulkan hardware,
+Wasm backend, Linux/Windows device execution and real VS Code GUI remain unavailable
+or unverified on this host.

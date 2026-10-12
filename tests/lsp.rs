@@ -1985,6 +1985,43 @@ fn editor_loop_binders_are_typed_and_confined_to_their_bodies() {
     assert!(!completion_labels(result(&output, 4)).contains(&"index"));
     assert!(!completion_labels(result(&output, 4)).contains(&"item"));
     assert_eq!(hover_text(result(&output, 5)), Some("item: buffer"));
+    for (iterable, expected) in [
+        ("buffer()", "item: int"),
+        ("ints()", "item: int"),
+        ("Map[int,buffer]()", "item: int"),
+        ("Map[str,buffer]()", "item: str"),
+    ] {
+        let source = format!("def main(){{for item in {iterable}{{print(item)}};print(1)}}");
+        let mut messages = start();
+        messages.push(open(URI, &source, 1));
+        messages.push(editor_request(
+            2,
+            "textDocument/hover",
+            URI,
+            &source,
+            source.find("print(item)").unwrap() + 7,
+        ));
+        messages.push(refactor_at(
+            3,
+            "textDocument/rename",
+            URI,
+            &source,
+            "item in",
+            Some("entry"),
+        ));
+        let output = exchange(messages);
+        assert_eq!(hover_text(result(&output, 2)), Some(expected));
+        let changes = result(&output, 3)
+            .get("documentChanges")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        assert_eq!(
+            changes[0].get("edits").unwrap().as_array().unwrap().len(),
+            2
+        );
+        bhasa::check(&apply_rename(&source, &changes[0])).unwrap();
+    }
 }
 
 #[test]
