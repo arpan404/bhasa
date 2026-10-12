@@ -1,7 +1,7 @@
 {
   "updated": "2026-10-12",
   "coordinator": "01a12ba1-6cad-7f00-a505-1eb6a34b6e41",
-  "sourceIntegration": "Owned buffer/ints transfer, typed regular-file streams and atomic TCP shared-owner copies are verified and pushed as 8316a89; do not restart them. Acceptance: 649 complete reference / 681 hybrid tests; 20 reference / 22 hybrid focused groups after independently reviewed structural lint fixes; 98 LSP per configuration / 94 Node; both Clippy/fmt; 16 examples and five package tests per frontend; A/B/C run.lWdKWpz3; 38 scheduled native hits, four Rust adapter runs and two hybrid builds with zero compilations. All 270 final input identities match. Final matching archive cdd251ae2afa392702ef70570587f3500c3723875c4c6de2f8ed59419f096a8a. Next: actual reviewed channel composition; native explicit-borrow source preparation active atop corrected family-bound channel seed. Independent channel replay closes DAG/family/schema findings. Typed network/process/TLS/HTTP rebase reviewed; separate public HTTP bounds/header-budget correction active in std chat. Toolchain public parser corrections independently replay clean; bounded production process-adapter draft active in GPU chat, actual CLI/configured-tool evidence later. Workspace/API/actions/Result parameters remain isolated. Preserve worker files, original failures, caches and diagnostic precedence.",
+  "sourceIntegration": "Typed bounded channels are integrated and committed as a4c7de2a81d2f068fcc2194c14b90b3bfa0cc09d: 690 complete reference/726 complete matching hybrid, 104 LSP per configuration/94 Node, both Clippy/fmt, matching releases with17 examples/five package tests each, A/B/C run.O1R7XfeD,40 scheduled native hits/four unchanged Rust adapters/two unchanged hybrid builds with0 Compiling. Final archive f2ed8d6376f99ede7e82d6b6187e049533138c2b88249cddb629a0a96f180f03. All301 inputs match; source-only reviewed host/editor borrow rebases and corrected Result-parameter native runner remain isolated. The user requested a pause, commit/push and summary.md; automation is deleted, all eight lane chats are inactive, and no implementation is assigned. Resume only on explicit user request. Read summary.md and current acceptance before applying contextual patches.",
   "threads": [
     {
       "lane": "safety-errors",
@@ -16,16 +16,16 @@
       "threadId": "01a12e2c-fae4-7743-bb86-0c2a50e8a887",
       "hostId": "local",
       "title": "Bhasa ownership and core language",
-      "cursor": "430a7584-3bb8-41f3-ba91-d27f1b753398:5",
-      "status": "idle"
+      "cursor": "430a7584-3bb8-41f3-ba91-d27f1b753398:7",
+      "status": "notLoaded"
     },
     {
       "lane": "native-compiler",
       "threadId": "01a12e2d-07c5-7c40-bab3-8d50ed614b10",
       "hostId": "local",
       "title": "Bhasa compiler parity and performance",
-      "cursor": "a1cdda68-bfde-4dd8-b572-40489571e4cc:15",
-      "status": "active"
+      "cursor": "a1cdda68-bfde-4dd8-b572-40489571e4cc:19",
+      "status": "notLoaded"
     },
     {
       "lane": "concurrency-async",
@@ -40,8 +40,8 @@
       "threadId": "01a12e2d-836d-7423-aabe-7b1cb0bcd41a",
       "hostId": "local",
       "title": "Bhasa standard library and backend services",
-      "cursor": "da040e31-e681-479b-965b-3198152313d5:5",
-      "status": "active"
+      "cursor": "da040e31-e681-479b-965b-3198152313d5:6",
+      "status": "notLoaded"
     },
     {
       "lane": "packages-ffi",
@@ -49,50 +49,65 @@
       "hostId": "local",
       "title": "Bhasa packages and interoperability",
       "cursor": "fed7b53e-b458-4c00-a741-ba21c7cb6121:4",
-      "status": "idle"
+      "status": "notLoaded"
     },
     {
       "lane": "editor-acceptance",
       "threadId": "01a12e2e-0f34-7b10-a5a7-412ddaeadefe",
       "hostId": "local",
       "title": "Bhasa editor tools and production acceptance",
-      "cursor": "9cac160f-207a-40e6-bd1c-d04cc59329ee:6",
-      "status": "idle"
+      "cursor": "9cac160f-207a-40e6-bd1c-d04cc59329ee:11",
+      "status": "notLoaded"
     },
     {
       "lane": "gpu-platforms",
       "threadId": "01a12e2e-1eb8-7680-8b70-e57c410dd92b",
       "hostId": "local",
       "title": "Bhasa GPU and portable targets",
-      "cursor": "0bd7f91d-8deb-427c-8e95-c8453e73e49f:9",
-      "status": "active"
+      "cursor": "0bd7f91d-8deb-427c-8e95-c8453e73e49f:11",
+      "status": "notLoaded"
     }
   ],
   "automation": {
     "id": "orchestrate-bhasa-compiler-chats",
     "kind": "heartbeat",
-    "status": "ACTIVE",
-    "interval_minutes": 5
+    "status": "DELETED",
+    "deleted_at_utc": "2026-10-12"
   },
   "delivered": {
-    "commit": "8316a89182d8fd03ea3e96570a4f2e6c232e7faf",
-    "reference_tests": 649,
-    "hybrid_tests": 681,
-    "post_clippy_focused": {
-      "reference": 20,
-      "hybrid": 22
-    },
-    "lsp_groups_per_configuration": 98,
+    "commit": "a4c7de2a81d2f068fcc2194c14b90b3bfa0cc09d",
+    "reference_tests": 690,
+    "hybrid_tests": 726,
+    "lsp_groups_per_configuration": 104,
     "node_tests": 94,
-    "release_examples_per_configuration": 16,
+    "release_examples_per_configuration": 17,
     "package_tests_per_configuration": 5,
-    "selfhost_run": "run.lWdKWpz3",
-    "native_repeat_hits": 38,
+    "selfhost_run": "run.O1R7XfeD",
+    "native_repeat_hits": 40,
     "unchanged_rust_adapter_runs": 4,
     "unchanged_hybrid_builds": 2,
     "rust_compiling_lines": 0,
-    "archive_key": "cdd251ae2afa392702ef70570587f3500c3723875c4c6de2f8ed59419f096a8a",
-    "frozen_input_count": 270,
-    "artifact_record": "build/verify-owned-artifact-identity.json"
+    "archive_key": "f2ed8d6376f99ede7e82d6b6187e049533138c2b88249cddb629a0a96f180f03",
+    "frozen_input_count": 301,
+    "artifact_record": "build/verify-channels-artifact-identity.json"
+  },
+  "workStatus": "paused",
+  "pause": {
+    "requested_by": "user",
+    "date_utc": "2026-10-12",
+    "reason": "Commit and push completed work, write summary.md, stop implementation and delete the schedule.",
+    "resume_requires": "Explicit user request to continue; do not recreate monitoring automatically."
+  },
+  "nextPrepared": {
+    "borrows_host": "build/backlog/ownership-types/host-integration-20261012-channels",
+    "borrows_host_review": "build/borrow-channel-host-rebase-independent-review/review.md",
+    "borrows_test_import_correction": "build/backlog/ownership-types/host-integration-20261012-channels/test-import-correction",
+    "borrows_editor": "build/backlog/editor-acceptance/explicit-borrows-channel-aware",
+    "borrows_editor_review": "build/borrow-channel-editor-rebase-independent-review/report.md",
+    "borrows_native": "build/backlog/native-compiler/explicit-borrows/contextual-names",
+    "result_parameters_native_runner": "build/backlog/native-compiler/result-parameters/runner-correction",
+    "result_parameters_review": "build/native-result-parameter-independent-review/report.md",
+    "tls_classifier_driver": "build/tls-classifier-driver-preparation",
+    "status": "Preserved isolated drafts; not integrated and no runtime slot currently authorized."
   }
 }

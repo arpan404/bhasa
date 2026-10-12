@@ -560,3 +560,81 @@ remain root-owned. Channel identity/getter/DAG traversal findings are routed
 before source wiring. Owned buffer/ints transfer has a separately ratified small
 contract; broader borrows/resources/Results are deferred. No other checkbox is
 completed by these draft reviews.
+
+## Actual channel composition, October 12
+
+Root applied the reviewed contextual host/runtime/stdlib/bridge patches and the
+family-bound native emitter to the current owned/files source. Public loader,
+overlay, constructor/privacy, pending Result, immutable, ownership and resolved
+worker-effect checks pass. Reference focused acceptance passes 42 groups; the
+first matching hybrid archive passes 42 groups and 36 O0/O2 channel guest
+executions. The C runtime gate and guest allocation ledgers return to zero.
+Production CLI cache/unsupported-target checks pass after correcting a fixture
+that failed earlier during Rust adapter manifest validation. Original failing
+Clang triple and fixture logs remain under build. These are focused results,
+not final channel acceptance.
+
+Independent review of Clippy corrections confirms the unchanged worker helper
+and grouped DAG visitor state. Current reference Clippy passes. The public
+channel example prints Bhasa, and the source contract is recorded in
+channels-milestone.md. Complete frozen suites, final matching archives/releases,
+A/B/C and unchanged cache reuse still remain before the scoped box and commit.
+
+The editor operation proposal remains isolated. Independent protocol review
+reproduced two defects: synthetic intrinsic methods appeared as source outline
+declarations, and a URI containing the intrinsic marker suppressed ordinary
+completion/rename. The existing editor chat owns the bounded corrections and
+regressions; no new chat or duplicate assignment was created. Authority-derived
+signatures/navigation must not promote recovery or invent editable declarations.
+
+Corrected native explicit-borrow source now passes its authorized isolated slot:
+76 source cases plus typed loan/mode guards, with no process remaining. Actual
+borrow integration remains later. Corrected HTTP source passes 16 isolated
+O0/O2 guest executions with its exact header budget and bounded copying;
+production network integration remains later. Toolchain process/parser,
+workspace/API/actions and Result-parameter increments are still isolated. Root
+protects their drafts while finishing channels.
+
+
+Channel editor/inspection corrections are now integrated. Explicit origin removes
+URI heuristics and synthetic outline declarations; authority-derived inspector
+methods preserve private storage. Actual reference gates pass 104 LSP and six
+inspector groups. Four private native bridge groups directly execute the existing
+matching archive, preserving original diagnostic spans and exactly refusing nine
+malformed manifests. Descendant-pipe timeout regressions and channel-only runtime
+cache/target tests pass. Final source review finds no unexpected contextual
+difference; both Clippy configurations and fmt pass against 301 frozen inputs.
+
+The first full reference command stopped at old loopback HTTP startup. The
+unchanged sandbox probe reproduces EPERM, matching the earlier documented
+restriction; no product/test rule changed. Full reference is rerunning with
+localhost permission, then root will serialize full hybrid and final artifact
+acceptance. Ownership and editor chats now prepare only fresh contextual borrow
+handoffs in isolated directories. Native Result-parameter review remains separate
+and cannot use a diagnostic printed before a sanitizer crash as a passing refusal.
+
+
+## User-requested pause and final channel checkpoint
+
+On October 12, 2026 the user requested committing/pushing completed work, a
+summary.md handoff, stopping implementation and clearing the schedule. The
+coordinator deleted automation orchestrate-bhasa-compiler-chats; deletion is
+confirmed by the app. All eight lane chats are inactive/notLoaded, internal
+review agents are completed and no owned build/test/runtime command remains.
+No follow-up implementation or native slot is authorized while paused.
+
+Channels are committed as a4c7de2a81d2f068fcc2194c14b90b3bfa0cc09d. Final acceptance
+is 690 complete reference/726 complete hybrid, 104 LSP per configuration/94 Node,
+both Clippy/fmt and matching releases with 17 examples/five package tests each.
+A/B/C passes at run.O1R7XfeD. Forty unchanged native hits, four unchanged Rust
+adapter runs and two unchanged hybrid builds have zero Rust Compiling lines.
+All 301 frozen inputs remain exact; final matching archive is
+f2ed8d6376f99ede7e82d6b6187e049533138c2b88249cddb629a0a96f180f03.
+
+Next host/editor borrow contextual rebases pass independent source review, with
+separate test-import cleanup and the optional unconnected channel-effects API
+kept isolated. Corrected native Result-parameter runner source is reviewed but
+unexecuted. TLS classifier driver preparation is also isolated/source-reviewed.
+All original drafts, first failures and local caches remain intact under build.
+The complete remaining backlog and explicit next steps are in summary.md;
+resume requires a new explicit user instruction.

@@ -1,10 +1,15 @@
 # Full backlog lanes
 
+**Paused by the user on October 12, 2026.** The coordinator deleted the heartbeat
+schedule. All eight lane chats are inactive. Read summary.md and the current
+backlog-state.json before resuming; do not restart work or recreate the schedule
+without an explicit user request. The remaining sections retain historical lane
+contracts and milestones.
+
 The user requested dedicated Codex chats for all remaining todo.md work on
 October 11, 2026. This supersedes the old bounded monitor's no-extra-chat note.
-Historical six chats remain completed. The existing heartbeat now coordinates
-these eight lanes every five minutes; it stays quiet on unchanged progress and
-stops when no meaningful work remains without a real external change.
+Historical six chats remain completed. The deleted heartbeat previously coordinated these eight lanes every five minutes.
+Historical cadence is not authorization to resume the paused work.
 
 The integration chat at 01a12ba1-6cad-7f00-a505-1eb6a34b6e41 owns contracts,
 source integration, Cargo gates, releases, todo.md and authorized progress
@@ -77,3 +82,15 @@ owned prerequisites while waiting for API or build coordination.
 
 No backlog section is considered complete merely by delegation. Thread IDs and
 compact wait cursors are recorded by the coordinator after creation.
+
+## Final pause checkpoint
+
+Typed bounded channels are integrated as a4c7de2: 690 reference/726 matching
+hybrid tests, 104 LSP groups per configuration/94 Node, both Clippy/fmt, matching
+releases with 17 examples/five package tests each, A/B/C run.O1R7XfeD and unchanged
+cache reuse. Final archive is f2ed8d6376f99ede7e82d6b6187e049533138c2b88249cddb629a0a96f180f03.
+Current borrowed-mode host/editor preparations are source-reviewed contextual
+rebases against these 301 frozen inputs; they are not integrated. Native borrow
+source has isolated execution evidence, while the separately corrected native
+Result-parameter runner is unexecuted. summary.md records exact paths, dependencies
+and resume gates. No worker may interpret these drafts as a completed feature.
