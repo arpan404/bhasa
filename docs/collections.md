@@ -86,8 +86,8 @@ def main() {
 
 Elements and map values can be scalars, buffers, integer arrays, records, enums, handles, or other concrete collections. `void`, task handles, and recursive schemas are rejected. The existing aggregate-depth and generic-instantiation limits apply.
 
-There are no collection iterators, borrowed element views, fixed arrays, dynamic buffer/Text keys, user-defined hashing, or capacity controls yet. Lists can be traversed with an integer loop and `count`/`get`. Map iteration and ordering are not part of the current contract. Allocation failures stop the program.
+Lists support owned-snapshot `for` iteration. There are no custom/borrowed iterators, borrowed element views, fixed arrays, dynamic buffer/Text keys, user-defined hashing, or capacity controls yet. Map iteration and ordering are not part of the current contract. Allocation failures stop the program.
 
-Collections are not synchronized. The current worker API accepts and returns integers, so collections remain local to a worker or to its calling thread. Worker-local collections are supported.
+Collections are not synchronized. Typed tasks acquire independent collection copies before submission and transfer owned results back through join/await; they do not share mutable collection storage.
 
 See [the complete example](../examples/collections-generic/main.bh) and [implementation and verification status](status/collections-generic.md).

@@ -84,9 +84,7 @@ fn workers_reject_foreign_calls_through_recursive_call_graphs() {
     bhasa::check("extern def foreign(value: int) -> int\ndef worker(value: int) -> int { return value }\ndef main() { var job = spawn(worker(foreign(1))); join(job) }").unwrap();
     for worker in [
         "def worker() -> int { return 1 }",
-        "def worker(value: bool) -> int { return 1 }",
-        "def worker(value: int) -> bool { return true }",
-        "def worker(value: int) { print(value) }",
+        "def worker(first: int, second: int) -> int { return first + second }",
     ] {
         let source = format!("{worker}\ndef main() {{ var job = spawn(worker(1)); join(job) }}");
         let errors = bhasa::check(&source).unwrap_err();
@@ -94,6 +92,15 @@ fn workers_reject_foreign_calls_through_recursive_call_graphs() {
             errors.iter().any(|error| error.code == "S020"),
             "{errors:?}"
         );
+    }
+    for worker in [
+        "def worker(value: int) -> bool { return true }",
+        "def worker(value: int) { print(value) }",
+    ] {
+        bhasa::check(&format!(
+            "{worker}\ndef main() {{ var job = spawn(worker(1)); join(job) }}"
+        ))
+        .unwrap();
     }
 }
 

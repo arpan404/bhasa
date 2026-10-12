@@ -103,6 +103,12 @@ struct NativeRecord {
 def copy_record(value: NativeRecord) -> NativeRecord { return value }
 extern def foreign(value: int) -> int
 def worker(value: int) -> int { return value + 1 }
+def typed_worker(value: NativeLeaf) -> NativeLeaf {
+    value.suffix(" worker")
+    push(value.numbers, 9)
+    return value
+}
+def void_worker(value: buffer) { append(value, " consumed") }
 def main() {
     var job = spawn(worker(foreign(20)))
     var result = join(job)
@@ -130,13 +136,24 @@ def main() {
     print(copied.copy().leaf.contents())
     var invalid = tcp_listen_on(buffer("invalid"), 0)
     print(tcp_listener_status(invalid) > 0)
+    var typed_input = NativeLeaf(buffer("typed"), ints())
+    push(typed_input.numbers, 7)
+    var typed_job = async_spawn(typed_worker(typed_input))
+    typed_input.suffix(" caller")
+    var typed_result = await(typed_job)
+    var void_job = spawn(void_worker(typed_result.text))
+    join(void_job)
+    print(typed_input.text)
+    print(typed_result.text)
+    print(len(typed_input.numbers))
+    print(len(typed_result.numbers))
 }
 BHASA
 cat > "$build_dir/adapter.c" <<'C'
 #include <stdint.h>
 int64_t foreign(int64_t value) { return value * 2; }
 C
-printf '%s\n' 41 false 1 safe record 42 record 'record!' 7 8 true 'record!' true > "$build_dir/native.expected"
+printf '%s\n' 41 false 1 safe record 42 record 'record!' 7 8 true 'record!' true 'typed caller' 'typed worker' 1 2 > "$build_dir/native.expected"
 printf '%s\n' 'bhasa GPU: CUDA driver or NVRTC library is unavailable' > "$build_dir/native.stderr.expected"
 for stage in B C; do
     "$build_dir/$stage" emit-llvm "$build_dir/native.bh" --target "$target" > "$build_dir/$stage-native.ll"

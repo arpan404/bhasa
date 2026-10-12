@@ -80,7 +80,7 @@ fn decimal_scanning_types_and_formatting_are_explicit() {
 }
 
 #[test]
-fn no_implicit_coercions_or_expanded_foreign_and_worker_abi() {
+fn no_implicit_coercions_or_expanded_foreign_abi() {
     for source in [
         "def main() { var x:float = 1 }",
         "def main() { print(1 + 1.0) }",
@@ -97,11 +97,11 @@ fn no_implicit_coercions_or_expanded_foreign_and_worker_abi() {
         "extern def f(value:float)->int",
         "extern def f(value:int)->float",
         "def main()->float { return 1.0 }",
-        "def worker(value:float)->float { return value } def main() { var task = spawn(worker(1.0)); var result = join(task) }",
     ] {
         assert!(bhasa::check(source).is_err(), "{source}");
     }
     bhasa::check("def worker(value:int)->int { return int(float(value) * 2.0) } def main() { var task = spawn(worker(21)); var result = join(task); print(result) }").unwrap();
+    bhasa::check("def worker(value:float)->float { return value } def main() { var task = spawn(worker(1.0)); var result = join(task) }").unwrap();
 }
 
 #[test]

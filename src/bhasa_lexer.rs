@@ -438,7 +438,7 @@ fn compile_inner(
                     206 => "integer literal is outside the signed 64-bit range",
                     207 => "fallible operation requires its status to be used",
                     208 => "task must be joined exactly once in its declaring block",
-                    209 => "worker must be a Bhasa int-to-int function without foreign calls",
+                    209 => "worker must be a global one-argument Bhasa function with supported non-task types and no reachable foreign calls or pooled scheduling/awaiting",
                     210 => "foreign printf declaration conflicts with runtime printing",
                     211 => "unknown record type",
                     212 => "invalid or duplicate record schema or name",

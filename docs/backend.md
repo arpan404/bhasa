@@ -142,9 +142,11 @@ The library handles one request per connection. The caller releases its socket
 through its scope. The optional [TLS package](tls.md) provides HTTPS through the
 same generic transport helpers; ordinary `std` imports do not require OpenSSL.
 Chunking, keepalive, pipelining, WebSockets and event-loop async I/O are not
-implemented. The [bounded executor](concurrency.md) runs scalar jobs on four
+implemented. The [bounded executor](concurrency.md) runs typed jobs on four
 workers with a 64-job queue; submission and awaiting can block. It does not make
-these HTTP operations nonblocking or transfer socket handles to workers.
+these HTTP operations nonblocking. Workers can receive socket handles; copies
+retain the same endpoint or serialized TLS session. Callers must coordinate I/O
+on those shared connections.
 
 ## Run the example
 

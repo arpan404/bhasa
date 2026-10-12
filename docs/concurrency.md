@@ -1,9 +1,9 @@
 # Native tasks and bounded scheduling
 
-Bhasa runs scalar functions either on a new operating-system thread with
+Bhasa runs typed functions either on a new operating-system thread with
 `spawn`, or on a fixed worker pool with `async_spawn`. Both return a linear task
-handle. Joining or awaiting waits for completion, returns the copied integer
-result and frees the task allocation. There is no garbage collector.
+handle. Joining or awaiting waits for completion, returns the worker's checked
+result type and frees the task allocation. There is no garbage collector.
 
 ```bhasa
 def square(value: int) -> int {
@@ -22,10 +22,16 @@ def main() {
 Both tasks may execute concurrently. The program prints `100` after both finish.
 Run the checked example with `bhasa run examples/concurrency/tasks.bh`.
 
-Workers require one `int` parameter and an `int` result. The worker must be a
-global Bhasa definition; an explicitly specialized generic function with that
-signature also works. Direct method spawning and function values are unsupported.
-Arguments are evaluated in the calling thread before scheduling. Workers may
+Workers require one non-task, non-void parameter and any supported non-task
+result. A void result is consumed with a join/await statement. The worker must
+be a global Bhasa definition; explicitly specialized generic functions work.
+Direct method spawning and function values are unsupported.
+Arguments evaluate once in the calling thread before scheduling. Owned arguments
+acquire independent copies before submission, so worker mutation of aggregate
+storage cannot change the caller's value. Results transfer owned storage back
+when consumed. Network handle copies retain their existing shared endpoint or
+serialized TLS-session semantics. See `examples/concurrency/typed.bh`.
+Workers may
 call other Bhasa functions, create local containers, and use legacy `spawn`/`join`
 for children that finish before they return. The compiler rejects worker call
 graphs reaching `extern def` because those imports have no declared thread-safety
@@ -97,7 +103,9 @@ the compiler implements richer ownership analysis.
 The native runtime uses POSIX threads on macOS and Linux. Allocation, thread
 creation, synchronization or join failures stop the process with a diagnostic.
 Runtime guards also reject pooled scheduling and awaiting from worker entry
-points. There is no shared mutable Bhasa state or task-handle transfer.
+points. Typed task frames use checked native allocations and deterministic
+cleanup. There are no channels, arbitrary shared aggregate references or
+task-handle transfers.
 
 The [async implementation report](status/async.md) records queue saturation,
 concurrent execution, allocation cleanup, thread shutdown and sanitizer checks.

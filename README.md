@@ -8,13 +8,14 @@ written in Bhasa.
 
 The language has named records and methods, tagged enums and exhaustive matches,
 owned buffers and integer vectors, file and console I/O, subprocesses, structured
-worker threads, a bounded task executor, synchronous TCP/TLS with deadlines,
+typed worker threads, a bounded task executor, synchronous TCP/TLS with deadlines,
 explicit compile-time generics, binary64 floats, generic lists/maps, and GPU host adapters. A local
 standard library provides UTF-8 text, typed collections, generic Option/Result, JSON and bounded HTTP/HTTPS.
 Allocations have deterministic cleanup; the Bhasa runtime has no
 garbage collector. This is still a developing language. Its ownership rules do
 not provide Rust's complete borrowing model, and no C-like speed or Go-like
-compile-time claim has been established.
+compile-time claim has been established. [todo.md](todo.md) tracks the full
+implementation backlog and verified progress commits.
 
 ```bhasa
 struct Point {
@@ -71,6 +72,7 @@ cd hello
 bhasa check
 bhasa run
 bhasa fmt src/main.bh --check
+bhasa inspect --json
 ```
 
 The manifest is exactly lowercase `bhasa.toml`. Modules use explicit local
@@ -113,7 +115,7 @@ the current protocol and data limits.
 | Typed functions, forward calls and recursion | No overloads, closures or function values |
 | `var`, assignment, branches, `while`, `for`, `break`/`continue` | Half-open int ranges and owned List snapshots; see [iteration](docs/iteration.md) |
 | File/console I/O, arguments and subprocesses | Native macOS/Linux; explicit status values |
-| `spawn(worker(value))`, `join(task)` | Integer input/result, unique task handles and mandatory lexical joins |
+| `spawn(worker(value))`, `join(task)` | One typed input, typed result (including void), independently acquired owned data and mandatory lexical joins |
 | `async_spawn(worker(value))`, `await(task)` | Four fixed workers, 64 queued jobs and blocking backpressure; no coroutines or I/O reactor |
 | Owned TCP listeners and sockets | Synchronous with optional deadlines; numeric-address timed connect |
 | Verified TLS client/server sockets | Optional installed OpenSSL 3; explicit trust and identity checks; no mutual TLS or async I/O |
@@ -122,7 +124,7 @@ the current protocol and data limits.
 | Rust adapters and explicit native link inputs | Trusted C ABI with integer parameters and integer or void results |
 | Native boolean tests | Isolated processes, filters, deadlines and JSON; no coverage or parallel runner |
 | Native artifact cache | Reuses unchanged complete outputs; frontend work still runs |
-| Formatter, JSON diagnostics and LSP | Formatting, symbols, checked definitions, completion and hover; see [tooling](docs/tooling.md) |
+| Formatter, JSON diagnostics, `inspect` and LSP | Checked API/dependency inspection, symbols, definitions, completion and hover; see [tooling](docs/tooling.md) |
 | Native and cross-target LLVM/object output | Linking needs the target's libraries, SDK and linker |
 
 A target listed by `bhasa targets` is a code-generation candidate. Wasm support

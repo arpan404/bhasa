@@ -413,8 +413,9 @@ protocol and the saved-import-graph boundary.
 Explicit [generics](generics.md), the [bounded task executor](concurrency.md),
 and owned verified [TLS sockets](tls.md) are available in both host frontends.
 TLS copies share a serialized session; they do not create independent streams.
-`async_spawn(worker(value))` runs an `int -> int` worker on a pool of four
+`async_spawn(worker(value))` runs a global one-argument typed worker on a pool of four
 threads with space for 64 waiting jobs. Submission blocks when the queue is
 full, and `await(task)` blocks its calling thread until the task finishes.
 Workers cannot reach `async_spawn`, `await` or extern functions. This executor
-does not provide coroutines, async I/O or shared aggregate arguments.
+does not provide coroutines, async I/O or shared aggregate references. Owned
+arguments copy before submission; join/await return the checked worker result.

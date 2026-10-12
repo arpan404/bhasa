@@ -146,7 +146,7 @@ HTTP request per connection, without chunking or keepalive. The optional TLS
 package and [HTTPS example](tls.md) use the same generic HTTP helpers. A hybrid
 host can compile either program with `--frontend bhasa`.
 
-`async_spawn` schedules scalar jobs on four persistent workers with a 64-job
+`async_spawn` schedules typed jobs on four persistent workers with a 64-job
 queue and blocking backpressure. `await` consumes a task and blocks until it
 finishes. See [concurrency](concurrency.md) for worker restrictions and ownership
 rules; this scheduler does not add nonblocking I/O or coroutines.

@@ -1277,7 +1277,7 @@ fn repair_completion(source: &str, word: &EditorWord) -> Option<String> {
     }
     (repaired != source).then_some(repaired)
 }
-fn editor_builtins() -> [(&'static str, &'static str); 12] {
+fn editor_builtins() -> [(&'static str, &'static str); 13] {
     [
         (
             "print",
@@ -1297,9 +1297,10 @@ fn editor_builtins() -> [(&'static str, &'static str); 12] {
             "range",
             "range(start: int, end: int), half-open for-loop source",
         ),
-        ("spawn", "spawn(worker(value: int)) -> task"),
-        ("join", "join(value: task) -> int"),
-        ("await", "await(value: task) -> int"),
+        ("spawn", "spawn(worker(value)) -> inferred task"),
+        ("async_spawn", "async_spawn(worker(value)) -> inferred task"),
+        ("join", "join(value: task) -> worker result"),
+        ("await", "await(value: task) -> worker result"),
     ]
 }
 

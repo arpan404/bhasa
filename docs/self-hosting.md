@@ -69,10 +69,10 @@ artifacts fail with build guidance. The ordinary Rust bootstrap needs neither.
 The Bhasa implementation handles scalar functions, forward calls, recursion,
 branches, while/range/List loops with break/continue, checked arithmetic,
 static strings, owned buffers and integer
-vectors. It also implements C ABI extern declarations, structured scalar tasks,
+vectors. It also implements C ABI extern declarations, structured typed tasks,
 GPU host calls, named records with nested fields and methods, tagged enums with
 exhaustive matches, UTF-8 scalar operations, owned TCP handles with deadlines,
-verified TLS sockets and bounded scalar task scheduling.
+verified TLS sockets and bounded typed task scheduling.
 `tcp_listen_on` selects an explicit numeric IPv4 or IPv6 bind address;
 `tcp_listen` retains its IPv4-loopback default. Timed connect accepts numeric
 addresses only. The Bhasa `std` package builds on those operations to provide

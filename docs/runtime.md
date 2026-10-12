@@ -111,10 +111,11 @@ frees that session without network waits. Explicit `tls_shutdown` is needed
 when authenticated end-of-stream matters. See [TCP](network.md) and
 [TLS](tls.md) for deadlines, statuses and ownership details.
 
-`spawn` starts a native thread for an `int -> int` worker. `async_spawn` schedules
-the same worker shape on four persistent threads with a queue of 64 waiting
+`spawn` starts a native thread for a global one-argument typed worker. Owned
+arguments copy before scheduling; join/await return its checked result type.
+`async_spawn` schedules the same worker shape on four persistent threads with a queue of 64 waiting
 jobs; a full queue blocks submission. Task handles have unique lexical
 ownership. `join` and `await` each consume one handle and block until the worker
-returns. Worker call graphs cannot reach `async_spawn`, `await` or extern
+returns. Void-result tasks can be consumed as statements. Worker call graphs cannot reach `async_spawn`, `await` or extern
 functions. The [concurrency guide](concurrency.md) specifies the scoped rules.
-There are no coroutines, event-loop async I/O or shared aggregate task arguments.
+There are no coroutines, event-loop async I/O or arbitrary shared aggregate references.

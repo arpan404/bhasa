@@ -206,7 +206,7 @@ fn malformed_checked_method_targets_cannot_enter_the_scalar_worker_abi() {
     let errors = bhasa::codegen::emit_llvm(&checked, "aarch64-apple-darwin").unwrap_err();
     assert!(errors[0]
         .message
-        .contains("defined global int -> int worker"));
+        .contains("defined global one-argument Bhasa worker"));
 }
 
 #[test]

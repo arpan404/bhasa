@@ -24,12 +24,17 @@ and `bhasa_rt_task_free(void *)` provide checked frame allocation/destruction.
 Keep existing scalar native ABI entry points for compatibility. Runtime worker
 guards apply equally to new submissions.
 
-Ownership: frontend_parity owns Rust AST/parser/checker/emitter changes and its
-focused tests; packages owns Bhasa frontend parity changes and its tests;
+Ownership: packages owns Rust AST/parser/checker/emitter changes and its
+focused tests; frontend_parity owns Bhasa frontend parity changes and its tests;
 rust_cache owns C concurrency runtime/header plus independent runtime tests;
 root owns host/lowering/builtins integration, examples, docs, combined
 verification and commits. Workers may read all files but must request ownership
 before editing another lane. Serialize Cargo checks through root.
+
+Keep the scalar i64 runtime ABI for int-to-int workers. Other signatures use
+owned frames; a void-result wrapper returns null and statement consumption has
+no result frame to unpack. Worker result types are stored with lexical task
+bindings; task handles retain their current type/encoding and transfer limits.
 
 Acceptance: scalar compatibility; bool/float/str/buffer/ints/record/enum and
 concrete generic collection input/results; worker-local mutation never mutates

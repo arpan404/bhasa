@@ -87,7 +87,7 @@ struct Checker {
     // "unknown variable" diagnostics on subsequent uses of that binding.
     scopes: Vec<BTreeMap<String, Option<Type>>>,
     return_type: Type,
-    tasks: Vec<BTreeMap<String, bool>>,
+    tasks: Vec<BTreeMap<String, TaskState>>,
     /// First body scope exited by a break/continue, nearest loop last.
     loops: Vec<usize>,
     borrowed_params: BTreeSet<String>,
@@ -98,6 +98,12 @@ struct Checker {
     enums: BTreeMap<usize, EnumDecl>,
     enum_names: BTreeMap<String, usize>,
     type_names: Vec<String>,
+}
+
+#[derive(Clone, Copy)]
+struct TaskState {
+    live: bool,
+    result: Type,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -762,7 +768,7 @@ impl Checker {
             .iter()
             .skip(first)
             .flat_map(|scope| scope.iter())
-            .filter(|(_, live)| **live)
+            .filter(|(_, state)| state.live)
             .map(|(name, _)| name.clone())
             .collect();
         for name in live {
@@ -823,7 +829,7 @@ impl Checker {
         if matches!(args[0].kind, ExprKind::MethodCall { .. }) {
             self.error(
                 "S020",
-                "spawn does not accept method calls; use a global int -> int worker",
+                "spawn does not accept method calls; use a global one-argument Bhasa worker",
                 args[0].span,
             );
             return None;
@@ -831,7 +837,7 @@ impl Checker {
         let ExprKind::Call { name, .. } = &args[0].kind else {
             self.error(
                 "S020",
-                "spawn requires a call to a defined int -> int worker",
+                "spawn requires a call to a defined one-argument Bhasa worker",
                 args[0].span,
             );
             return None;
@@ -840,19 +846,21 @@ impl Checker {
         let actual = self.check_expression(&mut args[0]);
         let valid = self.signatures.get(&worker).is_some_and(|signature| {
             !signature.external
-                && signature.params == [Type::Int]
-                && signature.return_type == Type::Int
+                && !worker.contains('.')
+                && signature.params.len() == 1
+                && !matches!(signature.params[0], Type::Void | Type::Task)
+                && signature.return_type != Type::Task
         });
         if !valid {
             self.error(
                 "S020",
-                "spawn requires a defined Bhasa worker with one int parameter and an int result",
+                "spawn requires a defined global Bhasa worker with one non-task value parameter and a non-task result",
                 args[0].span,
             );
             return None;
         }
         self.pending_workers.push((worker, args[0].span));
-        let ty = (actual == Some(Type::Int)).then_some(Type::Task);
+        let ty = actual.map(|_| Type::Task);
         expression.ty = ty;
         ty
     }
@@ -879,13 +887,19 @@ impl Checker {
         }
         let state = self.tasks.last().and_then(|scope| scope.get(name)).copied();
         match state {
-            Some(true) => {
-                self.tasks.last_mut().unwrap().insert(name.clone(), false);
+            Some(TaskState { live: true, result }) => {
+                self.tasks.last_mut().unwrap().insert(
+                    name.clone(),
+                    TaskState {
+                        live: false,
+                        result,
+                    },
+                );
                 args[0].ty = Some(Type::Task);
-                expression.ty = Some(Type::Int);
-                Some(Type::Int)
+                expression.ty = Some(result);
+                Some(result)
             }
-            Some(false) => {
+            Some(TaskState { live: false, .. }) => {
                 self.error(
                     "S019",
                     format!("task handle '{name}' has already been joined"),
@@ -979,8 +993,24 @@ impl Checker {
                 };
                 self.declare_local(name, ty, statement.span);
                 if actual == Some(Type::Task) {
-                    if let Some(tasks) = self.tasks.last_mut() {
-                        tasks.insert(name.clone(), true);
+                    let result = match &value.kind {
+                        ExprKind::Call { name, args }
+                            if matches!(name.as_str(), "spawn" | "async_spawn") =>
+                        {
+                            args.first().and_then(|worker| worker.ty)
+                        }
+                        _ => None,
+                    };
+                    if let Some(result) = result {
+                        if let Some(tasks) = self.tasks.last_mut() {
+                            tasks.insert(name.clone(), TaskState { live: true, result });
+                        }
+                    } else {
+                        self.error(
+                            "S019",
+                            "task handle bindings must be initialized by spawn or async_spawn",
+                            value.span,
+                        );
                     }
                 }
             }

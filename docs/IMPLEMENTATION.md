@@ -18,7 +18,7 @@ are not translated to Rust.
 | `bootstrap/compiler/lexer.bh`, `emitter.bh` | Bhasa lexer, typed parser and direct LLVM emitter |
 | `src/bhasa_lexer.rs` | Native Bhasa compiler interface, token/error validation and allocation cleanup |
 | `src/format.rs`, `src/lsp.rs`, `src/json.rs` | Formatting, diagnostics and editor protocol |
-| `runtime/core.c`, `concurrency.c`, `net.c`, `text.c`, `tls.c` | Owned storage, native I/O, processes, scalar threads and bounded scheduling, TCP/TLS deadlines and strict UTF-8 |
+| `runtime/core.c`, `concurrency.c`, `net.c`, `text.c`, `tls.c` | Owned storage, native I/O, processes, typed threads and bounded scheduling, TCP/TLS deadlines and strict UTF-8 |
 | `std/*.bh`, `packages/tls` | Concrete and generic Result/Option, Text, string collections, JSON and bounded HTTP/HTTPS |
 | GPU runtime adapters | Metal, CUDA and Vulkan host integration |
 
@@ -75,8 +75,10 @@ Task handles are unique and must be consumed with `join` or `await` in their
 lexical scope. Both operations block and can consume either task kind.
 `spawn` creates a native thread per task; `async_spawn` uses four persistent
 workers and a FIFO queue holding 64 waiting jobs, blocking submission when full.
-Workers receive and return integers, so aggregate data is not implicitly shared
-between threads. Worker call graphs cannot reach `async_spawn`, `await` or
+Workers accept one supported non-task value and return a supported non-task
+value, including void. Owned inputs are acquired independently before submission;
+join/await transfers an owned result to the caller. Network handles retain their
+documented shared endpoint/session semantics. Worker call graphs cannot reach `async_spawn`, `await` or
 extern functions. This scheduler provides no coroutines or event-loop async I/O.
 
 `tcp_listen` keeps the IPv4-loopback convenience behavior. `tcp_listen_on`
@@ -142,7 +144,7 @@ The methods and explicit-bind addition follows its
 checks, refreshed release binaries and self-rebuild. Neither finite tests nor self-rebuilding establish production
 readiness, complete safety or performance parity with another language.
 
-Floating-point types, closures, trait bounds, inferred generic arguments, a
+Fixed-width/unsigned numbers, f32, closures, trait bounds, inferred generic arguments, a
 package registry, general lifetime parameters, event-loop async I/O, portable
 Bhasa GPU kernels and runnable WASI applications remain outside the implemented
 scope. TLS currently requires installed OpenSSL 3 and supports server

@@ -1,0 +1,23 @@
+struct Request {
+    name: buffer
+    scores: List[int]
+}
+
+def process(request: Request) -> Request {
+    append(request.name, " processed")
+    request.scores.push(42)
+    return request
+}
+
+def main() {
+    var scores = List[int]()
+    scores.push(7)
+    var request = Request(buffer("job"), scores)
+    var task = async_spawn(process(request))
+    append(request.name, " caller")
+    request.scores.clear()
+    var result = await(task)
+    print(request.name)
+    print(result.name)
+    print(result.scores.count())
+}

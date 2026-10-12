@@ -7,10 +7,13 @@ after verified increments. Existing caches are preserved.
 
 ## Current work
 
-- [ ] Generalize structured tasks to typed, independently owned arguments/results in both frontends.
-- [ ] Verify typed task cleanup, lexical consumption, worker call graphs and unchanged scalar behavior.
-- [ ] Commit the verified typed-task increment and update this checklist with evidence.
+- [x] Generalize structured tasks to typed, independently owned arguments/results in both frontends.
+- [x] Verify typed task cleanup, lexical consumption, worker call graphs and unchanged scalar behavior.
+- [x] Commit the verified typed-task increment and update this checklist with evidence.
 - [x] Add read-only checked API/dependency inspection for agents, with JSON output and original-file locations.
+- [ ] Add checked integer bitwise/shifts and hexadecimal/binary literals in both frontends.
+- [ ] Add stepped/descending ranges with safe cursor advancement and complete host lowering.
+- [ ] Add checked local definitions, references and versioned rename with editor providers.
 
 Three workers may run alongside the coordinator in this session. The coordinator
 owns integration, checklist updates and commits. Workers have disjoint ownership;
@@ -79,7 +82,7 @@ tests and 38 editor tests. This evidence predates new work below.
 
 ## Concurrency and async
 
-- [ ] Typed tasks with independently owned inputs/results.
+- [x] Typed tasks with independently owned inputs/results.
 - [ ] Typed channels, bounded backpressure, close and select.
 - [ ] Cancellation, deadlines, task groups and supervision.
 - [ ] Checked shared-state locks, atomics and scoped concurrency.
@@ -188,8 +191,14 @@ overloads and macros remain separate optional design choices.
 The coordinator records completed increments and their verification here.
 
 - `62afd47`: verified compiler baseline, full backlog, and nested build/cache exclusions.
-- Checked agent inspection: three CLI tests pass, including original-file errors,
+- `b79b914`: checked agent inspection; three CLI tests pass, including original-file errors,
   concrete generic names, deterministic output, privacy and absent native tools.
   Independent review reproduced a public-declaration privacy false positive;
   repaired it and retained a regression. Evidence is in
-  `build/verify-typed-tasks-reference.log` and `tests/agent_inspect.rs`.
+  `build/verify-typed-tasks-focused-final.log` and `tests/agent_inspect.rs`.
+- Typed tasks: 411 reference / 422 full-hybrid tests, 38 editor tests, both
+  Clippy configurations and formatting, refreshed releases and A/B/C pass.
+  Sanitizers and atomic allocation counters cover owned frames and results.
+  Release smoke records 22 native cache hits; four unchanged Rust adapter runs
+  and two unchanged hybrid builds perform zero compilations. Evidence:
+  `docs/status/integration.md` and `docs/status/typed-tasks-milestone.md`.

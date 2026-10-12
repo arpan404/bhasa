@@ -314,6 +314,7 @@ fn emit_module(program: &CheckedProgram, target: &str) -> Result<String> {
     let mut module = Module {
         program: &program.program,
         signatures: &program.signatures,
+        task_wrappers: BTreeSet::new(),
         record_helpers: BTreeSet::new(),
         enum_helpers: BTreeSet::new(),
         strings: Vec::new(),
@@ -348,6 +349,7 @@ fn emit_module(program: &CheckedProgram, target: &str) -> Result<String> {
             )?);
         }
     }
+    definitions.push_str(&module.emit_task_wrappers()?);
     definitions.push_str(&module.emit_record_helpers(target)?);
     if let Some(main) = program.signatures.get("main") {
         if module.runtime.is_empty() {
@@ -495,6 +497,7 @@ fn emit_module(program: &CheckedProgram, target: &str) -> Result<String> {
 struct Module<'a> {
     program: &'a Program,
     signatures: &'a BTreeMap<String, FunctionSig>,
+    task_wrappers: BTreeSet<String>,
     record_helpers: BTreeSet<usize>,
     enum_helpers: BTreeSet<usize>,
     strings: Vec<String>,
@@ -521,7 +524,57 @@ fn allocation_size_type(target: &str) -> &'static str {
     }
 }
 
+fn task_frame_size(ty: Type) -> String {
+    format!(
+        "ptrtoint (ptr getelementptr ({}, ptr null, i32 1) to i64)",
+        llvm_type(ty)
+    )
+}
+
 impl Module<'_> {
+    fn emit_task_wrappers(&mut self) -> Result<String> {
+        let mut output = String::new();
+        for worker in self.task_wrappers.clone() {
+            let signature = self
+                .signatures
+                .get(&worker)
+                .ok_or_else(|| error("missing task worker signature", Span::default()))?
+                .clone();
+            let input = signature.params[0];
+            let result = signature.return_type;
+            self.runtime
+                .insert("declare ptr @bhasa_rt_task_alloc(i64)".into());
+            self.runtime
+                .insert("declare void @bhasa_rt_task_free(ptr)".into());
+            self.threads = true;
+            output.push_str(&format!("define internal ptr @bhasa.task.{worker}(ptr %frame) {{\nentry:\n  %input = load {}, ptr %frame\n", llvm_type(input)));
+            if result == Type::Void {
+                output.push_str(&format!(
+                    "  call void {}({} %input)\n",
+                    symbol(&worker, false),
+                    llvm_type(input)
+                ));
+            } else {
+                output.push_str(&format!(
+                    "  %value = call {} {}({} %input)\n",
+                    llvm_type(result),
+                    symbol(&worker, false),
+                    llvm_type(input)
+                ));
+            }
+            if let Some(drop) = self.record_field_helper(input, false) {
+                output.push_str(&format!("  call void {drop}(ptr %input)\n"));
+            }
+            output.push_str("  call void @bhasa_rt_task_free(ptr %frame)\n");
+            if result == Type::Void {
+                output.push_str("  ret ptr null\n}\n\n");
+            } else {
+                output.push_str(&format!("  %result = call ptr @bhasa_rt_task_alloc(i64 {})\n  store {} %value, ptr %result\n  ret ptr %result\n}}\n\n", task_frame_size(result), llvm_type(result)));
+            }
+        }
+        Ok(output)
+    }
+
     fn record(&self, id: usize, span: Span) -> Result<&RecordDecl> {
         let name = self
             .program
@@ -873,17 +926,25 @@ impl Module<'_> {
     }
 }
 
+#[derive(Clone, Copy)]
+struct TaskInfo {
+    result: Type,
+    owned_abi: bool,
+}
+
 #[derive(Clone)]
 struct Local {
     ty: Type,
     pointer: String,
     owned: bool,
+    task: Option<TaskInfo>,
 }
 
 struct Value {
     ty: Type,
     operand: String,
     owned: bool,
+    task: Option<TaskInfo>,
 }
 
 impl Value {
@@ -892,7 +953,13 @@ impl Value {
             ty,
             operand: operand.into(),
             owned: false,
+            task: None,
         }
+    }
+
+    fn with_task(mut self, task: TaskInfo) -> Self {
+        self.task = Some(task);
+        self
     }
 
     fn owned(mut self) -> Self {
@@ -1042,6 +1109,7 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
                 ty: value.ty,
                 pointer,
                 owned: owned && value.ty.is_owned(),
+                task: value.task,
             },
         );
         Ok(())
@@ -1077,8 +1145,13 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
             "declare {} @{name}({types})",
             llvm_type(actual_result)
         ));
-        self.module.threads |=
-            name.contains("spawn_i64") || name.contains("join_i64") || name.contains("await_i64");
+        self.module.threads |= name.contains("spawn_i64")
+            || name.contains("join_i64")
+            || name.contains("await_i64")
+            || name.contains("spawn_owned")
+            || name.contains("join_owned")
+            || name.contains("await_owned")
+            || name.starts_with("bhasa_rt_task_");
         self.module.metal |= name.contains("gpu_");
         self.module.net |= name.starts_with("bhasa_rt_tcp_") || name == "bhasa_rt_monotonic_millis";
         self.module.text |= name.starts_with("bhasa_rt_utf8_");
@@ -1559,7 +1632,9 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
                     llvm_type(local.ty),
                     local.pointer
                 ));
-                Value::new(local.ty, result)
+                let mut value = Value::new(local.ty, result);
+                value.task = local.task;
+                value
             }
             ExprKind::Field { base, name } => {
                 let base = self.expression(base)?;
@@ -1952,50 +2027,118 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
             else {
                 return Err(error("spawn expects a checked worker call", span));
             };
+            let signature = self
+                .module
+                .signatures
+                .get(worker)
+                .cloned()
+                .ok_or_else(|| error("spawn worker has no checked signature", span))?;
             if !self
                 .module
                 .program
                 .functions
                 .iter()
-                .any(|function| &function.name == worker)
-                || !self.module.signatures.get(worker).is_some_and(|signature| {
-                    !signature.external
-                        && signature.params == [Type::Int]
-                        && signature.return_type == Type::Int
-                })
+                .any(|function| &function.name == worker && function.body.is_some())
+                || signature.external
+                || signature.params.len() != 1
+                || matches!(signature.params[0], Type::Void | Type::Task)
+                || signature.return_type == Type::Task
             {
-                return Err(error("spawn requires a defined global int -> int worker; method receivers are unsupported", span));
+                return Err(error("spawn requires a defined global one-argument Bhasa worker; method receivers are unsupported", span));
             }
             let [argument] = worker_args.as_slice() else {
                 return Err(error("worker requires one argument", span));
             };
             let argument = self.expression(argument)?;
-            argument.require(Type::Int, span)?;
-            return Ok(self.runtime_call(
-                if name == "async_spawn" {
-                    "bhasa_rt_async_spawn_i64"
-                } else {
-                    "bhasa_rt_spawn_i64"
-                },
-                &[Value::new(Type::Task, symbol(worker, false)), argument],
+            argument.require(signature.params[0], span)?;
+            let info = TaskInfo {
+                result: signature.return_type,
+                owned_abi: signature.params != [Type::Int] || signature.return_type != Type::Int,
+            };
+            if !info.owned_abi {
+                return Ok(self
+                    .runtime_call(
+                        if name == "async_spawn" {
+                            "bhasa_rt_async_spawn_i64"
+                        } else {
+                            "bhasa_rt_spawn_i64"
+                        },
+                        &[Value::new(Type::Task, symbol(worker, false)), argument],
+                        Type::Task,
+                    )
+                    .with_task(info));
+            }
+            // Acquire before submission. Borrowed aggregates clone; exclusive
+            // temporaries transfer into the frame without retaining caller storage.
+            let argument = self.acquire(argument);
+            let frame = self.runtime_call(
+                "bhasa_rt_task_alloc",
+                &[Value::new(Type::Int, task_frame_size(argument.ty))],
                 Type::Task,
+            );
+            self.instruction(format!(
+                "store {} {}, ptr {}",
+                llvm_type(argument.ty),
+                argument.operand,
+                frame.operand
             ));
-        }
-        if matches!(name, "join" | "await") {
+            self.module.task_wrappers.insert(worker.clone());
+            return Ok(self
+                .runtime_call(
+                    if name == "async_spawn" {
+                        "bhasa_rt_async_spawn_owned"
+                    } else {
+                        "bhasa_rt_spawn_owned"
+                    },
+                    &[
+                        Value::new(Type::Task, format!("@bhasa.task.{worker}")),
+                        frame,
+                    ],
+                    Type::Task,
+                )
+                .with_task(info));
+        } else if matches!(name, "join" | "await") {
             let [argument] = args else {
                 return Err(error("join requires one task", span));
             };
             let argument = self.expression(argument)?;
             argument.require(Type::Task, span)?;
-            return Ok(self.runtime_call(
+            let info = argument
+                .task
+                .ok_or_else(|| error("task binding has no worker result metadata", span))?;
+            if !info.owned_abi {
+                return Ok(self.runtime_call(
+                    if name == "await" {
+                        "bhasa_rt_await_i64"
+                    } else {
+                        "bhasa_rt_join_i64"
+                    },
+                    &[argument],
+                    Type::Int,
+                ));
+            }
+            let frame = self.runtime_call(
                 if name == "await" {
-                    "bhasa_rt_await_i64"
+                    "bhasa_rt_await_owned"
                 } else {
-                    "bhasa_rt_join_i64"
+                    "bhasa_rt_join_owned"
                 },
                 &[argument],
-                Type::Int,
-            ));
+                Type::Task,
+            );
+            let result = if info.result == Type::Void {
+                Value::new(Type::Void, "")
+            } else {
+                let value = self.fresh();
+                self.instruction(format!(
+                    "{value} = load {}, ptr {}",
+                    llvm_type(info.result),
+                    frame.operand
+                ));
+                Value::new(info.result, value).owned()
+            };
+            self.runtime_call("bhasa_rt_task_free", &[frame], Type::Void);
+            return Ok(result);
         }
         if matches!(name, "int" | "float") {
             let [argument] = args else {

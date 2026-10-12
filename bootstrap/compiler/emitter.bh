@@ -7,13 +7,14 @@
 # statement-call-token, statement-mode (initializer 1 / expression 2), task-call,
 # record-head, expression-path, argument-access-head, record-allocator,
 # expression-tree-depth, method-head, call-edge-head, spawned-worker-head, enum-head,
-# collection-head, loop-head.
+# collection-head, loop-head, inferred-task-worker.
 # Path node: parent, name-token, type. Access node: next, path, type, token.
 # Types: void 0, int 1, bool 2, str 3, buffer 4, ints 5, task 6,
 # tcp_listener 7, tcp_socket 8, tls_socket 9, float 10, records node+100.
 # Signature node: next, name-token, result, argc, body-start, body-end, external,
 # owner-record-type (0 for global), followed by [parameter-name-token, parameter-type] pairs.
-# Local node: next, name-token, type, slot-register, scope-depth, ownership-state.
+# Local node: next, name-token, type, slot-register, scope-depth, ownership-state,
+# task-worker-signature (-1 for ordinary locals).
 # Ownership state: 0 borrowed/scalar, 1 allocation, 2 pending task, 3 joined task.
 # Errors: 200 syntax, 201 type, 202 name/duplicate, 203 unsupported,
 # 204 depth limit, 205 control flow, 206 integer range, 207 ignored I/O status,
@@ -299,6 +300,8 @@ def be_bind(source: buffer, tokens: ints, ctx: ints, errors: ints, allocations: 
     append(line, ", ptr "); append(line, pointer); be_line(body, line)
     var node = len(ctx)
     push(ctx, get(ctx, 7)); push(ctx, name); push(ctx, ty); push(ctx, slot); push(ctx, get(ctx, 8)); push(ctx, owns)
+    var task_worker = -1; if ty == 6 { task_worker = get(ctx, 30) }
+    push(ctx, task_worker)
     set(ctx, 7, node)
 }
 def be_string(globals: buffer, ctx: ints, text: buffer) -> buffer {
@@ -649,6 +652,16 @@ def be_check_workers(tokens: ints, ctx: ints, errors: ints) {
         node = get(ctx, node)
     }
 }
+def be_task_scalar(ctx: ints, worker: int) -> bool {
+    return get(ctx, worker + 9) == 1 and get(ctx, worker + 2) == 1
+}
+def be_task_frame(body: buffer, ctx: ints, ty: int, value: buffer) -> buffer {
+    var frame = be_reg(ctx)
+    var line = buffer(); append(line, frame); append(line, " = call ptr @bhasa_rt_task_alloc(i64 ptrtoint (ptr getelementptr (")
+    append(line, be_llvm_type(ty)); append(line, ", ptr null, i32 1) to i64))"); be_line(body, line)
+    line = buffer("store "); append(line, be_llvm_type(ty)); append(line, " "); append(line, value); append(line, ", ptr "); append(line, frame); be_line(body, line)
+    return frame
+}
 def be_task_call(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buffer, allocations: buffer, body: buffer, name_token: int) -> buffer {
     var operation = bh_token_text(source, tokens, name_token)
     var pooled = same(operation, "async_spawn") or same(operation, "await")
@@ -667,14 +680,15 @@ def be_task_call(source: buffer, tokens: ints, ctx: ints, errors: ints, globals:
     be_expect(tokens, ctx, errors, 1)
     if len(errors) != 0 { be_meta(ctx, 1, 0); return buffer("0") }
     var operand = buffer()
-    var result_type = 1
+    var result_type = 1; var result_owned = 0; var scalar = false
     if spawning {
         var worker = be_find(source, tokens, ctx, get(ctx, 6), argument_name)
         if worker < 0 { be_error_at(tokens, errors, 209, argument_name); be_meta(ctx, 1, 0); return buffer("0") }
-        if get(ctx, worker + 6) != 0 or get(ctx, worker + 2) != 1 or get(ctx, worker + 3) != 1 {
+        if get(ctx, worker + 6) != 0 or get(ctx, worker + 3) != 1 or get(ctx, worker + 2) == 6 {
             be_error_at(tokens, errors, 209, argument_name); be_meta(ctx, 1, 0); return buffer("0")
         }
-        if get(ctx, worker + 9) != 1 or be_find(source, tokens, ctx, get(ctx, 7), argument_name) >= 0 {
+        var argument_type = get(ctx, worker + 9)
+        if argument_type == 0 or argument_type == 6 or be_find(source, tokens, ctx, get(ctx, 7), argument_name) >= 0 {
             be_error_at(tokens, errors, 209, argument_name); be_meta(ctx, 1, 0); return buffer("0")
         }
         be_call_edge(ctx, worker)
@@ -682,10 +696,18 @@ def be_task_call(source: buffer, tokens: ints, ctx: ints, errors: ints, globals:
         push(ctx, get(ctx, 26)); push(ctx, worker); push(ctx, argument_name); set(ctx, 26, request)
         be_expect(tokens, ctx, errors, 40)
         var value = be_expression(source, tokens, ctx, errors, globals, allocations, body, 1)
-        if get(ctx, 14) != 1 { be_error_at(tokens, errors, 201, argument_name) }
+        if get(ctx, 14) != argument_type { be_error_at(tokens, errors, 201, argument_name) }
+        value = be_own(body, ctx, argument_type, value, get(ctx, 15))
         if be_kind(tokens, ctx) == 44 { be_next(ctx) }
         be_expect(tokens, ctx, errors, 41)
-        operand = buffer("ptr @bhasa.fn."); append(operand, bh_token_text(source, tokens, argument_name)); append(operand, ", i64 "); append(operand, value)
+        scalar = be_task_scalar(ctx, worker)
+        if scalar {
+            operand = buffer("ptr @bhasa.fn."); append(operand, bh_token_text(source, tokens, argument_name)); append(operand, ", i64 "); append(operand, value)
+        } else {
+            var frame = be_task_frame(body, ctx, argument_type, value)
+            operand = be_number("ptr @bhasa.task.", worker); append(operand, ", ptr "); append(operand, frame)
+        }
+        set(ctx, 30, worker)
         result_type = 6
     } else {
         var local = be_find(source, tokens, ctx, get(ctx, 7), argument_name)
@@ -693,6 +715,9 @@ def be_task_call(source: buffer, tokens: ints, ctx: ints, errors: ints, globals:
         if get(ctx, local + 2) != 6 or get(ctx, local + 5) != 2 or get(ctx, local + 4) != get(ctx, 8) {
             be_error_at(tokens, errors, 208, argument_name); be_meta(ctx, 1, 0); return buffer("0")
         }
+        var worker = get(ctx, local + 6)
+        result_type = get(ctx, worker + 2); scalar = be_task_scalar(ctx, worker)
+        if result_type == 0 and get(ctx, 17) != 2 { be_error_at(tokens, errors, 208, name_token) }
         operand = buffer("ptr "); append(operand, be_load(body, ctx, local))
         set(ctx, local + 5, 3)
     }
@@ -700,15 +725,56 @@ def be_task_call(source: buffer, tokens: ints, ctx: ints, errors: ints, globals:
     if be_kind(tokens, ctx) == 44 { be_next(ctx) }
     be_expect(tokens, ctx, errors, 41)
     var result = be_reg(ctx)
-    var line = buffer(); append(line, result); append(line, " = call "); append(line, be_llvm_type(result_type))
+    var line = buffer(); append(line, result); append(line, " = call ")
+    if scalar { append(line, be_llvm_type(result_type)) } else { append(line, "ptr") }
+    append(line, " @bhasa_rt_")
     if pooled {
-        if spawning { append(line, " @bhasa_rt_async_spawn_i64(") } else { append(line, " @bhasa_rt_await_i64(") }
+        if spawning { append(line, "async_spawn_") } else { append(line, "await_") }
     } else {
-        if spawning { append(line, " @bhasa_rt_spawn_i64(") } else { append(line, " @bhasa_rt_join_i64(") }
+        if spawning { append(line, "spawn_") } else { append(line, "join_") }
     }
+    if scalar { append(line, "i64(") } else { append(line, "owned(") }
     append(line, operand); append(line, ")"); be_line(body, line)
-    be_meta(ctx, result_type, 0); set(ctx, 18, 1); set(ctx, 13, 0)
+    if not spawning and not scalar {
+        if result_type == 0 { result = buffer() } else {
+            var frame = result
+            result = be_field_load(body, ctx, result_type, frame)
+            line = buffer("call void @bhasa_rt_task_free(ptr "); append(line, frame); append(line, ")"); be_line(body, line)
+            if be_owned(result_type) { result_owned = 1 }
+        }
+    }
+    be_meta(ctx, result_type, result_owned); set(ctx, 18, 1); set(ctx, 13, 0)
     return result
+}
+# Each non-scalar worker receives one independently acquired input allocation.
+# Its ordinary Bhasa signature borrows that value; returning it already clones.
+def be_task_wrapper(source: buffer, tokens: ints, ctx: ints, definitions: buffer, worker: int) {
+    var argument_type = get(ctx, worker + 9); var result_type = get(ctx, worker + 2)
+    var argument_llvm = be_llvm_type(argument_type); var result_llvm = be_llvm_type(result_type)
+    append(definitions, "define internal ptr @bhasa.task."); append(definitions, to_buffer(worker)); append(definitions, "(ptr %frame) {\nentry:\n  %argument = load ")
+    append(definitions, argument_llvm); append(definitions, ", ptr %frame\n  ")
+    if result_type != 0 { append(definitions, "%result = ") }
+    append(definitions, "call "); append(definitions, result_llvm); append(definitions, " @"); append(definitions, be_function_symbol(source, tokens, ctx, worker))
+    append(definitions, "("); append(definitions, argument_llvm); append(definitions, " %argument)\n")
+    if be_owned(argument_type) {
+        append(definitions, "  call void @"); append(definitions, be_owned_symbol(argument_type, false)); append(definitions, "(ptr %argument)\n")
+    }
+    append(definitions, "  call void @bhasa_rt_task_free(ptr %frame)\n")
+    if result_type == 0 { append(definitions, "  ret ptr null\n}\n\n"); return }
+    append(definitions, "  %output = call ptr @bhasa_rt_task_alloc(i64 ptrtoint (ptr getelementptr ("); append(definitions, result_llvm); append(definitions, ", ptr null, i32 1) to i64))\n  store ")
+    append(definitions, result_llvm); append(definitions, " %result, ptr %output\n  ret ptr %output\n}\n\n")
+}
+def be_task_wrappers(source: buffer, tokens: ints, ctx: ints, definitions: buffer) {
+    var emitted = ints(); var request = get(ctx, 26)
+    while request >= 0 {
+        var worker = get(ctx, request + 1); var known = false; var i = 0
+        while i < len(emitted) { if get(emitted, i) == worker { known = true }; i = i + 1 }
+        if not known {
+            push(emitted, worker)
+            if not be_task_scalar(ctx, worker) { be_task_wrapper(source, tokens, ctx, definitions, worker) }
+        }
+        request = get(ctx, request)
+    }
 }
 def be_path(ctx: ints, parent: int, name: int, ty: int) -> int {
     var node = len(ctx); push(ctx, parent); push(ctx, name); push(ctx, ty); return node
@@ -1406,6 +1472,7 @@ def be_declarations(ctx: ints) -> buffer {
     append(declarations, "declare i64 @bhasa_rt_utf8_valid(ptr)\ndeclare i64 @bhasa_rt_utf8_count(ptr)\ndeclare i64 @bhasa_rt_utf8_get(ptr, i64)\ndeclare ptr @bhasa_rt_utf8_slice(ptr, i64, i64)\ndeclare i64 @bhasa_rt_utf8_append(ptr, i64)\ndeclare ptr @bhasa_rt_tcp_accept_timeout(ptr, i64)\ndeclare ptr @bhasa_rt_tcp_connect_timeout(ptr, i64, i64)\ndeclare ptr @bhasa_rt_tcp_connect_timeout_str(ptr, i64, i64)\ndeclare i64 @bhasa_rt_tcp_read_timeout(ptr, ptr, i64, i64)\ndeclare i64 @bhasa_rt_tcp_write_timeout(ptr, ptr, i64)\ndeclare i64 @bhasa_rt_monotonic_millis()\n")
     append(declarations, "declare ptr @bhasa_rt_async_spawn_i64(ptr, i64)\ndeclare i64 @bhasa_rt_await_i64(ptr)\ndeclare ptr @bhasa_rt_tls_connect(ptr, i64, ptr, ptr, i64)\ndeclare ptr @bhasa_rt_tls_accept(ptr, ptr, ptr, i64)\ndeclare i64 @bhasa_rt_tls_status(ptr)\ndeclare i64 @bhasa_rt_tls_read(ptr, ptr, i64, i64)\ndeclare i64 @bhasa_rt_tls_write(ptr, ptr, i64)\ndeclare i64 @bhasa_rt_tls_shutdown(ptr, i64)\ndeclare ptr @bhasa_rt_tls_socket_clone(ptr)\ndeclare void @bhasa_rt_tls_socket_free(ptr)\n")
     append(declarations, "declare ptr @bhasa_rt_list_new(i64, ptr, ptr)\ndeclare ptr @bhasa_rt_map_new(i64, i64, ptr, ptr, ptr, ptr, ptr, ptr)\ndeclare void @bhasa_rt_list_get(ptr, i64, ptr)\ndeclare void @bhasa_rt_list_push(ptr, ptr)\ndeclare void @bhasa_rt_list_set(ptr, i64, ptr)\ndeclare void @bhasa_rt_map_get(ptr, ptr, ptr)\ndeclare void @bhasa_rt_map_put(ptr, ptr, ptr)\ndeclare i64 @bhasa_rt_map_contains(ptr, ptr)\ndeclare i64 @bhasa_rt_map_remove(ptr, ptr)\ndeclare ptr @bhasa_rt_list_clone(ptr)\ndeclare void @bhasa_rt_list_free(ptr)\ndeclare i64 @bhasa_rt_list_count(ptr)\ndeclare void @bhasa_rt_list_clear(ptr)\ndeclare ptr @bhasa_rt_map_clone(ptr)\ndeclare void @bhasa_rt_map_free(ptr)\ndeclare i64 @bhasa_rt_map_count(ptr)\ndeclare void @bhasa_rt_map_clear(ptr)\ndeclare i64 @bhasa_rt_map_hash_i64(ptr)\ndeclare i64 @bhasa_rt_map_equal_i64(ptr, ptr)\ndeclare i64 @bhasa_rt_map_hash_str(ptr)\ndeclare i64 @bhasa_rt_map_equal_str(ptr, ptr)\n")
+    append(declarations, "declare ptr @bhasa_rt_spawn_owned(ptr, ptr)\ndeclare ptr @bhasa_rt_async_spawn_owned(ptr, ptr)\ndeclare ptr @bhasa_rt_join_owned(ptr)\ndeclare ptr @bhasa_rt_await_owned(ptr)\ndeclare ptr @bhasa_rt_task_alloc(i64)\ndeclare void @bhasa_rt_task_free(ptr)\n")
     return declarations
 }
 # Record registry nodes use next, name-token, field-count, body-start, body-end,
@@ -2182,7 +2249,7 @@ def bh_compile(source: buffer, tokens: ints, errors: ints, target: buffer) -> bu
     }
     var ctx = ints()
     var i = 0
-    while i < 30 { push(ctx, 0); i = i + 1 }
+    while i < 31 { push(ctx, 0); i = i + 1 }
     set(ctx, 6, -1); set(ctx, 7, -1); set(ctx, 19, -1); set(ctx, 20, -1); set(ctx, 21, -1); set(ctx, 24, -1); set(ctx, 25, -1); set(ctx, 26, -1); set(ctx, 27, -1); set(ctx, 28, -1); set(ctx, 29, -1)
     if len(target) == 0 { be_error(tokens, ctx, errors, 200); return buffer() }
     i = 0
@@ -2210,6 +2277,7 @@ def bh_compile(source: buffer, tokens: ints, errors: ints, target: buffer) -> bu
     }
     be_check_workers(tokens, ctx, errors)
     if len(errors) != 0 { return buffer() }
+    be_task_wrappers(source, tokens, ctx, definitions)
     be_record_helpers(ctx, definitions, globals, target)
     var runtime = be_contains(definitions, buffer("@bhasa_rt_"))
     node = get(ctx, 6)
@@ -2234,7 +2302,7 @@ def bh_compile(source: buffer, tokens: ints, errors: ints, target: buffer) -> bu
     if be_contains(definitions, buffer("@bhasa_rt_list_")) or be_contains(definitions, buffer("@bhasa_rt_map_")) { append(module, "; bhasa runtime: collections\n") }
     if be_contains(definitions, buffer("@bhasa_rt_utf8_")) { append(module, "; bhasa runtime: text\n") }
     if be_contains(definitions, buffer("@bhasa_rt_tcp_")) or be_contains(definitions, buffer("@bhasa_rt_monotonic_millis")) { append(module, "; bhasa runtime: net\n") }
-    if be_contains(definitions, buffer("@bhasa_rt_spawn_i64")) or be_contains(definitions, buffer("@bhasa_rt_async_spawn_i64")) or be_contains(definitions, buffer("@bhasa_rt_await_i64")) { append(module, "; bhasa runtime: threads\n") }
+    if be_contains(definitions, buffer("@bhasa_rt_spawn_")) or be_contains(definitions, buffer("@bhasa_rt_async_spawn_")) or be_contains(definitions, buffer("@bhasa_rt_await_")) or be_contains(definitions, buffer("@bhasa_rt_join_")) or be_contains(definitions, buffer("@bhasa_rt_task_alloc")) { append(module, "; bhasa runtime: threads\n") }
     if be_contains(definitions, buffer("@bhasa_rt_tls_")) { append(module, "; bhasa runtime: tls\n") }
     if be_contains(definitions, buffer("@bhasa_rt_gpu_")) { append(module, "; bhasa runtime: gpu\n") }
     append(module, "target triple = \""); append(module, target); append(module, "\"\n\n"); append(module, be_declarations(ctx))
