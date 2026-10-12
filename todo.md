@@ -18,6 +18,9 @@ after verified increments. Existing caches are preserved.
 - [x] Typed file errors, explicit initializer propagation and immediate Result-discard rejection.
 - [x] Binding-only immutable locals, both frontends, editor identity, cleanup and cache/self-rebuild acceptance.
 - [x] Local pending-result scope/branch/loop checking, preserving error/task/ownership contracts.
+- [x] Offline graph locks, scalar adapter review metadata and protected compiler outputs.
+- [x] Checked signature help and semantic tokens with guarded editor snapshots.
+- [x] Private Text, collection and JSON storage with copy-returning public APIs.
 - [ ] Eight dedicated chats implement remaining sections in `docs/status/backlog-lanes.md`; draft readiness does not complete a checkbox.
 
 Three workers may run alongside the coordinator in this session. The coordinator
@@ -93,7 +96,7 @@ tests and 38 editor tests. This evidence predates new work below.
 - [ ] Adversarial hash-collision protection for untrusted keys.
 - [ ] String formatting and richer text/number conversions.
 - [ ] Unicode normalization, case folding and grapheme operations.
-- [ ] Protect standard-library storage invariants through private APIs.
+- [x] Protect standard-library storage invariants through private APIs.
 
 ## Concurrency and async
 
@@ -131,9 +134,15 @@ tests and 38 editor tests. This evidence predates new work below.
 - [ ] Ownership-aware foreign strings, buffers, records, resources and callbacks.
 - [ ] Generated C/Rust adapters and useful maintained crate integrations.
 - [ ] Explicit foreign thread-safety, error and unwind contracts.
+  - [x] Scalar C-ABI review sidecars and generated declarations; worker externs remain forbidden.
+  - [ ] Ownership-aware enforcement for foreign resources and callbacks.
 - [ ] No-GC dependency policy, provenance and review metadata.
+  - [x] Source-bound scalar adapter review metadata, reporting no_gc_proven=false.
+  - [ ] Complete transitive dependency review and enforcement.
 - [ ] Registry, publish/install commands and packaged releases.
 - [ ] Version resolution, Bhasa lockfiles and dependency checksums.
+  - [x] Explicit local graph bhasa.lock create/update/check, source/manifest checksums and strict read-only verification.
+  - [ ] Version resolution, workspace/multi-entry locks and registry dependencies.
 - [ ] Workspaces, feature selection and API documentation generation.
 - [ ] Stable library/export ABI and reusable library artifacts.
 
@@ -178,6 +187,8 @@ require deleting useful Rust integration before replacements are verified.
 
 - [x] Checked rename, references and local-variable navigation in loaded graphs rooted at open documents.
 - [ ] Signature help, code actions and semantic highlighting.
+  - [x] Checked signature help and semantic tokens in both compiler configurations and the client adapter.
+  - [ ] Safe code actions and verified application in the editor.
 - [ ] Workspace indexing, filesystem watching and broader incomplete-source recovery.
 - [ ] Project-wide formatting and API docs.
 - [ ] Structured project/type/API queries and dependency graphs for agents.
@@ -244,4 +255,12 @@ The coordinator records completed increments and their verification here.
 Local pending-result evidence: 477 reference / 502 hybrid tests, 59 LSP / 82 editor,
 both Clippy configurations, thirteen release examples, five package tests,
 A/B/C at run.EbbPYcIp and unchanged native/Cargo/archive reuse. See
-`docs/status/integration.md`. Parameter/aggregate/interprocedural obligations remain open.
+`docs/status/integration-failures.md`. Parameter/aggregate/interprocedural obligations remain open.
+
+Package/editor/private-storage increment: 558 reference / 583 hybrid tests,
+77 LSP / 93 client tests, both Clippy configurations, formatting, thirteen release
+examples and five package tests per frontend, A/B/C at run.lm8cj8Lt, 32 native
+cache hits and four unchanged Rust adapter runs with zero Rust compilations.
+Two unchanged hybrid builds reuse archive ccabbe47a921bfdd320a4844960bfd84f5db48f3f5ae7d3b9013fdffdebff3ec
+with zero compilations. See `docs/status/integration.md` for scope and limitations.
+Aliases, owned transfers, streaming files and channels remain unintegrated drafts.

@@ -693,6 +693,13 @@ fn digest_reader(input: &mut impl Read) -> Result<String, String> {
     copy_hash(input, &mut std::io::sink()).map(|(hash, _)| hash)
 }
 
+/// Content digest shared by package locks. No process or network access.
+pub(crate) fn sha256(bytes: &[u8]) -> String {
+    let mut hash = Sha256::new();
+    hash.update(bytes);
+    hash.finish()
+}
+
 // macOS supplies an accelerated SHA-256 implementation in libSystem. This does
 // not add an OpenSSL requirement. Other hosts use the dependency-free fallback.
 #[cfg(target_os = "macos")]

@@ -156,7 +156,7 @@ const INVALID: &[&str] = &[
     "def use(error:io.Error){ error.code_value=1 } def main(){}",
     "def main(){var e=io.Error(io.ErrorDomain.os(),1,\"read_file\",text(\"forged\"))}",
     "def main(){var e=io.file_error(1,\"read_file\",\"forged\")}",
-    "def use(error:io.Error){print(error.message_value.bytes)} def main(){}",
+    "def use(error:io.Error){print(error.message_value.bytes())} def main(){}",
     "def main(){var result=io.file_read(1)}",
     "def main(){var result=io.file_read_str(buffer(\"path\"))}",
     "def main(){var result=io.file_write(buffer(\"path\"),1)}",
@@ -172,12 +172,12 @@ extern def io_test_status(mode: int) -> int
 def check_error(error: io.Error, expected: int, operation: str, message: str) -> int {
     if expected <= 0 or error.code() != expected { return 1 }
     if !same(buffer(error.operation()), operation) { return 2 }
-    if !same(error.message().bytes, message) { return 3 }
+    if !same(error.message().bytes(), message) { return 3 }
     match error.domain() { case io.ErrorDomain.os {} }
     var copy = error
     var changed = copy.message()
-    set(changed.bytes, 0, 88)
-    if !same(error.message().bytes, message) or !same(copy.message().bytes, message) { return 4 }
+    changed.clear()
+    if !same(error.message().bytes(), message) or !same(copy.message().bytes(), message) { return 4 }
     return 0
 }
 

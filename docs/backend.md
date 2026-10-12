@@ -31,7 +31,7 @@ def main() {
     var names = string_list()
     names.push(text("Bhasa"))
     names.push(text("भाषा"))
-    print(names.get(1).bytes)
+    print(names.get(1).bytes())
 
     var counts = string_int_map()
     counts.put(text("requests"), 42)
@@ -47,29 +47,38 @@ def main() {
 | Type or factory | Operations and behavior |
 | --- | --- |
 | `text(str) -> Text` | Wraps an owned UTF-8 byte buffer |
+| `text_from_bytes(buffer) -> Text` | Checks UTF-8 and returns an owned copy; invalid input traps |
 | `text_decode(buffer) -> ResultText` | Validates UTF-8 before returning an owned `Text` |
-| `Text` | `valid`, `count`, `codepoint(index)`, `part(start, count)`, `equals`, `append`, `append_codepoint` |
-| `string_list() -> StringList` | `count`, `push(Text)`, `get(index)`, `set(index, Text)`, `find(Text)`, `valid` |
+| `Text` | `bytes`, `byte_count`, `valid`, `count`, `codepoint(index)`, `part(start, count)`, `equals`, `append`, `append_codepoint`, `replace`, `clear` |
+| `string_list() -> StringList` | `count`, `push(Text)`, `get(index)`, `set(index, Text)`, `find(Text)`, `clear`, `valid` |
 | `string_int_map() -> StringIntMap` | Text keys and integer values; `get` returns `OptionInt` |
 | `string_map() -> StringMap` | Text keys and text values; `get` returns `OptionText` |
 
-Both maps provide `count`, `find`, `has`, `put`, `value_at` and `valid`. Lookup is
+Both maps provide `count`, `find`, `has`, `put`, `key_at`, `keys_snapshot`,
+`value_at`, `clear` and `valid`. `key_at` and `value_at` use insertion-order indices;
+`keys_snapshot` returns an independent owned StringList. Lookup is
 linear. Maps preserve insertion order; replacing a value keeps its position.
 `find` returns `-1` when absent. Indexed list/map access uses checked storage
 operations and traps on an invalid index. Maps have no removal operation yet.
 
-Use the collection factories to establish storage invariants. Their fields are
-public in this library; the language supports explicit module-scoped `private`. Direct field mutation
-can invalidate a collection; `valid()` checks its storage shape. It does not
-validate every stored string's UTF-8.
+Use the collection factories to establish storage invariants. Packed bytes,
+offsets and key/value storage are private, as are positional constructors outside
+the defining module. Use get/set/push/put/clear and owned key snapshots rather
+than raw field access. Existing getter signatures and insertion order remain.
+`valid()` checks storage shape; checked Text inputs and the collection methods
+preserve the UTF-8 of each stored value.
 
 Text indices count Unicode scalars, not grapheme clusters or display cells.
 `count` and `codepoint` return `-1` for invalid input; `codepoint` also returns
 `-1` outside the scalar range. `part` traps on invalid UTF-8 or an invalid range.
 `append_codepoint` returns zero or an errno and preserves the destination when
-the scalar is invalid. Raw mutation of `Text.bytes` can invalidate UTF-8; use
-`text_decode` at untrusted byte boundaries and validate after raw edits. There
-is no normalization or case folding.
+the scalar is invalid. Text storage is private. `bytes()` returns an independent
+owned buffer; edits to that buffer cannot change the Text. Use `append`,
+`append_codepoint`, `replace` and `clear` to mutate Text while preserving UTF-8.
+Use `text_decode` at untrusted byte boundaries. Direct `Text(buffer)` construction
+and `.bytes` field access are no longer public. Replace validated construction
+with `text_from_bytes`, whose invalid-input trap is a fatal failure, and field
+reads with `.bytes()`. There is no normalization or case folding.
 
 The underlying builtins are `utf8_valid`, `utf8_count`, `utf8_get`, `utf8_slice`
 and `utf8_append`, all operating on `buffer`. Byte-oriented `len`, `get` and
@@ -86,14 +95,21 @@ Use an exhaustive `match` to handle these variants. The package also provides
 generic `Option[T]`, `Result[T]`, `Box[T]` and `option_or[T]`. `Result[T]` has
 `ok(value: T)` and `error(message: Text)` variants; its error type is fixed.
 Explicit [generic applications](generics.md) are specialized by the Rust host
-before either frontend checks them. Implicit error propagation is not implemented.
+before either frontend checks them. Explicit `try` propagation is supported only
+as an entire `var` or `let` initializer. The enclosing function must return a
+result-shaped enum with the same error payload type. See [Error propagation](errors.md)
+for the supported forms and cleanup rules.
 
 ## JSON
 
 `json_parse(buffer) -> JsonResult` accepts UTF-8 JSON with null, booleans,
 numbers, strings, arrays and objects. It rejects malformed input and trailing
 content. Limits are 1 MiB of source, 65,536 nodes and a parser depth guard of
-64 below the root. The document owns its bytes and a flat node table.
+64 below the root. The document owns private bytes and a flat node table. `json_parse` is its public
+constructor. Parser mutation methods, json_hex and json_unquote are private.
+`document.bytes()` returns an independent owned source copy; mutating it cannot
+change the parsed document. Existing count/kind/raw/string/integer/find/item
+accessors retain their signatures and behavior.
 
 The root node is index zero. `document.find(node, text(key))` and
 `document.item(node, position)` return `OptionInt` node indices. `raw(node)`
@@ -105,7 +121,9 @@ For duplicate object keys, `find` returns the first occurrence.
 
 `json_quote(Text) -> ResultText` validates and escapes a string as a JSON string
 token. There is no automatic record serializer, schema system or generic JSON
-value type. Treat the document's public internal fields as parser-owned data.
+value type. Document storage and parser state are private. Use the public
+`bytes`, `raw`, `string`, `integer`, `find`, `item`, `kind` and `count` methods;
+returned buffers and Text values are independent owned copies.
 
 ## HTTP
 

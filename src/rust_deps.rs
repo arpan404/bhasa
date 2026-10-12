@@ -16,6 +16,55 @@ pub struct RustBuild {
     pub link_args: Vec<String>,
 }
 
+/// Read-only local adapter path resolution shared with inspection. No Cargo,
+/// cache directory creation or manifest mutation is performed here.
+pub(crate) fn resolve_manifest(package_root: &Path, dependency: &str) -> Result<PathBuf, String> {
+    let requested = package_root.join(dependency);
+    let requested = if requested.is_dir() {
+        requested.join("Cargo.toml")
+    } else {
+        requested
+    };
+    let manifest = fs::canonicalize(&requested)
+        .map_err(|error| format!("cannot read '{}': {error}", requested.display()))?;
+    if !manifest.is_file() || manifest.file_name().is_none_or(|file| file != "Cargo.toml") {
+        return Err(
+            "Rust dependency must name a directory containing Cargo.toml or a Cargo.toml file"
+                .into(),
+        );
+    }
+    Ok(manifest)
+}
+
+fn preflight_dependencies(
+    package_root: &Path,
+    dependencies: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let mut seen = BTreeSet::new();
+    for (name, dependency) in dependencies {
+        let manifest = resolve_manifest(package_root, dependency)
+            .map_err(|error| format!("Rust dependency {name:?}: {error}"))?;
+        if seen.insert(manifest.clone()) {
+            crate::ffi_contract::read_if_present(
+                manifest.parent().expect("canonical manifest has parent"),
+            )
+            .map_err(|error| {
+                format!("Rust dependency {name:?}: invalid adapter contract: {error}")
+            })?;
+        }
+    }
+    Ok(())
+}
+
+/// Validate all local adapters in every loaded Bhasa manifest before the first
+/// Cargo invocation. Reads only; no cache directories or tools are created.
+pub fn preflight(manifests: &[crate::project::Manifest]) -> Result<(), String> {
+    for manifest in manifests {
+        preflight_dependencies(&manifest.root, &manifest.rust_dependencies)?;
+    }
+    Ok(())
+}
+
 /// Build local Cargo static-library adapters declared by a Bhasa manifest.
 /// `target` is a resolved LLVM triple, or None for Cargo's native host target.
 /// Cargo runs offline but may create or update Cargo.lock when manifests change.
@@ -39,6 +88,7 @@ pub fn build(
     let package_root = manifest_path
         .parent()
         .ok_or("manifest has no parent directory")?;
+    preflight_dependencies(package_root, dependencies)?;
     fs::create_dir_all(cache_dir).map_err(|error| {
         format!(
             "cannot create Rust cache '{}': {error}",
@@ -55,31 +105,17 @@ pub fn build(
     let mut built_manifests = BTreeSet::new();
 
     for (name, dependency) in dependencies {
-        let requested = package_root.join(dependency);
-        let requested = if requested.is_dir() {
-            requested.join("Cargo.toml")
-        } else {
-            requested
-        };
-        let cargo_manifest = fs::canonicalize(&requested).map_err(|error| {
-            format!(
-                "Rust dependency {name:?}: cannot read '{}': {error}",
-                requested.display()
-            )
-        })?;
-        if !cargo_manifest.is_file()
-            || cargo_manifest
-                .file_name()
-                .is_none_or(|file| file != "Cargo.toml")
-        {
-            return Err(format!("Rust dependency {name:?} must name a directory containing Cargo.toml or a Cargo.toml file"));
-        }
+        let cargo_manifest = resolve_manifest(package_root, dependency)
+            .map_err(|error| format!("Rust dependency {name:?}: {error}"))?;
         if !built_manifests.insert(cargo_manifest.clone()) {
             continue;
         }
         let crate_root = cargo_manifest
             .parent()
             .ok_or("Cargo manifest has no parent")?;
+        crate::ffi_contract::read_if_present(crate_root).map_err(|error| {
+            format!("Rust dependency {name:?}: invalid adapter contract: {error}")
+        })?;
         // Separate adapter roots avoid collisions between two crates exporting
         // the same library filename. Cargo separates targets and profiles below.
         let cache = cache_dir.join("rust").join(cache_key(&cargo_manifest));

@@ -5,6 +5,7 @@ use crate::json::{self, Value};
 use crate::lexer::{Token, TokenKind};
 use crate::project::{self, ModuleImport, SourceFile};
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -12,6 +13,21 @@ const MAX_MESSAGE: usize = 4 * 1024 * 1024;
 const MAX_HEADER: usize = 8 * 1024;
 const MAX_DOCUMENTS: usize = 128;
 const MAX_OPEN_BYTES: usize = 32 * 1024 * 1024;
+const SEMANTIC_TYPES: [&str; 11] = [
+    "namespace",
+    "struct",
+    "enum",
+    "enumMember",
+    "function",
+    "method",
+    "property",
+    "parameter",
+    "variable",
+    "keyword",
+    "type",
+];
+const SEMANTIC_MODIFIERS: [&str; 2] = ["declaration", "readonly"];
+const MAX_SEMANTIC_TOKENS: usize = 65_536;
 
 /// Run on the process streams. Protocol failures are reported only to stderr.
 pub fn run() -> i32 {
@@ -156,6 +172,9 @@ struct Document {
     source: String,
     version: i64,
     path: Option<PathBuf>,
+    // Preserve the requested package context when the file is an entry symlink.
+    // Canonical path remains the identity used to match unsaved overlays.
+    requested_path: Option<PathBuf>,
 }
 #[derive(Clone, Default)]
 struct Server {
@@ -231,6 +250,43 @@ impl Server {
                                 ),
                                 ("hoverProvider", true.into()),
                                 (
+                                    "semanticTokensProvider",
+                                    Value::object([
+                                        (
+                                            "legend",
+                                            Value::object([
+                                                (
+                                                    "tokenTypes",
+                                                    Value::Array(
+                                                        SEMANTIC_TYPES
+                                                            .iter()
+                                                            .map(|value| (*value).into())
+                                                            .collect(),
+                                                    ),
+                                                ),
+                                                (
+                                                    "tokenModifiers",
+                                                    Value::Array(
+                                                        SEMANTIC_MODIFIERS
+                                                            .iter()
+                                                            .map(|value| (*value).into())
+                                                            .collect(),
+                                                    ),
+                                                ),
+                                            ]),
+                                        ),
+                                        ("full", true.into()),
+                                        ("range", false.into()),
+                                    ]),
+                                ),
+                                (
+                                    "signatureHelpProvider",
+                                    Value::object([(
+                                        "triggerCharacters",
+                                        Value::Array(vec!["(".into(), ",".into()]),
+                                    )]),
+                                ),
+                                (
                                     "completionProvider",
                                     Value::object([
                                         ("triggerCharacters", Value::Array(vec![".".into()])),
@@ -260,7 +316,9 @@ impl Server {
                 | "textDocument/prepareRename"
                 | "textDocument/rename"
                 | "textDocument/completion"
-                | "textDocument/hover" => self.document_request(method, params),
+                | "textDocument/hover"
+                | "textDocument/signatureHelp"
+                | "textDocument/semanticTokens/full" => self.document_request(method, params),
                 _ => Err((-32601, format!("unsupported method '{method}'"))),
             };
             write_frame(
@@ -311,6 +369,7 @@ impl Server {
                 source: source.to_owned(),
                 version,
                 path: uri_path(uri),
+                requested_path: uri_requested_path(uri),
             },
         );
         true
@@ -379,6 +438,9 @@ impl Server {
                     ])]
                 }))
             }
+            "textDocument/semanticTokens/full" => {
+                Ok(checked_semantic_tokens(uri, doc, &self.analyze(uri, doc)))
+            }
             "textDocument/documentSymbol" => Ok(Value::Array(
                 local_symbols(uri, &doc.source)
                     .into_iter()
@@ -400,6 +462,9 @@ impl Server {
                     ));
                 }
                 let analysis = self.analyze(uri, doc);
+                if method == "textDocument/signatureHelp" {
+                    return Ok(checked_signature_help(&analysis, doc, offset));
+                }
                 if matches!(
                     method,
                     "textDocument/references"
@@ -504,11 +569,47 @@ impl Server {
                 return analysis;
             }
         };
+        let duplicate_overlay = |path: &Path| {
+            self.documents
+                .values()
+                .filter(|open| open.path.as_deref() == Some(path))
+                .take(2)
+                .count()
+                > 1
+        };
+        if doc.path.as_deref().is_some_and(duplicate_overlay) {
+            analysis.add(
+                uri,
+                &doc.source,
+                vec![Diagnostic::new(
+                    "LSP001",
+                    "Close duplicate file aliases to enable checked editor tools",
+                    Span::default(),
+                )],
+            );
+            return analysis;
+        }
         let loaded = doc
-            .path
+            .requested_path
             .as_ref()
-            .map(|path| project::load_unparsed(Some(path)));
+            .map(|path| project::load_editor_graph(path));
         if let Some(Ok(mut loaded)) = loaded {
+            if loaded
+                .files
+                .iter()
+                .any(|file| duplicate_overlay(&file.path))
+            {
+                analysis.add(
+                    uri,
+                    &doc.source,
+                    vec![Diagnostic::new(
+                        "LSP001",
+                        "Close duplicate file aliases to enable checked editor tools",
+                        Span::default(),
+                    )],
+                );
+                return analysis;
+            }
             analysis.dependencies = loaded
                 .files
                 .iter()
@@ -593,6 +694,19 @@ impl Server {
             return analysis;
         }
         if let Some(Err(errors)) = loaded {
+            // Only a genuinely new, import-free document may be checked without
+            // a disk graph. Saved graph/lock failures must never acquire a fully
+            // checked local fallback just because this module has no imports.
+            let new_document = doc.requested_path.as_ref().is_some_and(|path| {
+                fs::symlink_metadata(path)
+                    .is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
+                    && errors
+                        .iter()
+                        .all(|error| error.path == *path && error.source.is_empty())
+            });
+            if new_document && current_imports.is_empty() {
+                return self.local_analysis(uri, doc, &current_imports, None);
+            }
             // The disk loader cannot traverse a file that has unsaved import or syntax
             // repairs. Never present diagnostics for that stale disk text as editor text.
             let stale = errors.iter().any(|error| {
@@ -600,7 +714,7 @@ impl Server {
                     open.path.as_ref() == Some(&error.path) && open.source != error.source
                 })
             });
-            if !stale && !current_imports.is_empty() {
+            if !stale {
                 for error in errors {
                     analysis.add(
                         &self.file_uri(&error.path),
@@ -611,6 +725,12 @@ impl Server {
                 analysis.symbols = local_symbols(uri, &doc.source);
                 return analysis;
             }
+            return self.local_analysis(
+                uri,
+                doc,
+                &current_imports,
+                Some("Save repaired source to enable module type checking"),
+            );
         }
         self.local_analysis(
             uri,
@@ -644,7 +764,7 @@ impl Server {
             match crate::check(&source) {
                 Ok(checked) => {
                     let file = SourceFile {
-                        path: PathBuf::new(),
+                        path: doc.path.clone().unwrap_or_default(),
                         source: doc.source.clone(),
                         base: 0,
                         import_spans: imports.iter().map(|import| import.span).collect(),
@@ -1250,6 +1370,13 @@ impl Analysis {
             .extend(errors.iter().map(|error| diagnostic(source, error)));
     }
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BindingKind {
+    Parameter,
+    Mutable,
+    Immutable,
+}
+
 #[derive(Clone)]
 struct Symbol {
     name: String,
@@ -1262,6 +1389,7 @@ struct Symbol {
     children: Vec<Symbol>,
     detail: String,
     private: bool,
+    binding: Option<BindingKind>,
 }
 impl Symbol {
     fn location(&self) -> Value {
@@ -1448,11 +1576,16 @@ impl Server {
                 Value::Null
             };
         };
-        if !completion {
-            let tokens = crate::lexer::lex(&doc.source).unwrap_or_default();
-            let markers = crate::modules::contextual_binding_markers(&tokens);
-            if markers.iter().any(|index| tokens[*index].span == word.span) {
-                return Value::Null;
+        if let Ok(tokens) = crate::lexer::lex(&doc.source) {
+            if crate::modules::contextual_binding_markers(&tokens)
+                .iter()
+                .any(|index| tokens[*index].span == word.span)
+            {
+                return if completion {
+                    empty_completion()
+                } else {
+                    Value::Null
+                };
             }
         }
         let mut analysis = self.analyze(uri, doc);
@@ -1772,6 +1905,101 @@ fn display_type(program: &Program, ty: Type, expansion: Option<&crate::ExpandedF
             .display_names(&map.generics.display_names(&name))
     })
 }
+// Only checked identity participates. TextMate retains lexical highlighting;
+// incomplete graphs deliberately return no semantic overrides.
+fn checked_semantic_tokens(uri: &str, doc: &Document, analysis: &Analysis) -> Value {
+    let empty = || Value::object([("data", Value::Array(Vec::new()))]);
+    if analysis.program.is_none() {
+        return empty();
+    }
+    let Ok(tokens) = crate::lexer::lex(&doc.source) else {
+        return empty();
+    };
+    let markers = crate::modules::contextual_binding_markers(&tokens);
+    let keyword_spans: BTreeSet<_> = markers
+        .iter()
+        .map(|index| (tokens[*index].span.start, tokens[*index].span.end))
+        .collect();
+    let mut sites: BTreeMap<(usize, usize), BTreeSet<(usize, usize)>> = BTreeMap::new();
+    for reference in &analysis.references {
+        if reference.uri != uri
+            || keyword_spans.contains(&(reference.span.start, reference.span.end))
+        {
+            continue;
+        }
+        let Some(symbol) = find_symbol(&analysis.symbols, &reference.target) else {
+            continue;
+        };
+        let kind = match symbol.kind {
+            3 => 0,
+            23 => 1,
+            10 => 2,
+            22 => 3,
+            12 => 4,
+            6 => 5,
+            8 => 6,
+            13 if symbol.binding == Some(BindingKind::Parameter) => 7,
+            13 => 8,
+            _ => continue,
+        };
+        let declaration = usize::from(symbol.uri == uri && symbol.selection_span == reference.span);
+        let readonly = usize::from(symbol.binding == Some(BindingKind::Immutable)) << 1;
+        sites
+            .entry((reference.span.start, reference.span.end))
+            .or_default()
+            .insert((kind, declaration | readonly));
+    }
+    for span in keyword_spans {
+        sites.entry(span).or_default().insert((9, 0));
+    }
+    if sites.len() > MAX_SEMANTIC_TOKENS {
+        return empty();
+    }
+    let mut data = Vec::new();
+    let mut previous_line = 0;
+    let mut previous_character = 0;
+    let mut previous_end = 0;
+    let mut positions = SortedPositions::new(&doc.source);
+    for ((start, end), kinds) in sites {
+        // Generic specializations may share original spans. Conflicting kinds
+        // are omitted, never resolved according to traversal order.
+        if kinds.len() != 1 || start < previous_end || start >= end {
+            continue;
+        }
+        let Some(spelling) = doc.source.get(start..end) else {
+            continue;
+        };
+        if spelling.contains(['\r', '\n']) {
+            continue;
+        }
+        let Some((line, character)) = positions.at(start) else {
+            continue;
+        };
+        let Some((kind, modifiers)) = kinds.first().copied() else {
+            continue;
+        };
+        data.extend(
+            [
+                line - previous_line,
+                if line == previous_line {
+                    character - previous_character
+                } else {
+                    character
+                },
+                spelling.encode_utf16().count(),
+                kind,
+                modifiers,
+            ]
+            .into_iter()
+            .map(Value::from),
+        );
+        previous_line = line;
+        previous_character = character;
+        previous_end = end;
+    }
+    Value::object([("data", Value::Array(data))])
+}
+
 fn typed_signature(
     program: &Program,
     function: &ast::Function,
@@ -1800,6 +2028,256 @@ fn typed_signature(
         display_type(program, function.return_type, expansion)
     ))
 }
+// Signature help uses a successful checked graph. Recovery must never invent a
+// callable target or expose private/module-mangled declarations.
+fn checked_signature_help(analysis: &Analysis, doc: &Document, offset: usize) -> Value {
+    let Some(program) = &analysis.program else {
+        return Value::Null;
+    };
+    let Some(file) = analysis.files.iter().find(|file| {
+        doc.path
+            .as_ref()
+            .map_or(file.path.as_os_str().is_empty(), |path| &file.path == path)
+    }) else {
+        return Value::Null;
+    };
+    let Ok(tokens) = crate::lexer::lex(&doc.source) else {
+        return Value::Null;
+    };
+    if tokens.iter().any(|token| {
+        matches!(token.kind, TokenKind::Str(_))
+            && token.span.start < offset
+            && offset < token.span.end
+    }) {
+        return Value::Null;
+    }
+    // Match delimiters first. A comma counts only at the call's own depth, so
+    // nested calls, generic arguments, strings and comments do not advance it.
+    let mut stack = Vec::new();
+    let mut contexts = Vec::new();
+    let mut pairs = BTreeMap::new();
+    for (index, token) in tokens.iter().enumerate() {
+        match token.kind {
+            TokenKind::LeftParen | TokenKind::LeftBracket | TokenKind::LeftBrace => {
+                stack.push(index)
+            }
+            TokenKind::RightParen | TokenKind::RightBracket | TokenKind::RightBrace => {
+                let Some(open) = stack.pop() else {
+                    return Value::Null;
+                };
+                pairs.insert(tokens[open].span.start, (open, index));
+                if tokens[open].kind == TokenKind::LeftParen
+                    && token.kind == TokenKind::RightParen
+                    && tokens[open].span.end <= offset
+                    && offset <= token.span.start
+                {
+                    let mut depth = 0;
+                    let mut active = 0;
+                    for part in &tokens[open + 1..index] {
+                        if part.span.start >= offset {
+                            break;
+                        }
+                        match part.kind {
+                            TokenKind::LeftParen
+                            | TokenKind::LeftBracket
+                            | TokenKind::LeftBrace => depth += 1,
+                            TokenKind::RightParen
+                            | TokenKind::RightBracket
+                            | TokenKind::RightBrace => depth -= 1,
+                            TokenKind::Comma if depth == 0 => active += 1,
+                            _ => {}
+                        }
+                    }
+                    contexts.push((tokens[open].span.start, token.span.end, active));
+                }
+            }
+            _ => {}
+        }
+    }
+    contexts.sort_by_key(|context| std::cmp::Reverse(context.0));
+    let expansion = crate::expand_files(&analysis.files).ok();
+    for (open, end, active) in contexts {
+        let mut signatures = BTreeMap::new();
+        for owner in program
+            .functions
+            .iter()
+            .chain(program.records.iter().flat_map(|record| &record.methods))
+        {
+            if let Some(body) = &owner.body {
+                visit_expressions(body, &mut |expr| {
+                    if expr.span.start < file.base || expr.span.end < file.base {
+                        return;
+                    }
+                    let mut start = expr.span.start - file.base;
+                    let mut finish = expr.span.end - file.base;
+                    // Parenthesized expressions inherit the grouping span. Peel
+                    // only complete wrappers, never a parenthesized receiver.
+                    while let Some(&(left, right)) = pairs.get(&start) {
+                        if tokens[left].kind != TokenKind::LeftParen
+                            || tokens[right].span.end != finish
+                        {
+                            break;
+                        }
+                        let Some(first) = tokens.get(left + 1) else {
+                            break;
+                        };
+                        let Some(last) = right.checked_sub(1).and_then(|index| tokens.get(index))
+                        else {
+                            break;
+                        };
+                        start = first.span.start;
+                        finish = last.span.end;
+                    }
+                    if finish != end || start > open {
+                        return;
+                    }
+                    let ExprKind::Call { name, args } = &expr.kind else {
+                        return;
+                    };
+                    let declaration = program
+                        .functions
+                        .iter()
+                        .map(|function| (function, false))
+                        .find(|(function, _)| function.name == *name)
+                        .or_else(|| {
+                            program.records.iter().find_map(|record| {
+                                record
+                                    .methods
+                                    .iter()
+                                    .find(|method| {
+                                        ast::method_key(&record.name, &method.name) == *name
+                                    })
+                                    .map(|method| (method, true))
+                            })
+                        });
+                    let collection = name.rsplit_once('.').and_then(|(owner, method)| {
+                        let record = program.records.iter().find(|record| record.name == owner)?;
+                        let schema = crate::collections::schema(record).ok()??;
+                        let (params, result) = schema.method(method)?;
+                        Some((method, params, result))
+                    });
+                    let (label, parameters) = if let Some((function, method)) = declaration {
+                        (
+                            format!(
+                                "def {}({}) -> {}",
+                                expansion.as_ref().map_or_else(
+                                    || function.name.clone(),
+                                    |map| map.original_name(&function.name)
+                                ),
+                                function
+                                    .params
+                                    .iter()
+                                    .skip(usize::from(method))
+                                    .map(|param| format!(
+                                        "{}: {}",
+                                        param.name,
+                                        display_type(program, param.ty, expansion.as_ref())
+                                    ))
+                                    .collect::<Vec<_>>()
+                                    .join(", "),
+                                display_type(program, function.return_type, expansion.as_ref())
+                            ),
+                            function
+                                .params
+                                .iter()
+                                .skip(usize::from(method))
+                                .map(|param| {
+                                    Value::object([(
+                                        "label",
+                                        format!(
+                                            "{}: {}",
+                                            param.name,
+                                            display_type(program, param.ty, expansion.as_ref())
+                                        )
+                                        .into(),
+                                    )])
+                                })
+                                .collect::<Vec<_>>(),
+                        )
+                    } else if let Some((method, params, result)) = collection {
+                        let parameters: Vec<_> = params
+                            .iter()
+                            .enumerate()
+                            .map(|(index, ty)| {
+                                format!(
+                                    "arg{}: {}",
+                                    index + 1,
+                                    display_type(program, *ty, expansion.as_ref())
+                                )
+                            })
+                            .collect();
+                        let label = format!(
+                            "def {method}({}) -> {}",
+                            parameters.join(", "),
+                            display_type(program, result, expansion.as_ref())
+                        );
+                        (
+                            label,
+                            parameters
+                                .into_iter()
+                                .map(|label| Value::object([("label", label.into())]))
+                                .collect(),
+                        )
+                    } else if crate::builtins::is_builtin(name) {
+                        let Some(return_type) = expr.ty else { return };
+                        let mut parameters = Vec::new();
+                        for (index, arg) in args.iter().enumerate() {
+                            let Some(ty) = arg.ty else { return };
+                            parameters.push(format!(
+                                "arg{}: {}",
+                                index + 1,
+                                display_type(program, ty, expansion.as_ref())
+                            ));
+                        }
+                        let label = format!(
+                            "def {name}({}) -> {}",
+                            parameters.join(", "),
+                            display_type(program, return_type, expansion.as_ref())
+                        );
+                        (
+                            label,
+                            parameters
+                                .into_iter()
+                                .map(|label| Value::object([("label", label.into())]))
+                                .collect(),
+                        )
+                    } else {
+                        return;
+                    };
+                    if parameters.len() > MAX_COMPLETIONS
+                        || label.len() > MAX_DETAIL_BYTES
+                        || label.contains("__bhm_")
+                        || label.contains("__bhg_")
+                    {
+                        return;
+                    }
+                    // Specializations can share spans in a template. Do not pick
+                    // an arbitrary concrete instance when signatures disagree.
+                    signatures.insert(label.clone(), (label, parameters));
+                });
+            }
+        }
+        if signatures.len() > 1 {
+            return Value::Null;
+        }
+        if let Some((_, (label, parameters))) = signatures.pop_first() {
+            let active = active.min(parameters.len().saturating_sub(1));
+            return Value::object([
+                (
+                    "signatures",
+                    Value::Array(vec![Value::object([
+                        ("label", label.into()),
+                        ("parameters", Value::Array(parameters)),
+                    ])]),
+                ),
+                ("activeSignature", 0_i64.into()),
+                ("activeParameter", active.into()),
+            ]);
+        }
+    }
+    Value::Null
+}
+
 fn repair_completion(source: &str, word: &EditorWord) -> Option<String> {
     let mut bytes = source.as_bytes().to_vec();
     let start = word.dot.unwrap_or(word.span.start);
@@ -2367,6 +2845,7 @@ fn local_symbols(uri: &str, source: &str) -> Vec<Symbol> {
                 selection_span: selection,
                 detail: source_signature(source, function.span, false),
                 private: private_at(&tokens, selection),
+                binding: None,
                 children: Vec::new(),
             },
         ));
@@ -2398,6 +2877,7 @@ fn local_symbols(uri: &str, source: &str) -> Vec<Symbol> {
                     selection_span: token.span,
                     detail: source_signature(source, field.span, true),
                     private: private_at(&tokens, token.span),
+                    binding: None,
                     children: Vec::new(),
                 },
             ));
@@ -2420,6 +2900,7 @@ fn local_symbols(uri: &str, source: &str) -> Vec<Symbol> {
                     selection_span: selection,
                     detail: source_signature(source, method.span, false),
                     private: private_at(&tokens, selection),
+                    binding: None,
                     children: Vec::new(),
                 },
             ));
@@ -2442,6 +2923,7 @@ fn local_symbols(uri: &str, source: &str) -> Vec<Symbol> {
                     false,
                 ),
                 private: private_at(&tokens, selection),
+                binding: None,
                 children,
             },
         ));
@@ -2474,6 +2956,7 @@ fn local_symbols(uri: &str, source: &str) -> Vec<Symbol> {
                 selection_span: token.span,
                 detail: source_signature(source, variant.span, true),
                 private: false,
+                binding: None,
                 children: Vec::new(),
             });
         }
@@ -2493,6 +2976,7 @@ fn local_symbols(uri: &str, source: &str) -> Vec<Symbol> {
                     false,
                 ),
                 private: private_at(&tokens, selection),
+                binding: None,
                 children,
             },
         ));
@@ -2721,6 +3205,7 @@ fn checked_references(
                 children: Vec::new(),
                 detail: format!("module {alias}"),
                 private: false,
+                binding: None,
             });
             index.references.push(DefinitionReference {
                 uri: file_uri.clone(),
@@ -2763,7 +3248,7 @@ impl ReferenceIndex<'_> {
         self.scopes.clear();
         self.scopes.push(BTreeMap::new());
         for param in params {
-            self.local_declaration(&param.name, param.span);
+            self.local_declaration(&param.name, param.span, BindingKind::Parameter);
         }
         self.block(body);
         self.scopes.clear();
@@ -2790,7 +3275,7 @@ impl ReferenceIndex<'_> {
             Span::new(token.span.start - file.base, token.span.end - file.base),
         ))
     }
-    fn local_declaration(&mut self, name: &str, span: Span) {
+    fn local_declaration(&mut self, name: &str, span: Span, binding: BindingKind) {
         let Some((index, span)) = self.local_token(name, span) else {
             return;
         };
@@ -2807,6 +3292,7 @@ impl ReferenceIndex<'_> {
             children: Vec::new(),
             detail: format!("var {name}"),
             private: false,
+            binding: Some(binding),
         });
         self.references.push(DefinitionReference {
             uri: file.uri.clone(),
@@ -2933,7 +3419,7 @@ impl ReferenceIndex<'_> {
                     name,
                     annotation,
                     value,
-                    ..
+                    reassignable,
                 } => {
                     if let Some(ty) = annotation {
                         self.type_reference(
@@ -2943,13 +3429,22 @@ impl ReferenceIndex<'_> {
                         );
                     }
                     self.expression(value);
-                    self.local_declaration(name, Span::new(statement.span.start, value.span.start));
+                    self.local_declaration(
+                        name,
+                        Span::new(statement.span.start, value.span.start),
+                        if *reassignable {
+                            BindingKind::Mutable
+                        } else {
+                            BindingKind::Immutable
+                        },
+                    );
                 }
                 StmtKind::TryVar {
                     name,
                     name_span,
                     annotation,
                     value,
+                    reassignable,
                     ..
                 } => {
                     if let Some(ty) = annotation {
@@ -2960,7 +3455,15 @@ impl ReferenceIndex<'_> {
                         );
                     }
                     self.expression(value);
-                    self.local_declaration(name, *name_span);
+                    self.local_declaration(
+                        name,
+                        *name_span,
+                        if *reassignable {
+                            BindingKind::Mutable
+                        } else {
+                            BindingKind::Immutable
+                        },
+                    );
                 }
                 StmtKind::Assign { name, value } => {
                     self.local_use(name, Span::new(statement.span.start, value.span.start));
@@ -3009,7 +3512,7 @@ impl ReferenceIndex<'_> {
                         ForSource::Iterable(value) => self.expression(value),
                     }
                     self.scopes.push(BTreeMap::new());
-                    self.local_declaration(name, *name_span);
+                    self.local_declaration(name, *name_span, BindingKind::Mutable);
                     self.block(body);
                     self.scopes.pop();
                 }
@@ -3033,7 +3536,11 @@ impl ReferenceIndex<'_> {
                         );
                         self.scopes.push(BTreeMap::new());
                         for binding in &arm.bindings {
-                            self.local_declaration(&binding.name, binding.span);
+                            self.local_declaration(
+                                &binding.name,
+                                binding.span,
+                                BindingKind::Mutable,
+                            );
                         }
                         self.block(&arm.body);
                         self.scopes.pop();
@@ -3200,6 +3707,103 @@ fn range(source: &str, span: Span) -> Value {
         ("end", position(source, span.end.max(span.start))),
     ])
 }
+// Semantic sites are sorted and nonoverlapping. Scan each source byte at most
+// once instead of rescanning the prefix for every emitted token.
+struct SortedPositions<'a> {
+    source: &'a str,
+    offset: usize,
+    line: usize,
+    character: usize,
+    previous_cr: bool,
+    #[cfg(test)]
+    scanned: usize,
+}
+impl<'a> SortedPositions<'a> {
+    fn new(source: &'a str) -> Self {
+        Self {
+            source,
+            offset: 0,
+            line: 0,
+            character: 0,
+            previous_cr: false,
+            #[cfg(test)]
+            scanned: 0,
+        }
+    }
+    fn at(&mut self, offset: usize) -> Option<(usize, usize)> {
+        if offset < self.offset || !self.source.is_char_boundary(offset) {
+            return None;
+        }
+        for ch in self.source.get(self.offset..offset)?.chars() {
+            #[cfg(test)]
+            {
+                self.scanned += 1;
+            }
+            match ch {
+                '\r' => {
+                    self.line += 1;
+                    self.character = 0;
+                }
+                '\n' => {
+                    if !self.previous_cr {
+                        self.line += 1;
+                    }
+                    self.character = 0;
+                }
+                _ => self.character += ch.len_utf16(),
+            }
+            self.previous_cr = ch == '\r';
+        }
+        self.offset = offset;
+        Some((self.line, self.character))
+    }
+}
+
+#[cfg(test)]
+mod sorted_position_tests {
+    use super::*;
+    #[test]
+    fn semantic_positions_match_utf16_crlf_and_scan_each_character_once() {
+        let source = format!("{}🌍\r\nx\rनेपाली\ny", "# padded comment ".repeat(16_384));
+        let mut cursor = SortedPositions::new(&source);
+        let mut offsets: Vec<usize> = source
+            .char_indices()
+            .map(|(at, _)| at)
+            .step_by(4096)
+            .collect();
+        offsets.extend(
+            source
+                .char_indices()
+                .filter(|(at, _)| *at > source.len() - 32)
+                .map(|(at, _)| at),
+        );
+        offsets.push(source.len());
+        offsets.sort_unstable();
+        offsets.dedup();
+        for offset in offsets {
+            let at = position(&source, offset);
+            assert_eq!(
+                cursor.at(offset),
+                Some((
+                    at.get("line").and_then(Value::as_i64).unwrap() as usize,
+                    at.get("character").and_then(Value::as_i64).unwrap() as usize,
+                ))
+            );
+        }
+        assert_eq!(cursor.scanned, source.chars().count());
+        assert_eq!(
+            cursor.at(source.len()),
+            Some((cursor.line, cursor.character))
+        );
+        assert_eq!(cursor.scanned, source.chars().count());
+        assert_eq!(cursor.at(0), None);
+        let mut invalid = SortedPositions::new("🌍");
+        assert_eq!(invalid.at(1), None);
+        assert_eq!(invalid.at(5), None);
+        assert_eq!(invalid.at(4), Some((0, 2)));
+    }
+}
+
 fn position(source: &str, offset: usize) -> Value {
     let mut offset = offset.min(source.len());
     while !source.is_char_boundary(offset) {
@@ -3256,6 +3860,16 @@ fn position_offset(source: &str, position: &Value) -> Option<usize> {
     (line == wanted_line).then_some(source.len())
 }
 fn uri_path(uri: &str) -> Option<PathBuf> {
+    let path = uri_requested_path(uri)?;
+    // A new file can be opened before it exists. Resolve its existing ancestors
+    // now so a later save through a symlink keeps the same identity as the loader.
+    let resolved = path.ancestors().find_map(|ancestor| {
+        let parent = ancestor.canonicalize().ok()?;
+        Some(parent.join(path.strip_prefix(ancestor).ok()?))
+    });
+    Some(resolved.unwrap_or(path))
+}
+fn uri_requested_path(uri: &str) -> Option<PathBuf> {
     let rest = uri.strip_prefix("file://")?;
     let rest = rest
         .strip_prefix("localhost/")
@@ -3285,14 +3899,7 @@ fn uri_path(uri: &str) -> Option<PathBuf> {
     } else {
         path.as_str()
     };
-    let path = PathBuf::from(path);
-    // A new file can be opened before it exists. Resolve its existing ancestors
-    // now so a later save through a symlink keeps the same identity as the loader.
-    let resolved = path.ancestors().find_map(|ancestor| {
-        let parent = ancestor.canonicalize().ok()?;
-        Some(parent.join(path.strip_prefix(ancestor).ok()?))
-    });
-    Some(resolved.unwrap_or(path))
+    Some(PathBuf::from(path))
 }
 fn path_uri(path: &Path) -> String {
     use std::fmt::Write;

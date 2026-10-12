@@ -271,7 +271,7 @@ def http_parse_head(bytes: buffer) -> HttpResult {
             colon = colon + 1
         }
         if colon == index or colon == stop { return HttpResult.error(text("invalid HTTP header name")) }
-        var name = Text(http_lower(slice(bytes, index, colon - index)))
+        var name = text_from_bytes(http_lower(slice(bytes, index, colon - index)))
         var start = colon + 1
         var finish = stop
         while start < finish and (get(bytes, start) == 32 or get(bytes, start) == 9) { start = start + 1 }
@@ -282,16 +282,16 @@ def http_parse_head(bytes: buffer) -> HttpResult {
             if (byte < 32 and byte != 9) or byte > 126 { return HttpResult.error(text("invalid HTTP header value")) }
             cursor = cursor + 1
         }
-        var value = Text(slice(bytes, start, finish - start))
-        if same(name.bytes, "transfer-encoding") { return HttpResult.error(text("Transfer-Encoding is unsupported")) }
-        if same(name.bytes, "content-length") {
+        var value = text_from_bytes(slice(bytes, start, finish - start))
+        if same(name.bytes(), "transfer-encoding") { return HttpResult.error(text("Transfer-Encoding is unsupported")) }
+        if same(name.bytes(), "content-length") {
             if saw_length { return HttpResult.error(text("duplicate Content-Length")) }
             saw_length = true
-            content_length = http_length(value.bytes)
+            content_length = http_length(value.bytes())
             if content_length < 0 { return HttpResult.error(text("invalid or oversized Content-Length")) }
         }
-        if same(name.bytes, "host") {
-            if saw_host or !http_host_valid(value.bytes) { return HttpResult.error(text("invalid or duplicate Host")) }
+        if same(name.bytes(), "host") {
+            if saw_host or !http_host_valid(value.bytes()) { return HttpResult.error(text("invalid or duplicate Host")) }
             saw_host = true
         }
         if headers.has(name) { return HttpResult.error(text("duplicate HTTP header")) }
@@ -303,7 +303,7 @@ def http_parse_head(bytes: buffer) -> HttpResult {
     if same(version, "HTTP/1.1") and !saw_host { return HttpResult.error(text("HTTP/1.1 requires Host")) }
     var body = slice(bytes, end, len(bytes) - end)
     if len(body) > content_length { return HttpResult.error(text("unexpected bytes after HTTP request")) }
-    return HttpResult.ok(HttpRequest(Text(slice(bytes, 0, first)), Text(path), headers, body))
+    return HttpResult.ok(HttpRequest(text_from_bytes(slice(bytes, 0, first)), text_from_bytes(path), headers, body))
 }
 
 def http_read(socket: tcp_socket, timeout_ms: int) -> HttpResult {
@@ -330,7 +330,7 @@ def http_read_stream[T](socket: T, timeout_ms: int) -> HttpResult {
             var wanted = 0
             match request.headers.get(text("content-length")) {
                 case OptionText.none { wanted = 0 }
-                case OptionText.some(length) { wanted = http_length(length.bytes) }
+                case OptionText.some(length) { wanted = http_length(length.bytes()) }
             }
             while len(request.body) < wanted {
                 var remaining = deadline - monotonic_millis()
@@ -356,15 +356,15 @@ def http_reason(status: int) -> str {
 }
 
 def http_response(status: int, body: Text) -> ResultBuffer {
-    if !body.valid() or len(body.bytes) > 1048576 { return ResultBuffer.error(text("invalid or oversized HTTP response")) }
+    if !body.valid() or body.byte_count() > 1048576 { return ResultBuffer.error(text("invalid or oversized HTTP response")) }
     var code = status
     if code != 200 and code != 400 and code != 404 and code != 408 and code != 413 and code != 431 { code = 500 }
     var result = buffer("HTTP/1.1 ")
     append(result, to_buffer(code)); append(result, " "); append(result, http_reason(code))
     append(result, "\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: ")
-    append(result, to_buffer(len(body.bytes)))
+    append(result, to_buffer(body.byte_count()))
     append(result, "\r\nConnection: close\r\n\r\n")
-    append(result, body.bytes)
+    append(result, body.bytes())
     return ResultBuffer.ok(result)
 }
 

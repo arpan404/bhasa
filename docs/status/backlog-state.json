@@ -1,22 +1,22 @@
 {
   "updated": "2026-10-12",
   "coordinator": "01a12ba1-6cad-7f00-a505-1eb6a34b6e41",
-  "sourceIntegration": "Immutable bindings verified/pushed as 4828aff. S037/BH221 local pending-result obligations fully verified: 477 reference/502 hybrid, refreshed matching releases, A/B/C and unchanged cache reuse. Committing this increment; other lanes isolated.",
+  "sourceIntegration": "Package/scalar FFI, protected outputs, signature/semantic editor and private std storage pass all gates: 558 reference inventory resumed after app quit, 583 complete hybrid, 77 LSP each, 93 Node, both Clippy/formatting, refreshed releases, A/B/C run.lm8cj8Lt, 32 native hits, 4 unchanged Rust runs and two archive reuses with zero compiling. Archive ccabbe47a921bfdd320a4844960bfd84f5db48f3f5ae7d3b9013fdffdebff3ec. Preparing verified progress commit. Next aliases nested-RHS correction review, TCP runtime, owned host/native corrections, file/channel parity and workspaces/actions. No draft completion implies integration.",
   "threads": [
     {
       "lane": "safety-errors",
       "threadId": "01a12e2c-e72a-7720-a922-6a5c7a033306",
       "hostId": "local",
       "title": "Bhasa error handling and safety",
-      "cursor": "cba6f992-465f-4cf6-8968-bc81884a25ae:4",
-      "status": "active"
+      "cursor": "f162c2d6-fa50-4030-9e57-400b8a7d8d12:3",
+      "status": "idle"
     },
     {
       "lane": "ownership-types",
       "threadId": "01a12e2c-fae4-7743-bb86-0c2a50e8a887",
       "hostId": "local",
       "title": "Bhasa ownership and core language",
-      "cursor": "11bb0923-7145-48b0-b6c1-93acc46bd784:7",
+      "cursor": "430a7584-3bb8-41f3-ba91-d27f1b753398:1",
       "status": "active"
     },
     {
@@ -24,7 +24,7 @@
       "threadId": "01a12e2d-07c5-7c40-bab3-8d50ed614b10",
       "hostId": "local",
       "title": "Bhasa compiler parity and performance",
-      "cursor": "0527b6c9-5704-4ba9-8dd3-84ccf3cda738:5",
+      "cursor": "a1cdda68-bfde-4dd8-b572-40489571e4cc:2",
       "status": "idle"
     },
     {
@@ -32,7 +32,7 @@
       "threadId": "01a12e2d-7701-7980-a579-93348eec37a0",
       "hostId": "local",
       "title": "Bhasa concurrency and async",
-      "cursor": "baf95e8c-2a21-4a73-8215-9105f0aa2d5f:3",
+      "cursor": "62f4cf6d-4ce4-432a-aed8-f05d7d851e17:1",
       "status": "active"
     },
     {
@@ -40,7 +40,7 @@
       "threadId": "01a12e2d-836d-7423-aabe-7b1cb0bcd41a",
       "hostId": "local",
       "title": "Bhasa standard library and backend services",
-      "cursor": "28ac5297-88a5-4df8-8f97-b2c30c7ffa22:4",
+      "cursor": "da040e31-e681-479b-965b-3198152313d5:1",
       "status": "active"
     },
     {
@@ -48,24 +48,24 @@
       "threadId": "01a12e2d-91de-7360-8243-c2c2033140a9",
       "hostId": "local",
       "title": "Bhasa packages and interoperability",
-      "cursor": "b09f02f9-ac67-420f-a0d0-06c8bbf06f59:4",
-      "status": "idle"
+      "cursor": "fed7b53e-b458-4c00-a741-ba21c7cb6121:1",
+      "status": "active"
     },
     {
       "lane": "editor-acceptance",
       "threadId": "01a12e2e-0f34-7b10-a5a7-412ddaeadefe",
       "hostId": "local",
       "title": "Bhasa editor tools and production acceptance",
-      "cursor": "bc21a1f2-96a0-4c3a-aeda-b87dbb5b10a2:3",
-      "status": "active"
+      "cursor": "9cac160f-207a-40e6-bd1c-d04cc59329ee:1",
+      "status": "idle"
     },
     {
       "lane": "gpu-platforms",
       "threadId": "01a12e2e-1eb8-7680-8b70-e57c410dd92b",
       "hostId": "local",
       "title": "Bhasa GPU and portable targets",
-      "cursor": "6768ac7c-2dd0-42b9-9ec8-6609d9e4b463:3",
-      "status": "idle"
+      "cursor": "0bd7f91d-8deb-427c-8e95-c8453e73e49f:1",
+      "status": "notLoaded"
     }
   ],
   "automation": {

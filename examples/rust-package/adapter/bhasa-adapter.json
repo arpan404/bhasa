@@ -1,0 +1,20 @@
+{
+  "format": "bhasa-scalar-adapter-v1",
+  "source_sha256": "ebcd81f1b166ae50576484c8a8a592142ef51d7311e93cac18b128ac7e228b03",
+  "reviewed_by": "packages-ffi scalar example source review",
+  "runtime": "native-no-gc",
+  "functions": [
+    {
+      "symbol": "adapter_double",
+      "parameters": [
+        "i64-copy"
+      ],
+      "result": "i64-copy",
+      "error": {
+        "kind": "infallible"
+      },
+      "unwind": "abort",
+      "thread": "reentrant"
+    }
+  ]
+}

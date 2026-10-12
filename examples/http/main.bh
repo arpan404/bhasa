@@ -11,10 +11,10 @@ def serve_request(socket: tcp_socket, counters: StringIntMap) -> int {
             body = text("{\"error\":\"invalid request\"}")
         }
         case HttpResult.ok(request) {
-            if same(request.method.bytes, "GET") and same(request.path.bytes, "/health") {
+            if same(request.method.bytes(), "GET") and same(request.path.bytes(), "/health") {
                 body = text("{\"ok\":true}")
             } else {
-                if same(request.method.bytes, "GET") and same(request.path.bytes, "/counter") {
+                if same(request.method.bytes(), "GET") and same(request.path.bytes(), "/counter") {
                     var count = 0
                     match counters.get(text("requests")) {
                         case OptionInt.none { count = 0 }
@@ -24,15 +24,15 @@ def serve_request(socket: tcp_socket, counters: StringIntMap) -> int {
                     counters.put(text("requests"), count)
                     var bytes = buffer("{\"count\":")
                     append(bytes, to_buffer(count)); append(bytes, "}")
-                    body = Text(bytes)
+                    body = text_from_bytes(bytes)
                 } else {
-                    if same(request.method.bytes, "POST") and same(request.path.bytes, "/echo") {
+                    if same(request.method.bytes(), "POST") and same(request.path.bytes(), "/echo") {
                         match json_parse(request.body) {
                             case JsonResult.error(message) {
                                 status = 400
                                 body = text("{\"error\":\"invalid JSON\"}")
                             }
-                            case JsonResult.ok(document) { body = Text(document.raw(0)) }
+                            case JsonResult.ok(document) { body = text_from_bytes(document.raw(0)) }
                         }
                     } else {
                         status = 404

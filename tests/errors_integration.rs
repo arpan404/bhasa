@@ -295,8 +295,8 @@ fn typed_file_errors_propagate_through_import_aliases_and_different_success_type
                 case io.IoResult[int].ok(size){{return 3}}
                 case io.IoResult[int].error(problem){{
                     if problem.code()!=expected or expected<=0 or not same(buffer(problem.operation()),"read_file"){{return 4}}
-                    var message=problem.message();append(message.bytes,"changed")
-                    if not same(problem.message().bytes,"file read failed") or not same(destination,"unchanged"){{return 5}}
+                    var message=problem.message();message.clear()
+                    if not same(problem.message().bytes(),"file read failed") or not same(destination,"unchanged"){{return 5}}
                     match problem.domain(){{case io.ErrorDomain.os{{print(true)}}}}
                 }}
             }}

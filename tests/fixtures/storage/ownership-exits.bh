@@ -1,0 +1,73 @@
+extern def storage_live(ignored: int) -> int
+
+# Every exit holds independent Text, collection and key-snapshot allocations.
+# Failures exercise partially parsed JSON, rejected UTF-8 and typed getter errors.
+def verify_storage_exit(mode: int) -> ResultInt {
+    var label = text("Aé中🙂")
+    var detached = label.bytes()
+    set(detached, 0, 255)
+    var values = string_map()
+    values.put(text("key"), label)
+    var copied = values
+    var keys = values.keys_snapshot()
+    values.clear()
+    label.replace(text("replacement"))
+    label.clear()
+    if copied.count() != 1 or !same(copied.value_at(0).bytes(), "Aé中🙂") {
+        return ResultInt.error(text("copy invariant failed"))
+    }
+    if !same(keys.get(0).bytes(), "key") or values.count() != 0 {
+        return ResultInt.error(text("key invariant failed"))
+    }
+    var wire = buffer("{\"name\":\"hé🙂\",\"items\":[7,true]}")
+    if mode == 1 { wire = buffer("{\"items\":[null,{\"name\":\"unterminated") }
+    if mode == 3 { push(wire, 255) }
+    var doc = try json_parse(wire)
+    var doc_copy = doc
+    var bytes = doc.bytes()
+    set(bytes, 0, 255)
+    set(wire, 0, 255)
+    if !same(doc.bytes(), doc_copy.bytes()) or doc.kind(0) != 6 {
+        return ResultInt.error(text("JSON snapshot invariant failed"))
+    }
+    if mode == 2 {
+        var impossible = try doc.string(0)
+        return ResultInt.error(text("getter unexpectedly succeeded"))
+    }
+    # Return from this arm while the document and outer snapshots are still live.
+    match doc.find(0, text("name")) {
+        case OptionInt.none { return ResultInt.error(text("missing name")) }
+        case OptionInt.some(node) {
+            var extracted = try doc.string(node)
+            extracted.clear()
+            var again = try doc_copy.string(node)
+            if !same(again.bytes(), "hé🙂") { return ResultInt.error(text("string snapshot invariant failed")) }
+            return ResultInt.ok(doc.count())
+        }
+    }
+}
+
+def main() -> int {
+    var baseline = storage_live(0)
+    if baseline != 0 { return 90 }
+    if verify_text_storage() != 0 { return 91 }
+    if storage_live(0) != baseline { return 92 }
+    if verify_collection_storage() != 0 { return 93 }
+    if storage_live(0) != baseline { return 94 }
+    for iteration in range(16) {
+        for mode in range(4) {
+            match verify_storage_exit(mode) {
+                case ResultInt.ok(count) { if mode != 0 or count != 5 { return 95 } }
+                case ResultInt.error(message) {
+                    if mode == 0 { print(message.bytes()); return 96 }
+                    if mode == 1 and !same(message.bytes(), "invalid or overly deep JSON") { return 97 }
+                    if mode == 2 and !same(message.bytes(), "JSON value is not a string") { return 98 }
+                    if mode == 3 and !same(message.bytes(), "invalid UTF-8 JSON") { return 99 }
+                }
+            }
+            if storage_live(0) != baseline { return 100 }
+        }
+    }
+    print("private storage ownership passed")
+    return 0
+}

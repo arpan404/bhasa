@@ -1,5 +1,44 @@
 # Current compiler integration
 
+## October 12 package, editor and private-storage integration
+
+Pending local result obligations are committed and pushed as 217e33d; their
+477 reference / 502 hybrid evidence is preserved in integration-failures.md.
+Package locks, scalar adapter review metadata, checked signature help/semantic
+tokens, protected outputs and private Text/collection/JSON storage pass all
+combined gates: 558 reference inventory, 583 full hybrid, 77 LSP groups per
+configuration and 93 Node tests. Reference acceptance resumed the remaining
+targets after an app quit without changing frozen sources. Both Clippy modes,
+formatting, refreshed releases, A/B/C at run.lm8cj8Lt and two unchanged archive
+builds pass. Matching archive: ccabbe47a921bfdd320a4844960bfd84f5db48f3f5ae7d3b9013fdffdebff3ec.
+Release smoke records 32 native hits and four unchanged Rust adapter runs with
+zero compilations. integration.md records exact evidence and limits.
+
+Independent review reproduced lockfile output overwrite, disagreement between
+selected versus inferred package roots, locked imported editor-module rejection,
+and repeated source-prefix scans during token encoding. The package chat owns
+the isolated authoritative-root/checked editor-loader correction; rust_cache
+owns the output protection correction. Root retains requested URI package paths
+separately from canonical overlay identity and adds protocol regressions.
+The linear sorted-position cursor passes its unit and six semantic protocol
+groups plus independent UTF-16/CRLF and bounded performance probes.
+
+The next alias merge preserves current package/editor tests. Independent review
+found missing nested nominal RHS identity; the editor chat supplied compiler-proven
+declaration/use anchors and independent correction review is finishing. Owned
+host/native drafts repair match-payload eligibility and implicit void-return
+cleanup; the corrected native slot passes 51 source cases, ten sanitized counter
+guests and sixteen metadata guards at O0/O2. Host correction review is separate.
+TCP shared-owner copies pass independent review and await combined TCP/TLS/task
+integration. The Result-parameter contract awaits a diagnostic-precedence decision.
+
+Actual channel source wiring publishes private source-bound authority and a
+five-argument native manifest entry. Review is checking the production target
+triple path before assigning native parity. Workspace/version and server-action
+drafts remain separate. No aliases, file handles, channels or owned parameter
+modes are exposed in current tracked sources. Drafts are not acceptance.
+
+
 ## Full backlog implementation, October 11, 2026
 
 The user request authorizes implementation of the full `todo.md` backlog,

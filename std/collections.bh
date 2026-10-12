@@ -1,11 +1,11 @@
 import "result.bh"
 
-# Concrete typed collections. Use the factories to establish their packed
-# storage invariants. Fields are public because Bhasa has no visibility yet.
-# Changing them directly may invalidate the collection; valid() checks shape.
+# Concrete typed collections own private packed storage. Use the factories
+# and methods to preserve UTF-8, offset and key/value length invariants. Getters
+# and key snapshots return independent owned copies.
 struct StringList {
-    storage: buffer
-    offsets: ints
+    private storage: buffer
+    private offsets: ints
 
     def count(self) -> int { return len(self.offsets) - 1 }
     def valid(self) -> bool {
@@ -20,29 +20,35 @@ struct StringList {
         return get(self.offsets, len(self.offsets) - 1) == len(self.storage)
     }
     def push(self, value: Text) {
-        append(self.storage, value.bytes)
+        append(self.storage, value.bytes())
         push(self.offsets, len(self.storage))
     }
     def get(self, index: int) -> Text {
         var start = get(self.offsets, index)
         var end = get(self.offsets, index + 1)
-        return Text(slice(self.storage, start, end - start))
+        return text_from_bytes(slice(self.storage, start, end - start))
     }
     def set(self, index: int, value: Text) {
         # Validate the index even for an empty list before replacing storage.
         var start = get(self.offsets, index)
         var end = get(self.offsets, index + 1)
+        var bytes = value.bytes()
         var replacement = buffer()
         append(replacement, slice(self.storage, 0, start))
-        append(replacement, value.bytes)
+        append(replacement, bytes)
         append(replacement, slice(self.storage, end, len(self.storage) - end))
-        var delta = len(value.bytes) - (end - start)
+        var delta = len(bytes) - (end - start)
         var offset = index + 1
         while offset < len(self.offsets) {
             set(self.offsets, offset, get(self.offsets, offset) + delta)
             offset = offset + 1
         }
         self.storage = replacement
+    }
+    def clear(self) {
+        self.storage = buffer()
+        self.offsets = ints()
+        push(self.offsets, 0)
     }
     def find(self, value: Text) -> int {
         var index = 0
@@ -62,14 +68,17 @@ def string_list() -> StringList {
 }
 
 struct StringIntMap {
-    keys: StringList
-    values: ints
+    private keys: StringList
+    private values: ints
 
     def count(self) -> int { return self.keys.count() }
     def valid(self) -> bool { return self.keys.valid() and self.keys.count() == len(self.values) }
     def find(self, key: Text) -> int { return self.keys.find(key) }
     def has(self, key: Text) -> bool { return self.find(key) >= 0 }
     def value_at(self, index: int) -> int { return get(self.values, index) }
+    def key_at(self, index: int) -> Text { return self.keys.get(index) }
+    def keys_snapshot(self) -> StringList { return self.keys }
+    def clear(self) { self.keys.clear(); self.values = ints() }
     def get(self, key: Text) -> OptionInt {
         var index = self.find(key)
         if index < 0 { return OptionInt.none() }
@@ -89,8 +98,8 @@ struct StringIntMap {
 def string_int_map() -> StringIntMap { return StringIntMap(string_list(), ints()) }
 
 struct StringMap {
-    keys: StringList
-    values: StringList
+    private keys: StringList
+    private values: StringList
 
     def count(self) -> int { return self.keys.count() }
     def valid(self) -> bool {
@@ -99,6 +108,9 @@ struct StringMap {
     def find(self, key: Text) -> int { return self.keys.find(key) }
     def has(self, key: Text) -> bool { return self.find(key) >= 0 }
     def value_at(self, index: int) -> Text { return self.values.get(index) }
+    def key_at(self, index: int) -> Text { return self.keys.get(index) }
+    def keys_snapshot(self) -> StringList { return self.keys }
+    def clear(self) { self.keys.clear(); self.values.clear() }
     def get(self, key: Text) -> OptionText {
         var index = self.find(key)
         if index < 0 { return OptionText.none() }

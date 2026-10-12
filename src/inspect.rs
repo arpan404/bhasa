@@ -227,6 +227,77 @@ impl Query<'_> {
     }
 }
 
+fn package_metadata(
+    loaded: &crate::project::LoadedProgram,
+) -> Result<(Value, Value), LocatedDiagnostic> {
+    let make_error = |path: &Path, message: String| LocatedDiagnostic {
+        path: path.to_owned(),
+        source: String::new(),
+        diagnostic: crate::Diagnostic::new("Q002", message, Span::default()),
+    };
+    let lock = if let Some(root) = crate::package_lock::root_manifest(loaded) {
+        let path = root.root.join("bhasa.lock");
+        let actual = crate::package_lock::Snapshot::capture(loaded, root)
+            .map_err(|message| make_error(&path, message))?;
+        let existing = crate::package_lock::read_if_present(&root.root)
+            .map_err(|message| make_error(&path, message))?;
+        if let Some(expected) = &existing {
+            expected
+                .verify(&actual)
+                .map_err(|message| make_error(&path, message))?;
+        }
+        Value::object([
+            ("path", path.display().to_string().into()),
+            ("present", existing.is_some().into()),
+            ("verified", existing.is_some().into()),
+            (
+                "snapshot",
+                crate::json::parse(&actual.encode()).expect("snapshot is JSON"),
+            ),
+        ])
+    } else {
+        Value::Null
+    };
+    let mut adapters = Vec::new();
+    for manifest in &loaded.manifests {
+        for (name, dependency) in &manifest.rust_dependencies {
+            let cargo_manifest = crate::rust_deps::resolve_manifest(&manifest.root, dependency)
+                .map_err(|message| {
+                    make_error(
+                        &manifest.path,
+                        format!("Rust dependency {name:?}: {message}"),
+                    )
+                })?;
+            let root = cargo_manifest
+                .parent()
+                .expect("canonical Cargo manifest has parent");
+            let path = root.join("bhasa-adapter.json");
+            let contract = crate::ffi_contract::read_if_present(root)
+                .map_err(|message| make_error(&path, message))?;
+            adapters.push(Value::object([
+                (
+                    "package_manifest",
+                    manifest.path.display().to_string().into(),
+                ),
+                ("name", name.clone().into()),
+                (
+                    "cargo_manifest",
+                    cargo_manifest.display().to_string().into(),
+                ),
+                ("metadata_path", path.display().to_string().into()),
+                ("source_review_verified", contract.is_some().into()),
+                ("worker_extern_allowed", false.into()),
+                ("no_gc_proven", false.into()),
+                (
+                    "contract",
+                    contract.map_or(Value::Null, |adapter| adapter.to_value()),
+                ),
+            ]));
+        }
+    }
+    Ok((lock, Value::Array(adapters)))
+}
+
 pub(crate) fn run(source: Option<&Path>) -> i32 {
     let loaded = match crate::project::load_unparsed(source) {
         Ok(loaded) => loaded,
@@ -245,6 +316,10 @@ pub(crate) fn run(source: Option<&Path>) -> i32 {
                 .collect::<Vec<_>>();
             return write(failure(&located), 1);
         }
+    };
+    let (lock, adapters) = match package_metadata(&loaded) {
+        Ok(values) => values,
+        Err(error) => return write(failure(&[error]), 1),
     };
     let query = Query {
         tokens: loaded
@@ -292,6 +367,7 @@ pub(crate) fn run(source: Option<&Path>) -> i32 {
             Value::object([
                 ("name", manifest.name.clone().into()),
                 ("version", manifest.version.clone().into()),
+                ("checksum", manifest.checksum.clone().into()),
                 ("manifest", manifest.path.display().to_string().into()),
                 ("entry", manifest.entry.display().to_string().into()),
                 (
@@ -324,6 +400,8 @@ pub(crate) fn run(source: Option<&Path>) -> i32 {
             ("entry", loaded.entry.display().to_string().into()),
             ("modules", Value::Array(modules)),
             ("packages", Value::Array(packages)),
+            ("lock", lock),
+            ("adapters", adapters),
             ("declarations", query.declarations()),
             (
                 "declaration_scope",

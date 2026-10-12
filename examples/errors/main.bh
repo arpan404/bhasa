@@ -13,7 +13,7 @@ def main() -> int {
     match file_count(arg(1)) {
         case io.IoResult[int].ok(count) { print(count) }
         case io.IoResult[int].error(error) {
-            print(error.message().bytes)
+            print(error.message().bytes())
             print(error.code())
             return 1
         }

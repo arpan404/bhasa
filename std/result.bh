@@ -27,5 +27,5 @@ enum ResultBuffer {
 
 def text_decode(bytes: buffer) -> ResultText {
     if !utf8_valid(bytes) { return ResultText.error(text("invalid UTF-8")) }
-    return ResultText.ok(Text(bytes))
+    return ResultText.ok(text_from_bytes(bytes))
 }

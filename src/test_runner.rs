@@ -430,7 +430,7 @@ fn terminate_group(child: &mut std::process::Child) {
 fn run_inner(options: &Options, results: &mut Vec<Value>) -> Result<(), String> {
     let mut total = 0;
     for entry in entries(options)? {
-        let mut loaded = project::load_unparsed(Some(&entry)).map_err(located_errors)?;
+        let mut loaded = project::load_test_graph(&entry).map_err(located_errors)?;
         let expansion = crate::expand_files(&loaded.files)
             .map_err(|errors| source_errors(&loaded.files, errors))?;
         let program = expansion

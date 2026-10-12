@@ -51,6 +51,8 @@ pub struct Manifest {
     pub root: PathBuf,
     pub name: String,
     pub version: String,
+    /// SHA-256 of exact manifest bytes consumed by the parser.
+    pub checksum: String,
     pub entry: PathBuf,
     pub dependencies: BTreeMap<String, String>,
     pub rust_dependencies: BTreeMap<String, String>,
@@ -98,6 +100,9 @@ pub struct LoadedProgram {
     pub files: Vec<SourceFile>,
     pub manifests: Vec<Manifest>,
     pub entry: PathBuf,
+    /// Canonical identity selected before traversal. A dependency may contain
+    /// the canonical entry without becoming the invocation's root package.
+    pub root_manifest_path: Option<PathBuf>,
     /// Present only for an invocation that omitted a source file.
     pub project: Option<Manifest>,
 }
@@ -155,15 +160,82 @@ pub fn flattened_source(files: &[SourceFile]) -> String {
 }
 
 pub fn load(source: Option<&Path>) -> Result<LoadedProgram, Vec<LocatedDiagnostic>> {
-    load_inner(source, true).map_err(|error| vec![error])
+    load_inner(source, true, true, None).map_err(|error| vec![error])
 }
 
 /// Load and resolve imports while leaving declarations to an alternate frontend.
 pub fn load_unparsed(source: Option<&Path>) -> Result<LoadedProgram, Vec<LocatedDiagnostic>> {
-    load_inner(source, false).map_err(|error| vec![error])
+    load_inner(source, false, true, None).map_err(|error| vec![error])
 }
 
-fn load_inner(source: Option<&Path>, parse: bool) -> Result<LoadedProgram, LocatedDiagnostic> {
+/// Checked test loading. Verify the selected package's primary disk graph
+/// first, then admit only pinned production sources or root tests/ sources.
+pub fn load_test_graph(source: &Path) -> Result<LoadedProgram, Vec<LocatedDiagnostic>> {
+    load_analysis_graph(source, None)
+}
+
+/// Read-only editor disk graph loading. The primary package lock is verified
+/// exactly before re-rooting analysis at a pinned production module or root
+/// test source. LSP overlays remain a separate provisional checked-analysis
+/// step; this API never repairs a lock or weakens normal compiler loading.
+pub fn load_editor_graph(source: &Path) -> Result<LoadedProgram, Vec<LocatedDiagnostic>> {
+    load_analysis_graph(source, None)
+}
+
+/// Editor entry for callers that already retain a checked package identity,
+/// such as a document whose source path has been canonicalized for overlays.
+/// The source must remain inside that package, and its primary lock is still
+/// verified exactly. This is not a normal compiler or lock-update entry point.
+pub fn load_editor_graph_in_package(
+    source: &Path,
+    root_manifest_path: &Path,
+) -> Result<LoadedProgram, Vec<LocatedDiagnostic>> {
+    load_analysis_graph(source, Some(root_manifest_path))
+}
+
+fn load_analysis_graph(
+    source: &Path,
+    root_manifest_path: Option<&Path>,
+) -> Result<LoadedProgram, Vec<LocatedDiagnostic>> {
+    let loaded =
+        load_inner(Some(source), false, false, root_manifest_path).map_err(|error| vec![error])?;
+    let Some(root) = crate::package_lock::root_manifest(&loaded) else {
+        return Ok(loaded);
+    };
+    let path = root.root.join("bhasa.lock");
+    let fail = |message| vec![LocatedDiagnostic::new(&path, "", message, Span::default())];
+    if let Some(expected) = crate::package_lock::read_if_present(&root.root).map_err(fail)? {
+        // Preserve this invocation's authoritative package during primary load,
+        // including a symlink whose canonical target is near another manifest.
+        let primary = load_inner(Some(&root.entry), false, true, Some(&root.path))
+            .map_err(|error| vec![error])?;
+        expected
+            .verify(&crate::package_lock::Snapshot::capture(&primary, root).map_err(fail)?)
+            .map_err(fail)?;
+        expected
+            .verify_analysis_graph(&loaded, root)
+            .map_err(fail)?;
+    }
+    Ok(loaded)
+}
+
+/// Explicit tooling operation for regenerating a stale lock. It retains all
+/// manifest/import validation but deliberately skips the existing lock. Normal
+/// check/build/run callers must continue using load or load_unparsed.
+pub fn load_unparsed_for_lock_update(
+    source: Option<&Path>,
+) -> Result<LoadedProgram, Vec<LocatedDiagnostic>> {
+    load_inner(source, false, false, None).map_err(|error| vec![error])
+}
+
+fn load_inner(
+    source: Option<&Path>,
+    parse: bool,
+    verify_lock: bool,
+    // Test-primary validation keeps the original package identity even when
+    // its entry resolves through an in-package symlink near another manifest.
+    required_manifest: Option<&Path>,
+) -> Result<LoadedProgram, LocatedDiagnostic> {
     let cwd = std::env::current_dir().map_err(|error| {
         LocatedDiagnostic::new(
             Path::new("."),
@@ -174,6 +246,21 @@ fn load_inner(source: Option<&Path>, parse: bool) -> Result<LoadedProgram, Locat
     })?;
     let explicit = source.is_some();
     let (entry, manifest) = if let Some(path) = source {
+        // Select the package from the requested directory, before resolving a
+        // file symlink. An outer entry alias retains its outer package; naming
+        // the nested canonical file directly still selects the nested package.
+        let requested_parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or(&cwd);
+        let requested_parent = fs::canonicalize(requested_parent).map_err(|error| {
+            LocatedDiagnostic::new(
+                path,
+                "",
+                format!("cannot read source directory: {error}"),
+                Span::default(),
+            )
+        })?;
         let path = fs::canonicalize(path).map_err(|error| {
             LocatedDiagnostic::new(
                 path,
@@ -182,9 +269,13 @@ fn load_inner(source: Option<&Path>, parse: bool) -> Result<LoadedProgram, Locat
                 Span::default(),
             )
         })?;
-        let manifest = find_manifest(path.parent().unwrap_or(&cwd))
-            .map(|path| read_manifest(&path))
-            .transpose()?;
+        let manifest = if let Some(manifest) = required_manifest {
+            Some(read_manifest(manifest)?)
+        } else {
+            find_manifest(&requested_parent)
+                .map(|path| read_manifest(&path))
+                .transpose()?
+        };
         (path, manifest)
     } else {
         let path = find_manifest(&cwd).ok_or_else(|| {
@@ -216,13 +307,23 @@ fn load_inner(source: Option<&Path>, parse: bool) -> Result<LoadedProgram, Locat
         loader.program = crate::parse_files(&loader.files)
             .map_err(|errors| locate(&loader.files, &errors[0]))?;
     }
-    Ok(LoadedProgram {
+    // Loader.visit canonicalizes the entry just like every other source. Keep
+    // the public entry identity consistent for default and explicit invocations.
+    let entry = loader.files[0].path.clone();
+    let loaded = LoadedProgram {
         program: loader.program,
         files: loader.files,
         manifests: loader.manifests.into_values().collect(),
         entry,
-        project: if explicit { None } else { manifest },
-    })
+        root_manifest_path: manifest.as_ref().map(|manifest| manifest.path.clone()),
+        project: if explicit { None } else { manifest.clone() },
+    };
+    if let Some(root) = manifest.as_ref().filter(|_| verify_lock) {
+        crate::package_lock::verify_if_present(&loaded, root).map_err(|message| {
+            LocatedDiagnostic::new(&root.root.join("bhasa.lock"), "", message, Span::default())
+        })?;
+    }
+    Ok(loaded)
 }
 
 fn find_manifest(directory: &Path) -> Option<PathBuf> {
@@ -646,6 +747,7 @@ pub fn read_manifest(path: &Path) -> Result<Manifest, LocatedDiagnostic> {
         root: root.clone(),
         name,
         version,
+        checksum: crate::build_cache::sha256(source.as_bytes()),
         entry: root.join(entry),
         dependencies,
         rust_dependencies,

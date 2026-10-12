@@ -10,7 +10,7 @@ def main() -> int {
     match io.file_read_str("settings.json") {
         case io.IoResult[buffer].ok(contents) { print(contents) }
         case io.IoResult[buffer].error(error) {
-            print(error.message().bytes)
+            print(error.message().bytes())
             print(error.code())
             return 1
         }

@@ -5,7 +5,7 @@ use crate::target::{self, Target};
 use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitStatus, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -19,6 +19,7 @@ Usage:\n\
              [--frontend rust|bhasa] [--timeout SECONDS]\n\
   bhasa check [FILE] [--json]\n\
   bhasa inspect [FILE] [--json]\n\
+  bhasa lock create|update|check [FILE] [--json]\n\
   bhasa emit-llvm FILE [--target TARGET] [-o FILE]\n\
   bhasa build [FILE] [-o FILE] [--target TARGET] [--release]\n\
               [--emit object] [--link FILE ...] [--gpu metal|cuda|vulkan]\n\
@@ -28,11 +29,13 @@ Usage:\n\
   bhasa --help\n\
   bhasa --version\n\n\
 Build outputs default to build/<source-name>; objects use .o or .obj.\n\
-Without FILE, check/build/run use the nearest bhasa.toml package entry.\n\
+Without FILE, check/build/run/inspect and lock use the nearest bhasa.toml entry.\n\
 Use --frontend rust|bhasa with check/emit-llvm/build/run. The Bhasa frontend\n\
 requires a host built with sh bootstrap/build-hybrid.sh --frontend.\n\
 emit-llvm writes to stdout unless -o is given. check --json writes a\n\
 JSON array of diagnostics to stdout, including [] on success.\n\
+lock create refuses an existing lock; update requires one; check is read-only.\n\
+Lock and inspect never invoke Cargo or Clang.\n\
 Clang is required only for build and run. Set BHASA_CLANG to an executable\n\
 path to select it. Cross objects require a target backend; cross executables\n\
 also require installed target libraries, an SDK, and a linker. No downloads\n\
@@ -80,6 +83,7 @@ enum Invocation {
     Format { path: PathBuf, check: bool },
     Test(crate::test_runner::Options),
     Inspect(Option<PathBuf>),
+    Lock(crate::lock_cli::Options),
     Compile(Options),
 }
 
@@ -134,6 +138,16 @@ fn parse_args(args: &[String]) -> Result<Invocation, String> {
             return Ok(Invocation::Help);
         }
         return crate::test_runner::parse(&args[1..]).map(Invocation::Test);
+    }
+    if command == "lock" {
+        if (args.len() == 2 && matches!(args[1].as_str(), "--help" | "-h"))
+            || (args.len() == 3
+                && matches!(args[1].as_str(), "create" | "update" | "check")
+                && matches!(args[2].as_str(), "--help" | "-h"))
+        {
+            return Ok(Invocation::Help);
+        }
+        return crate::lock_cli::parse(&args[1..]).map(Invocation::Lock);
     }
     if command == "inspect" {
         if args.len() == 2 && matches!(args[1].as_str(), "--help" | "-h") {
@@ -310,6 +324,11 @@ pub fn run(args: &[String]) -> i32 {
             if args.first().is_some_and(|value| value == "inspect") {
                 return crate::inspect::usage_error(&message);
             }
+            if args.first().is_some_and(|value| value == "lock")
+                && args.iter().any(|value| value == "--json")
+            {
+                return crate::lock_cli::usage_error(&message);
+            }
             let json = args.first().is_some_and(|value| value == "check")
                 && args.iter().any(|value| value == "--json");
             report_driver_error(&message, "", "<command line>", json);
@@ -348,6 +367,7 @@ pub fn run(args: &[String]) -> i32 {
         Invocation::Format { path, check } => crate::format::run(&path, check),
         Invocation::Test(options) => crate::test_runner::run(options),
         Invocation::Inspect(source) => crate::inspect::run(source.as_deref()),
+        Invocation::Lock(options) => crate::lock_cli::run(options),
         Invocation::Compile(options) => compile(options),
     }
 }
@@ -436,7 +456,7 @@ fn compile(mut options: Options) -> i32 {
             };
             match &options.output {
                 Some(output) => {
-                    write_artifact(output, ir.as_bytes(), &source_inputs(&options))?;
+                    write_artifact(output, ir.as_bytes(), &source_inputs(&options)?)?;
                     Ok(0)
                 }
                 None => Ok(write_stdout(&ir)),
@@ -527,16 +547,49 @@ pub(crate) fn build_test_program(
     }
 }
 
-fn source_inputs(options: &Options) -> Vec<&Path> {
-    let mut inputs = vec![options.source.as_path()];
-    inputs.extend(options.source_files.iter().map(|file| file.path.as_path()));
-    inputs.extend(
-        options
-            .manifests
-            .iter()
-            .map(|manifest| manifest.path.as_path()),
-    );
-    inputs
+#[derive(Default)]
+struct OutputProtection {
+    inputs: Vec<PathBuf>,
+    optional: Vec<PathBuf>,
+    roots: Vec<PathBuf>,
+}
+
+impl OutputProtection {
+    #[cfg(test)]
+    fn files(inputs: &[&Path]) -> Self {
+        Self {
+            inputs: inputs.iter().map(|path| path.to_path_buf()).collect(),
+            ..Self::default()
+        }
+    }
+}
+
+fn source_inputs(options: &Options) -> Result<OutputProtection, String> {
+    let mut protection = OutputProtection::default();
+    protection.inputs.push(options.source.clone());
+    protection
+        .inputs
+        .extend(options.source_files.iter().map(|file| file.path.clone()));
+    for manifest in &options.manifests {
+        protection.inputs.push(manifest.path.clone());
+        // Reserve the name even before an explicit lock-create command.
+        protection.optional.push(manifest.root.join("bhasa.lock"));
+        for (name, dependency) in &manifest.rust_dependencies {
+            let cargo = crate::rust_deps::resolve_manifest(&manifest.root, dependency)
+                .map_err(|error| format!("Rust dependency {name:?}: {error}"))?;
+            let root = cargo
+                .parent()
+                .ok_or("Cargo manifest has no parent")?
+                .to_owned();
+            protection.inputs.push(cargo);
+            protection.optional.push(root.join("Cargo.lock"));
+            protection.optional.push(root.join("bhasa-adapter.json"));
+            if !protection.roots.contains(&root) {
+                protection.roots.push(root);
+            }
+        }
+    }
+    Ok(protection)
 }
 
 fn report_source_diagnostics(
@@ -708,6 +761,13 @@ fn build_with_toolchain(
     path: &str,
     toolchain: &Toolchain,
 ) -> Result<i32, String> {
+    if !options.object {
+        crate::rust_deps::preflight(&options.manifests)?;
+    }
+    let mut inputs = source_inputs(options)?;
+    if let Some(output) = &options.output {
+        validate_output(output, &inputs)?;
+    }
     if !options.object && checked.is_some_and(|checked| !checked.signatures.contains_key("main")) {
         return Err("cannot link an executable without a main function; add def main() or use --emit object".into());
     }
@@ -749,8 +809,10 @@ fn build_with_toolchain(
             Ok(absolute)
         })
         .collect::<Result<Vec<_>, String>>()?;
+    inputs.inputs.extend(links.iter().cloned());
+    // Also check default destinations before Cargo can create cache/lock files.
+    validate_output(&output, &inputs)?;
     let mut rust_link_args = Vec::new();
-    let mut rust_roots = Vec::new();
     let rust_cache = options
         .manifests
         .iter()
@@ -781,7 +843,7 @@ fn build_with_toolchain(
                     links.push(archive);
                 }
             }
-            rust_roots.extend(built.protected_roots);
+            inputs.roots.extend(built.protected_roots);
             for argument in built.link_args {
                 if !rust_link_args.contains(&argument) {
                     rust_link_args.push(argument);
@@ -789,12 +851,8 @@ fn build_with_toolchain(
             }
         }
     }
-    let mut inputs = source_inputs(options);
-    inputs.extend(links.iter().map(PathBuf::as_path));
+    inputs.inputs.extend(links.iter().cloned());
     let destination = prepare_output(&output, &inputs)?;
-    if rust_roots.iter().any(|root| destination.starts_with(root)) {
-        return Err(format!("output '{}' is inside a Rust dependency source directory; choose a build directory outside dependency sources", destination.display()));
-    }
     let parent = destination
         .parent()
         .ok_or("output must have a parent directory")?;
@@ -1160,22 +1218,111 @@ fn exit_code(status: ExitStatus) -> i32 {
     1
 }
 
-/// Keep the output in a canonical parent, and never overwrite an input path.
-fn prepare_output(output: &Path, inputs: &[&Path]) -> Result<PathBuf, String> {
+/// Resolve existing symlinks and normalize missing suffixes without creating paths.
+/// A dangling symlink can still name a reserved file that does not exist yet.
+fn resolve_output_path(path: &Path) -> Result<PathBuf, String> {
+    fn resolve(path: &Path, depth: usize) -> Result<PathBuf, String> {
+        if depth >= 40 {
+            return Err(format!(
+                "too many symlinks in output/input path '{}'",
+                path.display()
+            ));
+        }
+        let absolute = if path.is_absolute() {
+            path.to_owned()
+        } else {
+            std::env::current_dir()
+                .map_err(|error| error.to_string())?
+                .join(path)
+        };
+        let mut resolved = PathBuf::new();
+        let mut components = absolute.components();
+        while let Some(component) = components.next() {
+            match component {
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    resolved.pop();
+                }
+                Component::Prefix(_) | Component::RootDir => resolved.push(component.as_os_str()),
+                Component::Normal(name) => {
+                    resolved.push(name);
+                    match fs::symlink_metadata(&resolved) {
+                        Ok(metadata) if metadata.file_type().is_symlink() => {
+                            let target = fs::read_link(&resolved).map_err(|error| {
+                                format!("cannot inspect '{}': {error}", resolved.display())
+                            })?;
+                            let mut remaining = if target.is_absolute() {
+                                target
+                            } else {
+                                resolved
+                                    .parent()
+                                    .ok_or("symlink has no parent")?
+                                    .join(target)
+                            };
+                            remaining.extend(components);
+                            return resolve(&remaining, depth + 1);
+                        }
+                        Ok(metadata)
+                            if !metadata.is_dir() && components.clone().next().is_some() =>
+                        {
+                            return Err(format!(
+                                "output/input parent '{}' is not a directory",
+                                resolved.display()
+                            ));
+                        }
+                        Ok(_) => {}
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                        Err(error) => {
+                            return Err(format!("cannot inspect '{}': {error}", resolved.display()))
+                        }
+                    }
+                }
+            }
+        }
+        Ok(resolved)
+    }
+    resolve(path, 0)
+}
+
+fn absolute_lexical(path: &Path) -> Result<PathBuf, String> {
+    let absolute = if path.is_absolute() {
+        path.to_owned()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| error.to_string())?
+            .join(path)
+    };
+    let mut result = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                result.pop();
+            }
+            _ => result.push(component.as_os_str()),
+        }
+    }
+    Ok(result)
+}
+
+/// Check before mkdir, after parent canonicalization, and again at publication.
+fn prepare_output(output: &Path, inputs: &OutputProtection) -> Result<PathBuf, String> {
     let filename = output
         .file_name()
         .ok_or_else(|| format!("invalid output path '{}'", output.display()))?;
+    validate_output(output, inputs)?;
     let parent = output
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent).map_err(|error| {
+    let parent = resolve_output_path(parent)?;
+    fs::create_dir_all(&parent).map_err(|error| {
         format!(
             "cannot create output directory '{}': {error}",
             parent.display()
         )
     })?;
-    let destination = fs::canonicalize(parent)
+    let destination = fs::canonicalize(&parent)
         .map_err(|error| {
             format!(
                 "cannot resolve output directory '{}': {error}",
@@ -1187,12 +1334,30 @@ fn prepare_output(output: &Path, inputs: &[&Path]) -> Result<PathBuf, String> {
     Ok(destination)
 }
 
-fn validate_output(output: &Path, inputs: &[&Path]) -> Result<(), String> {
+fn validate_output(output: &Path, inputs: &OutputProtection) -> Result<(), String> {
+    let lexical = absolute_lexical(output)?;
+    let resolved = resolve_output_path(output)?;
     if output.is_dir() {
         return Err(format!("output '{}' is a directory", output.display()));
     }
-    for input in inputs {
-        if same_file(output, input)? {
+    for root in &inputs.roots {
+        let current = resolve_output_path(root)?;
+        if lexical.starts_with(root)
+            || resolved.starts_with(root)
+            || resolved.starts_with(&current)
+            || path_has_parent(&lexical, root)?
+            || path_has_parent(&resolved, root)?
+        {
+            return Err(format!("output '{}' is inside a Rust dependency source directory; choose a build directory outside dependency sources", output.display()));
+        }
+    }
+    for (input, optional) in inputs
+        .inputs
+        .iter()
+        .map(|path| (path, false))
+        .chain(inputs.optional.iter().map(|path| (path, true)))
+    {
+        if same_file(output, input, optional)? {
             return Err(format!(
                 "refusing to overwrite input '{}' with output '{}'",
                 input.display(),
@@ -1200,17 +1365,96 @@ fn validate_output(output: &Path, inputs: &[&Path]) -> Result<(), String> {
             ));
         }
     }
+    reject_rust_source_aliases(output, &inputs.roots)?;
     Ok(())
 }
 
-fn same_file(left: &Path, right: &Path) -> Result<bool, String> {
-    let right_path = fs::canonicalize(right)
-        .map_err(|error| format!("cannot resolve input '{}': {error}", right.display()))?;
-    if left == right_path {
+/// Directory identities cover case-insensitive filesystems whose realpath keeps
+/// the requested spelling, including a missing suffix below an existing root.
+fn same_directory(left: &Path, right: &Path) -> Result<bool, String> {
+    let left_meta = match fs::metadata(left) {
+        Ok(metadata) if metadata.is_dir() => metadata,
+        Ok(_) => return Ok(false),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(format!(
+                "cannot inspect directory '{}': {error}",
+                left.display()
+            ))
+        }
+    };
+    let right_meta = fs::metadata(right)
+        .map_err(|error| format!("cannot inspect directory '{}': {error}", right.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok(right_meta.is_dir()
+            && left_meta.dev() == right_meta.dev()
+            && left_meta.ino() == right_meta.ino())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (left_meta, right_meta);
+        Ok(fs::canonicalize(left).map_err(|error| error.to_string())?
+            == fs::canonicalize(right).map_err(|error| error.to_string())?)
+    }
+}
+
+fn path_has_parent(path: &Path, root: &Path) -> Result<bool, String> {
+    for ancestor in path.ancestors().skip(1) {
+        if same_directory(ancestor, root)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn same_file(left: &Path, right: &Path, optional: bool) -> Result<bool, String> {
+    // Reserved names are ASCII. Also reserve case variants prospectively so
+    // creating BHASA.LOCK cannot occupy bhasa.lock on a case-insensitive disk.
+    if optional
+        && left
+            .file_name()
+            .and_then(|name| name.to_str())
+            .zip(right.file_name().and_then(|name| name.to_str()))
+            .is_some_and(|(left, right)| left.eq_ignore_ascii_case(right))
+        && same_directory(
+            left.parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(Path::new(".")),
+            right
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(Path::new(".")),
+        )?
+    {
         return Ok(true);
     }
-    let left_path = match fs::canonicalize(left) {
-        Ok(path) => path,
+    let right_path = if optional {
+        resolve_output_path(right)?
+    } else {
+        fs::canonicalize(right)
+            .map_err(|error| format!("cannot resolve input '{}': {error}", right.display()))?
+    };
+    if absolute_lexical(left)? == absolute_lexical(right)?
+        || resolve_output_path(left)? == right_path
+    {
+        return Ok(true);
+    }
+    // Retain canonical equality for platforms without inode metadata.
+    match fs::canonicalize(left) {
+        Ok(left_path) if left_path == right_path => return Ok(true),
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!(
+                "cannot resolve output '{}': {error}",
+                left.display()
+            ))
+        }
+    }
+    let left_meta = match fs::metadata(left) {
+        Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
         Err(error) => {
             return Err(format!(
@@ -1219,28 +1463,206 @@ fn same_file(left: &Path, right: &Path) -> Result<bool, String> {
             ))
         }
     };
-    if left_path == right_path {
-        return Ok(true);
-    }
+    let right_meta = match fs::metadata(right) {
+        Ok(metadata) => metadata,
+        Err(error) if optional && error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(format!(
+                "cannot inspect input '{}': {error}",
+                right.display()
+            ))
+        }
+    };
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        let left_meta = fs::metadata(&left_path).map_err(|error| error.to_string())?;
-        let right_meta = fs::metadata(&right_path).map_err(|error| error.to_string())?;
         Ok(left_meta.dev() == right_meta.dev() && left_meta.ino() == right_meta.ino())
     }
     #[cfg(not(unix))]
+    {
+        let _ = (left_meta, right_meta);
+        Ok(false)
+    }
+}
+
+/// Discover source aliases and hardlinks in one bounded, read-only walk. A
+/// source symlink can refer outside the crate even when the output is absent
+/// or singly linked, so every protected root participates in every validation.
+fn reject_rust_source_aliases(output: &Path, roots: &[PathBuf]) -> Result<(), String> {
+    reject_rust_source_aliases_with_limit(output, roots, 100_000)
+}
+
+fn reject_rust_source_aliases_with_limit(
+    output: &Path,
+    roots: &[PathBuf],
+    limit: usize,
+) -> Result<(), String> {
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
+    let output_path = resolve_output_path(output)?;
+    let output_metadata = match fs::metadata(output) {
+        Ok(metadata) => Some(metadata),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(format!(
+                "cannot inspect output '{}': {error}",
+                output.display()
+            ))
+        }
+    };
+    let aliases = |input: &Path| {
+        format!("output '{}' aliases Rust dependency source '{}'; choose an output outside dependency sources", output.display(), input.display())
+    };
+    let mut pending = roots.to_vec();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut count = 0;
+    while let Some(directory) = pending.pop() {
+        let metadata = fs::metadata(&directory).map_err(|error| {
+            format!(
+                "cannot inspect Rust source '{}': {error}",
+                directory.display()
+            )
+        })?;
+        #[cfg(unix)]
+        let identity = (metadata.dev(), metadata.ino());
+        #[cfg(not(unix))]
+        let identity = {
+            let _ = metadata;
+            fs::canonicalize(&directory).map_err(|error| error.to_string())?
+        };
+        if !seen.insert(identity) {
+            continue;
+        }
+        for entry in fs::read_dir(&directory).map_err(|error| {
+            format!(
+                "cannot inspect Rust source '{}': {error}",
+                directory.display()
+            )
+        })? {
+            count += 1;
+            if count > limit {
+                return Err(format!("cannot safely check output aliases: Rust source traversal exceeds {limit} entries"));
+            }
+            let entry = entry.map_err(|error| error.to_string())?;
+            let path = entry.path();
+            let kind = entry.file_type().map_err(|error| error.to_string())?;
+            let target = if kind.is_symlink() {
+                // Also resolves nested aliases and fails closed on link cycles.
+                resolve_output_path(&path)?
+            } else {
+                path.clone()
+            };
+            let input = match fs::metadata(&target) {
+                Ok(metadata) => metadata,
+                Err(error) if kind.is_symlink() && error.kind() == io::ErrorKind::NotFound => {
+                    // A dangling link does not tell us whether its future target
+                    // is a file or directory. Protect both, including ancestors
+                    // whose creation as files would obstruct that target.
+                    if missing_source_may_overlap(&output_path, &target)? {
+                        return Err(aliases(&path));
+                    }
+                    continue;
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "cannot inspect Rust source '{}': {error}",
+                        path.display()
+                    ))
+                }
+            };
+            if input.is_dir() {
+                if kind.is_symlink()
+                    && (output_path.starts_with(&target) || path_has_parent(&output_path, &target)?)
+                {
+                    return Err(aliases(&path));
+                }
+                pending.push(target);
+                continue;
+            }
+            #[cfg(unix)]
+            let matches = output_metadata
+                .as_ref()
+                .is_some_and(|output| input.dev() == output.dev() && input.ino() == output.ino());
+            #[cfg(not(unix))]
+            let matches = {
+                let _ = &output_metadata;
+                same_file(output, &target, false)?
+            };
+            if matches {
+                return Err(aliases(&path));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Compare a missing target below its nearest existing directory by identity.
+/// ASCII case variants are conservatively equivalent on every filesystem. If
+/// a missing component has non-ASCII spelling, treat the rest as ambiguous
+/// rather than guessing filesystem Unicode folding/normalization rules.
+fn missing_source_may_overlap(output: &Path, target: &Path) -> Result<bool, String> {
+    let mut anchor = target;
+    loop {
+        match fs::metadata(anchor) {
+            Ok(metadata) if metadata.is_dir() => break,
+            Ok(_) => {
+                return Err(format!(
+                    "Rust source parent '{}' is not a directory",
+                    anchor.display()
+                ))
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                anchor = anchor
+                    .parent()
+                    .ok_or("Rust source target has no existing parent")?;
+            }
+            Err(error) => {
+                return Err(format!(
+                    "cannot inspect Rust source '{}': {error}",
+                    anchor.display()
+                ))
+            }
+        }
+    }
+    let suffix = target
+        .strip_prefix(anchor)
+        .map_err(|error| error.to_string())?;
+    for ancestor in output.ancestors() {
+        if !same_directory(ancestor, anchor)? {
+            continue;
+        }
+        let output_suffix = output
+            .strip_prefix(ancestor)
+            .map_err(|error| error.to_string())?;
+        for (left, right) in output_suffix.components().zip(suffix.components()) {
+            let (Some(left), Some(right)) = (left.as_os_str().to_str(), right.as_os_str().to_str())
+            else {
+                return Ok(true);
+            };
+            if !left.is_ascii() || !right.is_ascii() {
+                return Ok(true);
+            }
+            if !left.eq_ignore_ascii_case(right) {
+                return Ok(false);
+            }
+        }
+        // Equal, ancestor or descendant paths could occupy the target.
+        return Ok(true);
+    }
     Ok(false)
 }
 
-fn publish_artifact(artifact: &Path, destination: &Path, inputs: &[&Path]) -> Result<(), String> {
-    // Check again after Clang finishes, before replacing an existing output.
+fn publish_artifact(
+    artifact: &Path,
+    destination: &Path,
+    inputs: &OutputProtection,
+) -> Result<(), String> {
     validate_output(destination, inputs)?;
     fs::rename(artifact, destination)
         .map_err(|error| format!("cannot save output '{}': {error}", destination.display()))
 }
 
-fn write_artifact(output: &Path, bytes: &[u8], inputs: &[&Path]) -> Result<(), String> {
+fn write_artifact(output: &Path, bytes: &[u8], inputs: &OutputProtection) -> Result<(), String> {
     let destination = prepare_output(output, inputs)?;
     let temporary = TemporaryDirectory::new(
         destination
@@ -1532,10 +1954,25 @@ mod tests {
         let output = temporary.path.join("nested/result.ll");
         fs::write(&source, "source").unwrap();
         fs::write(&link, "link").unwrap();
-        assert!(write_artifact(&source, b"changed", &[&source]).is_err());
-        assert!(write_artifact(&link, b"changed", &[&source, &link]).is_err());
-        write_artifact(&output, b"first", &[&source, &link]).unwrap();
-        write_artifact(&output, b"second", &[&source, &link]).unwrap();
+        assert!(write_artifact(&source, b"changed", &OutputProtection::files(&[&source])).is_err());
+        assert!(write_artifact(
+            &link,
+            b"changed",
+            &OutputProtection::files(&[&source, &link])
+        )
+        .is_err());
+        write_artifact(
+            &output,
+            b"first",
+            &OutputProtection::files(&[&source, &link]),
+        )
+        .unwrap();
+        write_artifact(
+            &output,
+            b"second",
+            &OutputProtection::files(&[&source, &link]),
+        )
+        .unwrap();
         assert_eq!(fs::read(&output).unwrap(), b"second");
         assert_eq!(fs::read(&source).unwrap(), b"source");
         assert_eq!(fs::read(&link).unwrap(), b"link");
@@ -1553,9 +1990,174 @@ mod tests {
         fs::write(&source, "source").unwrap();
         symlink(&source, &symlink_path).unwrap();
         fs::hard_link(&source, &hardlink_path).unwrap();
-        assert!(write_artifact(&symlink_path, b"changed", &[&source]).is_err());
-        assert!(write_artifact(&hardlink_path, b"changed", &[&source]).is_err());
+        assert!(write_artifact(
+            &symlink_path,
+            b"changed",
+            &OutputProtection::files(&[&source])
+        )
+        .is_err());
+        assert!(write_artifact(
+            &hardlink_path,
+            b"changed",
+            &OutputProtection::files(&[&source])
+        )
+        .is_err());
         assert_eq!(fs::read(&source).unwrap(), b"source");
+    }
+
+    #[test]
+    fn output_guard_reserves_missing_files_and_rejects_before_mkdir() {
+        let directory = TemporaryDirectory::new(&std::env::temp_dir()).unwrap();
+        let root = directory.path.join("adapter");
+        fs::create_dir(&root).unwrap();
+        let root = fs::canonicalize(root).unwrap();
+        let inputs = OutputProtection {
+            optional: vec![
+                directory.path.join("bhasa.lock"),
+                root.join("bhasa-adapter.json"),
+            ],
+            roots: vec![root.clone()],
+            ..OutputProtection::default()
+        };
+        assert!(prepare_output(&directory.path.join("bhasa.lock"), &inputs).is_err());
+        assert!(prepare_output(&root.join("new/deep/artifact"), &inputs).is_err());
+        assert!(!root.join("new").exists());
+        write_artifact(&directory.path.join("output/result.ll"), b"valid", &inputs).unwrap();
+        assert_eq!(
+            fs::read(directory.path.join("output/result.ll")).unwrap(),
+            b"valid"
+        );
+        assert!(!directory.path.join("bhasa.lock").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn output_guard_rechecks_new_aliases_before_publication() {
+        use std::os::unix::fs::symlink;
+        let directory = TemporaryDirectory::new(&std::env::temp_dir()).unwrap();
+        let lock = directory.path.join("bhasa.lock");
+        let inputs = OutputProtection {
+            optional: vec![lock.clone()],
+            ..OutputProtection::default()
+        };
+        let destination = prepare_output(&directory.path.join("output.ll"), &inputs).unwrap();
+        let artifact = directory.path.join("artifact.ll");
+        fs::write(&artifact, b"new output").unwrap();
+        fs::write(&lock, b"lock contents").unwrap();
+        symlink(&lock, &destination).unwrap();
+        assert!(publish_artifact(&artifact, &destination, &inputs).is_err());
+        fs::remove_file(&destination).unwrap();
+        fs::hard_link(&lock, &destination).unwrap();
+        assert!(publish_artifact(&artifact, &destination, &inputs).is_err());
+        assert_eq!(fs::read(&lock).unwrap(), b"lock contents");
+        assert_eq!(fs::read(&artifact).unwrap(), b"new output");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn output_guard_bounds_source_alias_search_without_trusting_cache_tags() {
+        let directory = TemporaryDirectory::new(&std::env::temp_dir()).unwrap();
+        let root = directory.path.join("adapter");
+        let target = root.join("target");
+        fs::create_dir_all(&target).unwrap();
+        let source = target.join("source.rs");
+        fs::write(&source, b"source").unwrap();
+        let alias = directory.path.join("output");
+        fs::hard_link(&source, &alias).unwrap();
+        let roots = vec![root.clone()];
+        assert!(reject_rust_source_aliases_with_limit(&alias, &roots, 10)
+            .unwrap_err()
+            .contains("aliases Rust dependency source"));
+        fs::write(target.join("CACHEDIR.TAG"), b"invalid signature").unwrap();
+        assert!(reject_rust_source_aliases_with_limit(&alias, &roots, 10).is_err());
+        fs::write(
+            target.join("CACHEDIR.TAG"),
+            b"Signature: 8a477f597d28d172789f06886806bc55\n# disposable\n",
+        )
+        .unwrap();
+        // A tag cannot establish that Cargo has no source inputs here.
+        assert!(reject_rust_source_aliases_with_limit(&alias, &roots, 10)
+            .unwrap_err()
+            .contains("aliases Rust dependency source"));
+        // The limit still fails closed for unrelated linked outputs, rather than
+        // claiming that unvisited source files cannot alias the output.
+        fs::write(root.join("input.rs"), b"input").unwrap();
+        assert!(reject_rust_source_aliases_with_limit(&alias, &roots, 1)
+            .unwrap_err()
+            .contains("exceeds 1 entries"));
+        // Direct outputs into the protected tree are rejected before mkdir.
+        let inputs = OutputProtection {
+            roots,
+            ..OutputProtection::default()
+        };
+        assert!(prepare_output(&target.join("new/output"), &inputs).is_err());
+        assert!(!target.join("new").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn output_guard_resolves_dangling_symlinks_and_rejects_invalid_parents() {
+        use std::os::unix::fs::symlink;
+        let directory = TemporaryDirectory::new(&std::env::temp_dir()).unwrap();
+        let root = fs::canonicalize(&directory.path).unwrap();
+        let missing = root.join("bhasa.lock");
+        let alias = root.join("alias");
+        symlink(&missing, &alias).unwrap();
+        let inputs = OutputProtection {
+            optional: vec![missing],
+            ..OutputProtection::default()
+        };
+        assert!(prepare_output(&alias, &inputs).is_err());
+        let ordinary = root.join("ordinary");
+        fs::write(&ordinary, b"file").unwrap();
+        assert!(prepare_output(&ordinary.join("../created/output"), &inputs).is_err());
+        assert!(!root.join("created").exists());
+        symlink("loop", root.join("loop")).unwrap();
+        assert!(resolve_output_path(&root.join("loop"))
+            .unwrap_err()
+            .contains("too many symlinks"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn output_guard_source_walk_deduplicates_directory_cycles_and_bounds_missing_outputs() {
+        use std::os::unix::fs::symlink;
+        let directory = TemporaryDirectory::new(&std::env::temp_dir()).unwrap();
+        let root = directory.path.join("adapter");
+        fs::create_dir_all(root.join("real")).unwrap();
+        fs::write(root.join("real/lib.rs"), b"source").unwrap();
+        symlink("real", root.join("one")).unwrap();
+        symlink("real", root.join("two")).unwrap();
+        symlink("..", root.join("real/back")).unwrap();
+        let output = directory.path.join("missing/output.ll");
+        let roots = vec![root];
+        reject_rust_source_aliases_with_limit(&output, &roots, 5).unwrap();
+        assert!(reject_rust_source_aliases_with_limit(&output, &roots, 4)
+            .unwrap_err()
+            .contains("exceeds 4 entries"));
+        assert!(!directory.path.join("missing").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn output_guard_rechecks_source_aliases_added_before_publication() {
+        use std::os::unix::fs::symlink;
+        let directory = TemporaryDirectory::new(&std::env::temp_dir()).unwrap();
+        let root = directory.path.join("adapter");
+        fs::create_dir(&root).unwrap();
+        let inputs = OutputProtection {
+            roots: vec![root.clone()],
+            ..OutputProtection::default()
+        };
+        let output = prepare_output(&directory.path.join("result.ll"), &inputs).unwrap();
+        let artifact = directory.path.join("artifact.ll");
+        fs::write(&artifact, b"artifact").unwrap();
+        symlink(&output, root.join("lib.rs")).unwrap();
+        assert!(publish_artifact(&artifact, &output, &inputs)
+            .unwrap_err()
+            .contains("aliases Rust dependency source"));
+        assert!(!output.exists());
+        assert_eq!(fs::read(&artifact).unwrap(), b"artifact");
     }
 
     #[test]
@@ -1580,7 +2182,7 @@ mod tests {
         let output = temporary.path.join("public-output");
         fs::write(&artifact, "native program").unwrap();
         let retained = retain_for_run(&artifact, &temporary.path).unwrap();
-        publish_artifact(&artifact, &output, &[]).unwrap();
+        publish_artifact(&artifact, &output, &OutputProtection::default()).unwrap();
         fs::write(&output, "unrelated cross-target program").unwrap();
         assert_eq!(fs::read_to_string(retained).unwrap(), "native program");
     }

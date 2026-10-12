@@ -1,0 +1,24 @@
+import "@std"
+def main()->int {
+ var source=buffer("Aé中🙂")
+ var value=text_from_bytes(source)
+ set(source,0,88)
+ if value.count()!=4 or value.byte_count()!=10 or !same(value.bytes(),"Aé中🙂"){return 1}
+ var detached=value.bytes();set(detached,0,255)
+ if !value.valid() or value.codepoint(0)!=65 {return 2}
+ var copied=value;value.append(text("!"));value.replace(text("new"))
+ if !same(copied.bytes(),"Aé中🙂") or !same(value.bytes(),"new"){return 3}
+ value.clear();if value.count()!=0 or value.byte_count()!=0{return 4}
+ var piece=copied.part(1,2)
+ var status=piece.append_codepoint(0);if status!=0 or piece.count()!=3 or piece.byte_count()!=6{return 5}
+ var before=piece.bytes();status=piece.append_codepoint(55296)
+ if status==0 or !same(before,piece.bytes()){return 6}
+ match text_decode(detached){case ResultText.ok(t){return 7}case ResultText.error(e){if !same(e.bytes(),"invalid UTF-8"){return 8}}}
+ var temporary=text("temporary").bytes();if !same(temporary,"temporary"){return 9}
+ var list=string_list();list.push(copied);var extracted=list.get(0);extracted.clear()
+ if !same(list.get(0).bytes(),"Aé中🙂"){return 10}
+ match json_quote(copied){case ResultText.ok(t){if !same(t.bytes(),"\"Aé中🙂\""){return 11}}case ResultText.error(e){return 12}}
+ match json_parse(buffer("\"hé\"")){case JsonResult.ok(d){match d.string(0){case ResultText.ok(t){if !same(t.bytes(),"hé"){return 13}}case ResultText.error(e){return 14}}}case JsonResult.error(e){return 15}}
+ match http_parse_head(buffer("GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n")){case HttpResult.ok(r){if !same(r.path.bytes(),"/health"){return 16}}case HttpResult.error(e){return 17}}
+ print("private Text storage passed");return 0
+}

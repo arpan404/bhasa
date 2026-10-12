@@ -1,87 +1,93 @@
 # Compiler integration status
 
-Local pending-result obligations are integrated and verified on ARM64 macOS.
-Immutable-binding evidence is archived in [integration-immutable.md](integration-immutable.md),
-and typed-error evidence in [integration-errors.md](integration-errors.md).
-The user authorized remaining backlog implementation, dedicated chats, progress
-commits and pushes. This report covers one bounded increment, not the full language.
+Local package locks, scalar adapter review metadata, checked signature help and
+semantic tokens, protected compiler outputs and private standard-library storage
+are integrated and verified on ARM64 macOS. The prior local Result-obligation
+report is preserved in [integration-failures.md](integration-failures.md).
+This report covers a bounded increment; the full [backlog](../../todo.md) remains open.
 
 ## Delivered
 
-Both frontends reject result-shaped local values left pending at reachable scope,
-iteration or function exits, return, break/continue and overwrite. Direct exhaustive
-match, direct return and whole-initializer try discharge their named operand.
-Copies create separate obligations. Every continuing branch must handle its values;
-loops preserve the outer pre-loop state because they may run zero times. Result
-assignment to an outer binding inside a loop rejects conservatively. Try's implicit
-error return checks all other live results.
+Optional version-one `bhasa.lock` pins the selected entry and loaded local graph
+with source and raw manifest checksums. Explicit create/update/check commands
+are bounded, deterministic and read-only unless an update is requested. Normal
+compilation and inspection require the exact pinned entry. Test/editor loaders
+verify the primary disk graph before admitting their supported roots or overlays.
+Requested package paths retain their root authority separately from canonical
+source identity. Workspace and registry resolution remain outside this slice.
 
-The shape remains exactly two one-payload ok/error variants, with resolved nominal
-payload types. Parameters, aggregate contents, directly nested arguments,
-interprocedural handling summaries and assigned scalar statuses remain outside
-this slice. Passing a bound opaque private result to a public handler does not
-discharge it. [The error guide](../errors.md) describes this compatibility limit.
-Fatal traps remain uncatchable and do not unwind. No Rust-equivalent safety claim
-is made.
+Optional `bhasa-adapter.json` records source-bound scalar C-ABI review claims and
+generates declarations. All adapters are validated before build tools or caches
+are touched. The inspector reports `no_gc_proven=false` and
+`worker_extern_allowed=false`: metadata is not a transitive dependency proof or
+permission to call foreign functions from workers. Legacy trusted scalar adapters
+remain supported. Rich ownership-aware foreign ABI work stays open.
 
-Rust reports S037 and rechecks the obligation pass at public LLVM emission, including
-mutated checked programs. Native BH221 uses local field 8 separately from ownership,
-task metadata and immutable field 7. Scanner/type/runtime ABIs are unchanged.
-Existing ordinary checker, private-member and task/foreign call-graph errors retain
-their rules and precedence. Imported generic diagnostics preserve original files,
-Unicode/CRLF byte positions and offset-free messages.
+Compiler outputs cannot overwrite graph locks, manifests, adapter metadata or
+Rust source trees. Checks follow directory/file symlinks, including external and
+dangling targets, with bounded traversal and fail-closed uncertainty. Validation
+runs before tools, directory creation and final replacement. This is not a
+transaction against a hostile filesystem changing concurrently.
 
-Owned fixtures now handle original results while retaining copy/mutation assertions.
-Two negative worker fixtures handle their joined result to isolate the original
-BH209 rule. The contextual variable named try fixture handles its own result before
-assertion returns. No check was disabled to migrate fixtures. Independent review
-found no further defect in the integrated local contract.
+Checked signature help and semantic tokens use full validated graph identity,
+privacy and UTF-16 positions. Invalid graphs return no checked analysis.
+Duplicate canonical overlays refuse analysis and recover when the duplicate is
+closed. Saved stale or unpinned locked graphs cannot fall back to a fully checked
+local document. Only supported new documents receive local checked analysis.
+Sorted semantic positions use one forward cursor instead of repeated prefix scans.
+The editor adapter guards document versions, dependency snapshots and sessions.
+
+Text, collection and JSON backing storage is private. Public buffer/key getters
+return independent copies; mutations pass through supported validated APIs.
+Standard modules, TLS/HTTP helpers, examples and fixtures use those APIs. Runtime
+and compiler ownership ABIs remain unchanged.
 
 ## Verification
 
 | Gate | Evidence |
 | --- | --- |
-| Complete reference | 477 passed; build/verify-failures-reference-final.log |
-| Complete hybrid | 502 passed; build/verify-failures-hybrid-final.log |
-| Focused local obligations | Eight reference groups, ten native groups, opaque-result boundary and original-file diagnostics; tests/failure_use_reference.rs, failure_use_bhasa.rs and failure_use_opaque.rs |
-| Owned cleanup and AST enforcement | O0/O2 nonrecovering ASan/UBSan and atomic allocation counters in the error/immutable suites; corrupted checked-AST regression |
-| Independent review | 16 additional cases agree across both frontends, plus two original-file generic JSON probes; build/backlog/safety-errors/final-integration-review.md |
-| Compatibility | Existing previously valid standalone examples/fixtures show no new failures; build/verify-failures-existing-sources.json |
-| Editor | 59 LSP tests in each complete suite, 82 Node tests; build/verify-failures-editor-final.log |
-| Formatting/Clippy | Formatting and both configurations pass with warnings denied; build/verify-failures-fmt.log and clippy-reference.log / -hybrid.log |
-| Refreshed releases | Both compilers execute thirteen examples and five package tests; build/verify-failures-release-smoke.log |
-| Cache reuse | 32 example/test native hits and four unchanged Rust adapter runs with zero Rust compilations; two unchanged hybrid builds reuse the same archive with zero compilations |
-| A -> B -> C | Complete compiler LLVM and example outputs agree at build/selfhost/run.EbbPYcIp; build/verify-failures-selfhost.log |
+| Complete reference inventory | 558 passed: 506 completed groups before the app quit, then all 20 remaining targets rerun with 52 passes; build/verify-tools-reference-final.log, -resumed.log and -remaining-targets.json. Doc tests pass separately. |
+| Complete hybrid | 583 passed, exit zero; build/verify-tools-hybrid-final.log, run.2U78HPMj. |
+| Editor | 77 LSP groups in each compiler configuration and 93 Node client tests; build/verify-tools-editor-final.log. |
+| Package/output review | 62 independent frozen CLI assertions, including historical overwrite bypasses, external/dangling aliases, default run output and traversal limits; build/tools-output-guard/corrected-independent-review/report.md. |
+| Editor review | Nine frozen-binary graph/overlay scenarios and independent Unicode/CRLF/linear-position probes; build/tools-independent-review/final-editor/review.md and corrected-semantic/review.md. |
+| Storage/privacy/cleanup | Private-access rejection and O0/O2 copy/exit/try/partial-JSON/invalid-UTF8 cleanup with atomic allocation counts and nonrecovering ASan/UBSan; build/tools-storage-acceptance/README.md. |
+| Formatting/Clippy | Formatting and both configurations pass with warnings denied; build/verify-tools-fmt-final.log, -clippy-reference-final.log and -clippy-hybrid.log. |
+| Refreshed releases | Both compilers execute 13 examples and five package tests; build/verify-tools-release-smoke.log. |
+| Persistent caches | 32 unchanged native hits and four unchanged Rust adapter runs with zero compilations; two unchanged hybrid builds reuse the same archive with zero compilations. |
+| A -> B -> C | Complete compiler LLVM and example outputs agree at build/selfhost/run.lm8cj8Lt; build/verify-tools-selfhost.log. |
 
-The complete suites ran serially with two Cargo jobs and one test thread, with
-local loopback networking authorized. Matching archive key is
-cac13c4c9ed6aa67e5812514d19391babaca15f477783246d0c69d8bca43778e.
-Its scanner/emitter bytes exactly match build/hybrid/run.DeJuY1kd/frontend.bh.
-Release/source hashes are in build/verify-failures-artifact-identity.json.
-Both unchanged build logs verify the same archive and zero Compiling lines.
-Caches remain intact. All acceptance criteria for this local slice pass.
+The reference run was resumed after the app quit; its completed groups and
+remaining-target inventory are retained rather than presented as one uninterrupted
+command. Complete hybrid acceptance ran from start to finish. Cargo used at most
+two build jobs and tests one thread, with broad suites serialized and local
+loopback networking authorized.
 
-## Active backlog
+Matching scanner/emitter archive key:
+`ccabbe47a921bfdd320a4844960bfd84f5db48f3f5ae7d3b9013fdffdebff3ec`.
+Its source exactly matches the frozen seeds. Release/archive/source identities
+are in `build/verify-tools-artifact-identity.json`; 56 frozen source hashes remain
+unchanged. Both unchanged build logs confirm the same archive and zero Compiling
+lines. Caches were preserved. All scoped acceptance criteria pass.
 
-[todo.md](../../todo.md) keeps parameter/aggregate/interprocedural failure safety
-unchecked. The eight existing backlog chats continue under [backlog-lanes.md](backlog-lanes.md),
-with cursors in [backlog-state.json](backlog-state.json). All other changes are isolated
-until integrated and tested. Alias allocation/canonical-identity repairs pass
-independent review; editor alias metadata consumption is in progress. Package
-lock/FFI and signature/semantic-token drafts have corrected review findings and
-await integration. Private Text/collection/JSON storage and streaming-file drafts
-have independent runtime/privacy evidence but still need combined integration.
+## Remaining work
 
-Channel review found exponential shared-type traversal, prefix-only intrinsic
-authority and unauthenticated getter bodies. These are routed for correction
-before exposing source-level channels. The next ownership slice is ratified in
-[owned-bindings-milestone.md](owned-bindings-milestone.md), limited to synchronous
-buffer/ints transfer with explicit modes and conservative control-flow rules.
-It is not implemented or verified yet.
+Aliases and their editor metadata are isolated pending the reviewed nested nominal
+RHS correction. Owned buffer/ints transfer has host/native drafts and corrected
+match-payload/implicit-return cleanup evidence; actual combined integration is
+still required. Streaming files, typed network/process/TLS operations, local
+workspaces and server code actions remain isolated. TCP shared-owner copy policy
+passes independent review and awaits runtime integration. Channel source authority,
+bounded payload traversal and native manifest handoff require final review and
+native parity before exposure.
 
-Wasm policies/native objects and test-only Node fixtures do not establish a
-runnable compiled guest with no-GC production dependencies. A reviewed engine
-and guest compiler/linker remain real gates. Actual prior Metal/TCP/TLS checks
-pass; CUDA/Vulkan hardware, Linux/Windows execution and VS Code GUI remain
-unverified or gated. The remaining language, runtime, ecosystem, compiler
-performance and production acceptance backlog stays open.
+Local Result parameters, aggregate contents and interprocedural handling remain
+outside the current pending-result guarantee. Fatal traps remain uncatchable and
+do not unwind. No Rust-equivalent safety or complete language claim is made.
+
+The eight existing chats continue under [backlog-lanes.md](backlog-lanes.md), with
+cursors in [backlog-state.json](backlog-state.json). Actual Metal checks from prior
+increments remain evidence for their tested API only. CUDA/Vulkan hardware,
+Linux/Windows execution and VS Code GUI remain unverified or gated. Wasm Node
+probes are test tools; a reviewed no-GC engine and guest compiler/linker remain
+real production gates. No SDK was installed or registry/release published.

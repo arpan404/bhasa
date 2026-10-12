@@ -1,20 +1,29 @@
-# Text wraps UTF-8 bytes. Its public bytes field can be mutated; validate again
-# after raw byte edits. count/codepoint return -1 on invalid data. part traps on
-# malformed data or invalid scalar ranges. Indices count scalars, not graphemes.
+# Text owns valid UTF-8 bytes. Public byte extraction returns an independent
+# buffer copy. Indices count scalars, not graphemes; invalid ranges trap.
 struct Text {
-    bytes: buffer
+    private storage: buffer
 
-    def valid(self) -> bool { return utf8_valid(self.bytes) }
-    def count(self) -> int { return utf8_count(self.bytes) }
-    def codepoint(self, index: int) -> int { return utf8_get(self.bytes, index) }
+    def bytes(self) -> buffer { return self.storage }
+    def byte_count(self) -> int { return len(self.storage) }
+    def valid(self) -> bool { return utf8_valid(self.storage) }
+    def count(self) -> int { return utf8_count(self.storage) }
+    def codepoint(self, index: int) -> int { return utf8_get(self.storage, index) }
     def part(self, start: int, count: int) -> Text {
-        return Text(utf8_slice(self.bytes, start, count))
+        return Text(utf8_slice(self.storage, start, count))
     }
-    def equals(self, other: Text) -> bool { return same(self.bytes, other.bytes) }
-    def append(self, other: Text) { append(self.bytes, other.bytes) }
+    def equals(self, other: Text) -> bool { return same(self.storage, other.storage) }
+    def append(self, other: Text) { append(self.storage, other.storage) }
     def append_codepoint(self, scalar: int) -> int {
-        return utf8_append(self.bytes, scalar)
+        return utf8_append(self.storage, scalar)
     }
+    def replace(self, other: Text) { self.storage = other.storage }
+    def clear(self) { self.storage = buffer() }
 }
 
-def text(value: str) -> Text { return Text(buffer(value)) }
+# Checked constructor for bytes already expected to be valid UTF-8. Invalid
+# input traps through utf8_slice. Use text_decode for a returned failure instead.
+def text_from_bytes(bytes: buffer) -> Text {
+    return Text(utf8_slice(bytes, 0, utf8_count(bytes)))
+}
+
+def text(value: str) -> Text { return text_from_bytes(buffer(value)) }

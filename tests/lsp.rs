@@ -2952,3 +2952,839 @@ fn function_named_let_remains_navigable_and_rename_preserves_declaration_markers
     assert_eq!(changed, "# 🌍 let\r\ndef increment(value:int)->int{return value+1}\r\ndef main(){print(\"🌍 let\"); let answer = increment(41);print(answer)}\r\n");
     bhasa::check(&changed).unwrap();
 }
+
+fn signature_at(id: i64, uri: &str, source: &str, byte: usize) -> Value {
+    editor_request(id, "textDocument/signatureHelp", uri, source, byte)
+}
+fn signature_label(value: &Value) -> Option<&str> {
+    value
+        .get("signatures")?
+        .as_array()?
+        .first()?
+        .get("label")?
+        .as_str()
+}
+
+#[test]
+fn checked_signature_help_selects_nested_arguments_and_excludes_string_commas() {
+    let source = "def add(left: int, right: int) -> int { return left + right }\ndef use(text: str, value: int) {}\ndef main() { use(\"🌍, comma\", add(1, 2)) }\n";
+    let mut messages = start();
+    messages.push(open(URI, source, 1));
+    messages.push(signature_at(2, URI, source, source.find("2))").unwrap()));
+    messages.push(signature_at(3, URI, source, source.find("add(1").unwrap()));
+    messages.push(signature_at(4, URI, source, source.find("comma").unwrap()));
+    messages.push(signature_at(
+        5,
+        URI,
+        source,
+        source.find("use(text").unwrap() + 4,
+    ));
+    let output = exchange(messages);
+    assert_eq!(
+        signature_label(result(&output, 2)),
+        Some("def add(left: int, right: int) -> int")
+    );
+    assert_eq!(
+        result(&output, 2)
+            .get("activeParameter")
+            .and_then(Value::as_i64),
+        Some(1)
+    );
+    assert_eq!(
+        signature_label(result(&output, 3)),
+        Some("def use(text: str, value: int) -> void")
+    );
+    assert_eq!(
+        result(&output, 3)
+            .get("activeParameter")
+            .and_then(Value::as_i64),
+        Some(1)
+    );
+    assert_eq!(result(&output, 4), &Value::Null);
+    assert_eq!(result(&output, 5), &Value::Null);
+    let capability = result(&output, 1)
+        .get("capabilities")
+        .unwrap()
+        .get("signatureHelpProvider")
+        .unwrap();
+    assert_eq!(
+        capability.get("triggerCharacters"),
+        Some(&Value::Array(vec!["(".into(), ",".into()]))
+    );
+}
+
+#[test]
+fn checked_signature_help_handles_methods_generics_zero_args_and_checked_builtins() {
+    let source = "struct Entry { value: int; def plus(self, amount: int) -> int { return self.value + amount } }\ndef identity[T](value: T) -> T { return value }\ndef empty() {}\ndef main() { var entry = Entry(2); print(entry.plus(identity[int](3))); empty(); print(len(buffer(\"a\"))) }\n";
+    let mut messages = start();
+    messages.push(open(URI, source, 1));
+    messages.push(signature_at(
+        2,
+        URI,
+        source,
+        source.find("identity[int](3)").unwrap(),
+    ));
+    messages.push(signature_at(3, URI, source, source.find("3)))").unwrap()));
+    messages.push(signature_at(
+        4,
+        URI,
+        source,
+        source.rfind("empty()").unwrap() + 6,
+    ));
+    messages.push(signature_at(
+        5,
+        URI,
+        source,
+        source.find("buffer(\"a").unwrap(),
+    ));
+    let output = exchange(messages);
+    assert_eq!(
+        signature_label(result(&output, 2)),
+        Some("def plus(amount: int) -> int")
+    );
+    assert_eq!(
+        signature_label(result(&output, 3)),
+        Some("def identity(value: int) -> int")
+    );
+    assert_eq!(
+        signature_label(result(&output, 4)),
+        Some("def empty() -> void")
+    );
+    assert_eq!(
+        result(&output, 4)
+            .get("signatures")
+            .unwrap()
+            .as_array()
+            .unwrap()[0]
+            .get("parameters")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+    assert_eq!(
+        signature_label(result(&output, 5)),
+        Some("def len(arg1: buffer) -> int")
+    );
+    assert!(!result(&output, 3).to_string().contains("__bh"));
+}
+
+#[test]
+fn checked_signature_help_rechecks_unsaved_text_and_returns_null_for_invalid_graphs() {
+    let good = "def value(item: int) -> int { return item }\ndef main() { print(value(1)) }\n";
+    let changed = good
+        .replace("item: int", "item: float")
+        .replace("-> int", "-> float")
+        .replace("value(1)", "value(1.5)");
+    let bad = changed.replace("value(1.5)", "value(\"bad\")");
+    let incomplete = "def main() { print(";
+    let mut messages = start();
+    messages.push(open(URI, good, 1));
+    messages.push(signature_at(
+        2,
+        URI,
+        good,
+        good.find("value(1)").unwrap() + 6,
+    ));
+    messages.push(change(URI, &changed, 2));
+    messages.push(signature_at(
+        3,
+        URI,
+        &changed,
+        changed.find("value(1.5)").unwrap() + 6,
+    ));
+    messages.push(change(URI, &bad, 3));
+    messages.push(signature_at(
+        4,
+        URI,
+        &bad,
+        bad.find("value(\"bad").unwrap() + 6,
+    ));
+    messages.push(change(URI, incomplete, 4));
+    messages.push(signature_at(5, URI, incomplete, incomplete.len()));
+    let output = exchange(messages);
+    assert_eq!(
+        signature_label(result(&output, 2)),
+        Some("def value(item: int) -> int")
+    );
+    assert_eq!(
+        signature_label(result(&output, 3)),
+        Some("def value(item: float) -> float")
+    );
+    assert_eq!(result(&output, 4), &Value::Null);
+    assert_eq!(result(&output, 5), &Value::Null);
+}
+
+#[test]
+fn checked_signature_help_uses_imported_identity_and_unsaved_dependency_overlay() {
+    let workspace = Workspace::new("signature imports");
+    let library = "private def hidden(value: int) -> int { return value }\ndef convert(value: int) -> int { return hidden(value) }\n";
+    let source = "import \"library.bh\" as lib\ndef main() { print(lib.convert(2)) }\n";
+    let main = workspace.write("main.bh", source);
+    let library_path = workspace.write("library.bh", library);
+    let main_uri = file_uri(&main);
+    let library_uri = file_uri(&library_path);
+    let renamed = library
+        .replace("convert(value: int)", "convert(amount: int)")
+        .replace("hidden(value) }", "hidden(amount) }");
+    let mut messages = start();
+    messages.push(open(&main_uri, source, 1));
+    messages.push(signature_at(
+        2,
+        &main_uri,
+        source,
+        source.find("convert(2)").unwrap() + 8,
+    ));
+    messages.push(open(&library_uri, &renamed, 1));
+    messages.push(signature_at(
+        3,
+        &main_uri,
+        source,
+        source.find("convert(2)").unwrap() + 8,
+    ));
+    let private = source.replace("lib.convert", "lib.hidden");
+    messages.push(change(&main_uri, &private, 2));
+    messages.push(signature_at(
+        4,
+        &main_uri,
+        &private,
+        private.find("hidden(2)").unwrap() + 7,
+    ));
+    let output = exchange(messages);
+    assert_eq!(
+        signature_label(result(&output, 2)),
+        Some("def convert(value: int) -> int")
+    );
+    assert_eq!(
+        signature_label(result(&output, 3)),
+        Some("def convert(amount: int) -> int")
+    );
+    assert_eq!(result(&output, 4), &Value::Null);
+}
+
+#[test]
+fn checked_signature_help_peels_grouped_calls_and_ignores_nested_comment_commas() {
+    let source = "def add(left: int, right: int) -> int { return left + right }\ndef main() { print((add(1, # ignored , comma\n 2))) }\n";
+    let mut messages = start();
+    messages.push(open(URI, source, 1));
+    messages.push(signature_at(2, URI, source, source.find("2)))").unwrap()));
+    let output = exchange(messages);
+    assert_eq!(
+        signature_label(result(&output, 2)),
+        Some("def add(left: int, right: int) -> int")
+    );
+    assert_eq!(
+        result(&output, 2)
+            .get("activeParameter")
+            .and_then(Value::as_i64),
+        Some(1)
+    );
+}
+
+#[test]
+fn checked_signature_help_does_not_choose_a_concrete_instance_inside_a_generic_template() {
+    let source = "def identity[T](value: T) -> T { return value }\ndef wrap[T](value: T) -> T { return identity[T](value) }\ndef main() { print(wrap[int](1)); print(wrap[float](2.5)) }\n";
+    let mut messages = start();
+    messages.push(open(URI, source, 1));
+    messages.push(signature_at(
+        2,
+        URI,
+        source,
+        source.find("identity[T](value)").unwrap() + 12,
+    ));
+    let output = exchange(messages);
+    assert_eq!(result(&output, 2), &Value::Null);
+}
+
+#[test]
+fn checked_signature_help_handles_new_unsaved_file_uri_documents_before_and_after_save() {
+    let workspace = Workspace::new("signature new unsaved file");
+    let path = workspace.file("new.bh");
+    assert!(!path.exists());
+    let uri = format!("{}/new.bh", file_uri(workspace.path()));
+    let source =
+        "def add(left:int,right:int)->int{return left+right}\ndef main(){print(add(1,2))}\n";
+    let byte = source.find("2))").unwrap();
+    let mut before = start();
+    before.push(open(&uri, source, 1));
+    before.push(signature_at(2, &uri, source, byte));
+    before.push(editor_request(
+        3,
+        "textDocument/hover",
+        &uri,
+        source,
+        source.rfind("add(").unwrap(),
+    ));
+    let mut after = vec![
+        notification("textDocument/didSave", document_params(&uri)),
+        signature_at(4, &uri, source, byte),
+    ];
+    finish(&mut after);
+    let reader = SaveBetweenFrames {
+        before: Cursor::new(encode(&before)),
+        after: Cursor::new(encode(&after)),
+        save: Some((path.clone(), source.to_owned())),
+    };
+    let mut bytes = Vec::new();
+    assert_eq!(bhasa::lsp::serve(reader, &mut bytes), 0);
+    let output = decode(&bytes);
+    for id in [2, 4] {
+        assert_eq!(
+            signature_label(result(&output, id)),
+            Some("def add(left: int, right: int) -> int")
+        );
+        assert_eq!(
+            result(&output, id)
+                .get("activeParameter")
+                .and_then(Value::as_i64),
+            Some(1)
+        );
+    }
+    assert!(hover_text(result(&output, 3)).is_some_and(|text| text.contains("def add(")));
+    assert!(path.exists());
+}
+
+#[test]
+fn checked_signature_help_covers_externs_chained_receivers_collections_and_crlf_positions() {
+    let source = "extern def foreign(left:int,right:int)->int\r\nstruct Entry{value:int;def add(self,amount:int)->int{return self.value+amount}}\r\ndef make()->Entry{return Entry(2)}\r\ndef main(){print(\"🌍\");print(foreign(1,2));print(make().add(3));var list=List[Entry]();list.push(make());print(list.get(0).add(4));var map=Map[str,int]();map.put(\"x\",5)}\r\n";
+    let mut messages = start();
+    messages.push(open(URI, source, 1));
+    messages.push(signature_at(
+        2,
+        URI,
+        source,
+        source.find("2));print(make").unwrap(),
+    ));
+    messages.push(signature_at(
+        3,
+        URI,
+        source,
+        source.find("add(3)").unwrap() + 4,
+    ));
+    messages.push(signature_at(
+        4,
+        URI,
+        source,
+        source.find("add(4)").unwrap() + 4,
+    ));
+    messages.push(signature_at(
+        5,
+        URI,
+        source,
+        source.find("get(0)").unwrap() + 4,
+    ));
+    messages.push(signature_at(
+        6,
+        URI,
+        source,
+        source.find("put(\"x\",5)").unwrap() + 8,
+    ));
+    let output = exchange(messages);
+    assert_eq!(
+        signature_label(result(&output, 2)),
+        Some("def foreign(left: int, right: int) -> int")
+    );
+    assert_eq!(
+        result(&output, 2)
+            .get("activeParameter")
+            .and_then(Value::as_i64),
+        Some(1)
+    );
+    assert_eq!(
+        signature_label(result(&output, 3)),
+        Some("def add(amount: int) -> int")
+    );
+    assert_eq!(
+        signature_label(result(&output, 4)),
+        Some("def add(amount: int) -> int")
+    );
+    assert_eq!(
+        signature_label(result(&output, 5)),
+        Some("def get(arg1: int) -> Entry")
+    );
+    assert_eq!(
+        signature_label(result(&output, 6)),
+        Some("def put(arg1: str, arg2: int) -> void")
+    );
+    assert_eq!(
+        result(&output, 6)
+            .get("activeParameter")
+            .and_then(Value::as_i64),
+        Some(1)
+    );
+}
+
+fn semantic_request(id: i64, uri: &str) -> Value {
+    request(id, "textDocument/semanticTokens/full", document_params(uri))
+}
+fn decoded_semantic(value: &Value) -> Vec<(usize, usize, usize, usize, usize)> {
+    let data = value.get("data").unwrap().as_array().unwrap();
+    assert_eq!(data.len() % 5, 0);
+    let mut line = 0;
+    let mut character = 0;
+    data.as_chunks::<5>()
+        .0
+        .iter()
+        .map(|chunk| {
+            let values: Vec<_> = chunk
+                .iter()
+                .map(|value| usize::try_from(value.as_i64().unwrap()).unwrap())
+                .collect();
+            line += values[0];
+            character = if values[0] == 0 {
+                character + values[1]
+            } else {
+                values[1]
+            };
+            assert!(values[2] > 0);
+            assert!(values[3] < 11);
+            assert!(values[4] < 4);
+            (line, character, values[2], values[3], values[4])
+        })
+        .collect()
+}
+fn semantic_site(value: &Value, source: &str, byte: usize) -> Option<(usize, usize)> {
+    let at = source_position(source, byte);
+    let line = at.get("line").unwrap().as_i64().unwrap() as usize;
+    let character = at.get("character").unwrap().as_i64().unwrap() as usize;
+    decoded_semantic(value)
+        .into_iter()
+        .find(|site| site.0 == line && site.1 == character)
+        .map(|site| (site.3, site.4))
+}
+
+#[test]
+fn checked_semantic_tokens_distinguish_let_markers_binders_reads_and_calls() {
+    let source = "def let(value:int)->int{return value}\ndef main(){let answer=let(2);var let=1;print(let+answer)}\n";
+    let marker = source.find("let answer").unwrap();
+    let mut messages = start();
+    messages.push(open(URI, source, 1));
+    messages.push(semantic_request(2, URI));
+    messages.push(editor_request(3, "textDocument/hover", URI, source, marker));
+    let output = exchange(messages);
+    let tokens = result(&output, 2);
+    assert_eq!(
+        semantic_site(tokens, source, source.find("let(value").unwrap()),
+        Some((4, 1))
+    );
+    assert_eq!(
+        semantic_site(tokens, source, source.find("var let").unwrap() + 4),
+        Some((8, 1))
+    );
+    assert_eq!(semantic_site(tokens, source, marker), Some((9, 0)));
+    assert_eq!(
+        semantic_site(tokens, source, source.find("answer=").unwrap()),
+        Some((8, 3))
+    );
+    assert_eq!(
+        semantic_site(tokens, source, source.find("let(2)").unwrap()),
+        Some((4, 0))
+    );
+    assert_eq!(
+        semantic_site(tokens, source, source.find("let+answer").unwrap()),
+        Some((8, 0))
+    );
+    assert_eq!(
+        semantic_site(tokens, source, source.rfind("answer").unwrap()),
+        Some((8, 2))
+    );
+    assert_eq!(result(&output, 3), &Value::Null);
+    let provider = result(&output, 1)
+        .get("capabilities")
+        .unwrap()
+        .get("semanticTokensProvider")
+        .unwrap();
+    assert_eq!(provider.get("full"), Some(&Value::Bool(true)));
+    assert_eq!(provider.get("range"), Some(&Value::Bool(false)));
+}
+
+#[test]
+fn checked_semantic_tokens_keep_try_markers_separate_from_ordinary_try_names() {
+    let source = "enum R{ok(value:int);error(message:buffer)}\ndef try(value:R)->R{return value}\ndef run(input:R)->R{let try=try try(input);return R.ok(try)}\ndef main(){}\n";
+    let marker = source.find("try try(input)").unwrap();
+    let binder = source.find("let try=").unwrap() + 4;
+    let mut messages = start();
+    messages.push(open(URI, source, 1));
+    messages.push(semantic_request(2, URI));
+    messages.push(editor_request(3, "textDocument/hover", URI, source, marker));
+    let output = exchange(messages);
+    let tokens = result(&output, 2);
+    assert_eq!(
+        semantic_site(tokens, source, source.find("let try=").unwrap()),
+        Some((9, 0))
+    );
+    assert_eq!(semantic_site(tokens, source, binder), Some((8, 3)));
+    assert_eq!(semantic_site(tokens, source, marker), Some((9, 0)));
+    assert_eq!(semantic_site(tokens, source, marker + 4), Some((4, 0)));
+    assert_eq!(
+        semantic_site(tokens, source, source.find("R.ok(try)").unwrap() + 5),
+        Some((8, 2))
+    );
+    assert_eq!(result(&output, 3), &Value::Null);
+}
+
+#[test]
+fn checked_semantic_tokens_encode_utf16_crlf_and_mutability_of_shadowed_bindings() {
+    let source = "# 🌍 let\r\ndef main(){print(\"🌍 let\"); let let=1; if true {var let=2;print(let)} print(let)}\r\n";
+    let mut messages = start();
+    messages.push(open(URI, source, 1));
+    messages.push(semantic_request(2, URI));
+    let output = exchange(messages);
+    let tokens = result(&output, 2);
+    assert_eq!(
+        semantic_site(tokens, source, source.find("let let=").unwrap()),
+        Some((9, 0))
+    );
+    assert_eq!(
+        semantic_site(tokens, source, source.find("let=1").unwrap()),
+        Some((8, 3))
+    );
+    assert_eq!(
+        semantic_site(tokens, source, source.find("let=2").unwrap()),
+        Some((8, 1))
+    );
+    assert_eq!(
+        semantic_site(tokens, source, source.find("print(let)").unwrap() + 6),
+        Some((8, 0))
+    );
+    assert_eq!(
+        semantic_site(tokens, source, source.rfind("print(let)").unwrap() + 6),
+        Some((8, 2))
+    );
+    let sites = decoded_semantic(tokens);
+    assert!(sites.iter().all(|site| site.0 == 1));
+    for pair in sites.windows(2) {
+        assert!(pair[0].0 < pair[1].0 || pair[0].1 + pair[0].2 <= pair[1].1);
+    }
+    assert!(semantic_site(tokens, source, source.find("let\r\n").unwrap()).is_none());
+    assert!(semantic_site(tokens, source, source.find("let\"").unwrap()).is_none());
+}
+
+#[test]
+fn checked_semantic_tokens_classify_records_fields_methods_parameters_and_enums() {
+    let source = "struct Entry{value:int;def get(self,amount:int)->int{return self.value+amount}}\nenum Choice{item(value:int);empty}\ndef main(){let entry=Entry(1);print(entry.get(2));var choice=Choice.item(3);match choice{case Choice.item(value){print(value)}case Choice.empty{}}}\n";
+    let mut messages = start();
+    messages.push(open(URI, source, 1));
+    messages.push(semantic_request(2, URI));
+    let output = exchange(messages);
+    let tokens = result(&output, 2);
+    assert_eq!(
+        semantic_site(tokens, source, source.find("Entry{").unwrap()),
+        Some((1, 1))
+    );
+    assert_eq!(
+        semantic_site(tokens, source, source.find("value:int").unwrap()),
+        Some((6, 1))
+    );
+    assert_eq!(
+        semantic_site(tokens, source, source.find("get(self").unwrap()),
+        Some((5, 1))
+    );
+    assert_eq!(
+        semantic_site(tokens, source, source.find("amount:int").unwrap()),
+        Some((7, 1))
+    );
+    assert_eq!(
+        semantic_site(tokens, source, source.find("self.value").unwrap() + 5),
+        Some((6, 0))
+    );
+    assert_eq!(
+        semantic_site(tokens, source, source.find("Choice{").unwrap()),
+        Some((2, 1))
+    );
+    assert_eq!(
+        semantic_site(tokens, source, source.find("Choice.item(3)").unwrap() + 7),
+        Some((3, 0))
+    );
+}
+
+#[test]
+fn checked_semantic_tokens_follow_unsaved_changes_and_drop_invalid_graphs() {
+    let mutable = "def main(){var value=1;print(value)}\n";
+    let immutable = mutable.replace("var value", "let value");
+    let invalid = immutable.replace("print(value)", "missing(value)");
+    let mut messages = start();
+    messages.push(open(URI, mutable, 1));
+    messages.push(semantic_request(2, URI));
+    messages.push(change(URI, &immutable, 2));
+    messages.push(semantic_request(3, URI));
+    messages.push(change(URI, &invalid, 3));
+    messages.push(semantic_request(4, URI));
+    messages.push(change(URI, "def main(){let value=", 4));
+    messages.push(semantic_request(5, URI));
+    let output = exchange(messages);
+    assert_eq!(
+        semantic_site(result(&output, 2), mutable, mutable.rfind("value").unwrap()),
+        Some((8, 0))
+    );
+    assert_eq!(
+        semantic_site(
+            result(&output, 3),
+            &immutable,
+            immutable.rfind("value").unwrap()
+        ),
+        Some((8, 2))
+    );
+    assert!(decoded_semantic(result(&output, 4)).is_empty());
+    assert!(decoded_semantic(result(&output, 5)).is_empty());
+}
+
+#[test]
+fn checked_semantic_tokens_use_qualified_module_identity_without_highlighting_comments() {
+    let workspace = Workspace::new("semantic module");
+    let library = "def read(value:int)->int{return value}\n";
+    let source = "import \"library.bh\" as lib\ndef main(){# lib.read let\nprint(lib.read(1))}\n";
+    let main = workspace.write("main.bh", source);
+    workspace.write("library.bh", library);
+    let uri = file_uri(&main);
+    let mut messages = start();
+    messages.push(open(&uri, source, 1));
+    messages.push(semantic_request(2, &uri));
+    let output = exchange(messages);
+    let tokens = result(&output, 2);
+    assert_eq!(
+        semantic_site(tokens, source, source.find("as lib").unwrap() + 3),
+        Some((0, 1))
+    );
+    assert_eq!(
+        semantic_site(tokens, source, source.rfind("lib.read").unwrap()),
+        Some((0, 0))
+    );
+    assert_eq!(
+        semantic_site(tokens, source, source.rfind("lib.read").unwrap() + 4),
+        Some((4, 0))
+    );
+    assert!(semantic_site(tokens, source, source.find("lib.read").unwrap()).is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn checked_editor_tools_refuse_duplicate_canonical_document_aliases() {
+    let workspace = Workspace::new("editor-duplicate-aliases");
+    let disk = "def work(value:int)->int{return value}\ndef main(){print(work(2))}\n";
+    let real = workspace.write("z.bh", disk);
+    let alias = workspace.file("a.bh");
+    std::os::unix::fs::symlink("z.bh", &alias).unwrap();
+    let real_uri = file_uri(&real);
+    let alias_uri = path_uri(&workspace.path().canonicalize().unwrap().join("a.bh"));
+    let alpha = disk.replace("value", "alpha");
+    let bravo = disk.replace("value", "bravo");
+    let mut messages = start();
+    messages.push(open(&alias_uri, &alpha, 1));
+    messages.push(open(&real_uri, &bravo, 2));
+    for (id, uri, source) in [(2, &alias_uri, &alpha), (5, &real_uri, &bravo)] {
+        let call = source.find("work(2)").unwrap();
+        messages.push(signature_at(id, uri, source, call + 5));
+        messages.push(semantic_request(id + 1, uri));
+        messages.push(editor_request(
+            id + 2,
+            "textDocument/hover",
+            uri,
+            source,
+            call,
+        ));
+    }
+    messages.push(notification(
+        "textDocument/didClose",
+        document_params(&alias_uri),
+    ));
+    messages.push(signature_at(
+        8,
+        &real_uri,
+        &bravo,
+        bravo.find("work(2)").unwrap() + 5,
+    ));
+    messages.push(semantic_request(9, &real_uri));
+    let output = exchange(messages);
+    for id in [2, 4, 5, 7] {
+        assert_eq!(result(&output, id), &Value::Null);
+    }
+    for id in [3, 6] {
+        assert!(decoded_semantic(result(&output, id)).is_empty());
+    }
+    assert_eq!(
+        signature_label(result(&output, 8)),
+        Some("def work(bravo: int) -> int")
+    );
+    assert!(!decoded_semantic(result(&output, 9)).is_empty());
+    let importing = "import \"z.bh\" as lib\ndef main(){print(lib.work(2))}\n";
+    let main = workspace.write("main.bh", importing);
+    let main_uri = file_uri(&main);
+    let mut messages = start();
+    messages.push(open(&alias_uri, &alpha, 1));
+    messages.push(open(&real_uri, &bravo, 2));
+    messages.push(open(&main_uri, importing, 1));
+    messages.push(signature_at(
+        2,
+        &main_uri,
+        importing,
+        importing.find("work(2)").unwrap() + 5,
+    ));
+    messages.push(semantic_request(3, &main_uri));
+    let output = exchange(messages);
+    assert_eq!(result(&output, 2), &Value::Null);
+    assert!(decoded_semantic(result(&output, 3)).is_empty());
+}
+
+fn create_editor_lock(entry: &Path, lock_path: &Path) {
+    let loaded = bhasa::project::load_unparsed(Some(entry)).unwrap();
+    let root = bhasa::package_lock::root_manifest(&loaded).unwrap();
+    let lock = bhasa::package_lock::Snapshot::capture(&loaded, root).unwrap();
+    fs::write(lock_path, lock.encode()).unwrap();
+}
+
+fn locked_editor_queries(path: &Path, source: &str, overlay: Option<(&Path, &str)>) -> Vec<Value> {
+    let uri = file_uri(path);
+    let mut messages = start();
+    messages.push(open(&uri, source, 1));
+    if let Some((path, source)) = overlay {
+        messages.push(open(&file_uri(path), source, 2));
+    }
+    messages.push(signature_at(
+        2,
+        &uri,
+        source,
+        source.find("second(2)").unwrap() + 7,
+    ));
+    messages.push(semantic_request(3, &uri));
+    exchange(messages)
+}
+
+#[test]
+fn checked_editor_locked_imports_tests_and_unsaved_overlays_keep_checked_identity() {
+    let workspace = Workspace::new("locked-editor-graphs");
+    workspace.write(
+        "bhasa.toml",
+        "[package]\nname=\"editor-lock\"\nversion=\"0.1.0\"\nentry=\"main.bh\"\n",
+    );
+    let main = workspace.write("main.bh", "import \"a.bh\"\ndef main(){print(first())}\n");
+    let source = "import \"b.bh\"\ndef first()->int{return second(2)}\n";
+    let module = workspace.write("a.bh", source);
+    let dependency = workspace.write("b.bh", "def second(value:int)->int{return value}\n");
+    create_editor_lock(&main, &workspace.file("bhasa.lock"));
+    let unchanged_lock = fs::read(workspace.file("bhasa.lock")).unwrap();
+    let output = locked_editor_queries(&module, source, None);
+    assert_eq!(
+        signature_label(result(&output, 2)),
+        Some("def second(value: int) -> int")
+    );
+    assert!(!decoded_semantic(result(&output, 3)).is_empty());
+    // Exact-entry compilation remains strict; only read-only analysis re-roots.
+    assert!(bhasa::project::load_unparsed(Some(&module)).is_err());
+    let overlay = "def second(amount:int)->int{return amount}\n";
+    let output = locked_editor_queries(&module, source, Some((&dependency, overlay)));
+    assert_eq!(
+        signature_label(result(&output, 2)),
+        Some("def second(amount: int) -> int")
+    );
+    assert!(!decoded_semantic(result(&output, 3)).is_empty());
+    fs::create_dir(workspace.file("tests")).unwrap();
+    let test_source = "import \"../b.bh\"\ndef sample()->int{return second(2)}\n";
+    let test = workspace.write("tests/sample.bh", test_source);
+    let output = locked_editor_queries(&test, test_source, None);
+    assert_eq!(
+        signature_label(result(&output, 2)),
+        Some("def second(value: int) -> int")
+    );
+    assert!(!decoded_semantic(result(&output, 3)).is_empty());
+    assert_eq!(
+        fs::read(workspace.file("bhasa.lock")).unwrap(),
+        unchanged_lock
+    );
+}
+
+#[test]
+fn checked_editor_locked_graph_refuses_saved_changes_and_unpinned_sources() {
+    let workspace = Workspace::new("locked-editor-stale");
+    workspace.write(
+        "bhasa.toml",
+        "[package]\nname=\"editor-lock\"\nversion=\"0.1.0\"\nentry=\"main.bh\"\n",
+    );
+    let main = workspace.write("main.bh", "import \"a.bh\"\nimport \"leaf.bh\" as leaf\ndef main(){print(first());print(leaf.leaf())}\n");
+    let source = "import \"b.bh\"\ndef first()->int{return second(2)}\n";
+    let module = workspace.write("a.bh", source);
+    workspace.write("b.bh", "def second(value:int)->int{return value}\n");
+    let leaf_source =
+        "def second(value:int)->int{return value}\ndef leaf()->int{return second(2)}\n";
+    let leaf = workspace.write("leaf.bh", leaf_source);
+    create_editor_lock(&main, &workspace.file("bhasa.lock"));
+    let other = workspace.write("extra.bh", source);
+    let output = locked_editor_queries(&other, source, None);
+    assert_eq!(result(&output, 2), &Value::Null);
+    assert!(decoded_semantic(result(&output, 3)).is_empty());
+    let import_free = workspace.write("extra-local.bh", leaf_source);
+    let output = locked_editor_queries(&import_free, leaf_source, None);
+    assert_eq!(result(&output, 2), &Value::Null);
+    assert!(decoded_semantic(result(&output, 3)).is_empty());
+    workspace.write("b.bh", "def second(value:int)->int{return value+1}\n");
+    let output = locked_editor_queries(&module, source, None);
+    assert_eq!(result(&output, 2), &Value::Null);
+    assert!(decoded_semantic(result(&output, 3)).is_empty());
+    let output = locked_editor_queries(&leaf, leaf_source, None);
+    assert_eq!(result(&output, 2), &Value::Null);
+    assert!(decoded_semantic(result(&output, 3)).is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn checked_editor_entry_symlink_retains_requested_outer_package_lock() {
+    let workspace = Workspace::new("locked-editor-entry-alias");
+    fs::create_dir(workspace.file("nested")).unwrap();
+    workspace.write("bhasa.toml", "[package]\nname=\"outer\"\nversion=\"0.1.0\"\nentry=\"entry.bh\"\n[dependencies]\ninner=\"nested\"\n");
+    workspace.write(
+        "nested/bhasa.toml",
+        "[package]\nname=\"inner\"\nversion=\"0.1.0\"\nentry=\"lib.bh\"\n",
+    );
+    let source = "import \"@inner\"\ndef main(){print(second(2))}\n";
+    workspace.write("nested/main.bh", source);
+    workspace.write(
+        "nested/lib.bh",
+        "def second(value:int)->int{return value}\n",
+    );
+    let entry = workspace.file("entry.bh");
+    std::os::unix::fs::symlink("nested/main.bh", &entry).unwrap();
+    create_editor_lock(&entry, &workspace.file("bhasa.lock"));
+    assert!(!workspace.file("nested/bhasa.lock").exists());
+    // Build the URI from the requested alias, without canonicalizing its final component.
+    let uri = format!(
+        "file://{}",
+        workspace
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("entry.bh")
+            .display()
+    );
+    let mut messages = start();
+    messages.push(open(&uri, source, 1));
+    messages.push(signature_at(
+        2,
+        &uri,
+        source,
+        source.find("second(2)").unwrap() + 7,
+    ));
+    messages.push(semantic_request(3, &uri));
+    let output = exchange(messages);
+    assert_eq!(
+        signature_label(result(&output, 2)),
+        Some("def second(value: int) -> int")
+    );
+    assert!(!decoded_semantic(result(&output, 3)).is_empty());
+    workspace.write(
+        "nested/lib.bh",
+        "def second(value:int)->int{return value+1}\n",
+    );
+    let mut messages = start();
+    messages.push(open(&uri, source, 2));
+    messages.push(signature_at(
+        2,
+        &uri,
+        source,
+        source.find("second(2)").unwrap() + 7,
+    ));
+    messages.push(semantic_request(3, &uri));
+    let output = exchange(messages);
+    assert_eq!(result(&output, 2), &Value::Null);
+    assert!(decoded_semantic(result(&output, 3)).is_empty());
+}

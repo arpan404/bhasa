@@ -10,7 +10,12 @@ The integration chat at 01a12ba1-6cad-7f00-a505-1eb6a34b6e41 owns contracts,
 source integration, Cargo gates, releases, todo.md and authorized progress
 commits/pushes. Typed errors are committed and pushed as 86a99ed. Binding-only
 let is verified and pushed as 4828aff. S037/BH221 local result obligations are
-applied and undergoing combined validation; do not assign either again.
+verified and pushed as 217e33d; do not assign either again. Package/editor/private
+storage changes pass all combined gates (558 reference inventory, 583 hybrid,
+77 LSP groups per configuration and 93 Node client tests), matching releases,
+A/B/C and unchanged cache reuse. integration.md records evidence. Next reviewed
+increments are aliases, TCP copy policy, owned transfer, files and channel parity;
+their isolated readiness does not mark checklist boxes complete.
 
 ## Shared workflow
 

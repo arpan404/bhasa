@@ -7,6 +7,9 @@ const { RpcConnection } = require("./transport");
 
 const selector = [{ language: "bhasa", scheme: "file" }, { language: "bhasa", scheme: "untitled" }];
 const isBhasa = (document) => document.languageId === "bhasa" && ["file", "untitled"].includes(document.uri.scheme);
+const semanticTypes = ["namespace", "struct", "enum", "enumMember", "function", "method", "property", "parameter", "variable", "keyword", "type"];
+const semanticModifiers = ["declaration", "readonly"];
+const semanticLegend = new vscode.SemanticTokensLegend(semanticTypes, semanticModifiers);
 let controller;
 
 class LanguageTools {
@@ -62,6 +65,20 @@ class LanguageTools {
           }), result?.isIncomplete === true);
         }
       }, "."),
+      vscode.languages.registerSignatureHelpProvider(selector, {
+        provideSignatureHelp: async (document, position, token) => {
+          const result = await this.query(document, "textDocument/signatureHelp", {
+            position: { line: position.line, character: position.character }
+          }, token);
+          return signatureHelp(result);
+        }
+      }, "(", ","),
+      vscode.languages.registerDocumentSemanticTokensProvider(selector, {
+        provideDocumentSemanticTokens: async (document, token) => {
+          const result = await this.query(document, "textDocument/semanticTokens/full", {}, token);
+          return semanticTokens(result, document);
+        }
+      }, semanticLegend),
       vscode.languages.registerHoverProvider(selector, {
         provideHover: async (document, position, token) => {
           const result = await this.query(document, "textDocument/hover", {
@@ -170,6 +187,8 @@ class LanguageTools {
             definition: { linkSupport: true },
             completion: { completionItem: { snippetSupport: false } },
             hover: { contentFormat: ["plaintext"] },
+            semanticTokens: { requests: { full: true }, tokenTypes: semanticTypes, tokenModifiers: semanticModifiers, formats: ["relative"], overlappingTokenSupport: false, multilineTokenSupport: false },
+            signatureHelp: { signatureInformation: { documentationFormat: ["plaintext"], parameterInformation: { labelOffsetSupport: true } } },
             references: { dynamicRegistration: false },
             rename: { dynamicRegistration: false, prepareSupport: true },
             formatting: { dynamicRegistration: false }
@@ -263,6 +282,7 @@ class LanguageTools {
 
   async saveDocument(document) {
     if (!isBhasa(document) || document.isClosed) return;
+    this.documentEpochs.set(document, (this.documentEpochs.get(document) || 0) + 1);
     const session = await this.start();
     if (!session) return;
     try {
@@ -303,13 +323,30 @@ class LanguageTools {
       "textDocument/prepareRename": "renameProvider",
       "textDocument/rename": "renameProvider",
       "textDocument/completion": "completionProvider",
-      "textDocument/hover": "hoverProvider"
+      "textDocument/hover": "hoverProvider",
+      "textDocument/signatureHelp": "signatureHelpProvider",
+      "textDocument/semanticTokens/full": "semanticTokensProvider"
     }[method];
     if (!session.capabilities[capability]) return null;
+    if (method === "textDocument/semanticTokens/full") {
+      const provider = session.capabilities.semanticTokensProvider;
+      if (!provider.full || JSON.stringify(provider.legend?.tokenTypes) !== JSON.stringify(semanticTypes) ||
+          JSON.stringify(provider.legend?.tokenModifiers) !== JSON.stringify(semanticModifiers)) return null;
+    }
     const version = document.version;
     try {
       if (!this.sendDocument(session, document)) return null;
       const rename = method === "textDocument/rename";
+      const graphQuery = ["textDocument/completion", "textDocument/hover", "textDocument/definition", "textDocument/references",
+        "textDocument/signatureHelp", "textDocument/semanticTokens/full"].includes(method);
+      const graphSnapshots = new Map();
+      if (graphQuery) {
+        for (const open of vscode.workspace.textDocuments.filter((open) => isBhasa(open) && !open.isClosed)) {
+          if (!this.sendDocument(session, open)) return null;
+          graphSnapshots.set(open, { version: open.version, epoch: this.documentEpochs.get(open) || 0 });
+        }
+      }
+
       const snapshots = new Map();
       if (rename) {
         const documents = vscode.workspace.textDocuments.filter((open) => isBhasa(open) && !open.isClosed);
@@ -325,6 +362,13 @@ class LanguageTools {
       }, token);
       // In particular, never apply a formatter response to text edited meanwhile.
       if (document.version !== version || document.isClosed || session !== this.session || token.isCancellationRequested) return null;
+      if (graphQuery) {
+        const current = vscode.workspace.textDocuments.filter((open) => isBhasa(open) && !open.isClosed);
+        if (current.length !== graphSnapshots.size || current.some((open) => {
+          const snapshot = graphSnapshots.get(open);
+          return !snapshot || open.version !== snapshot.version || (this.documentEpochs.get(open) || 0) !== snapshot.epoch;
+        })) return null;
+      }
       if (rename && result) {
         validateRename(result, extra.newName, snapshots, this.documentEpochs);
       }
@@ -448,6 +492,51 @@ function checkedOffset(source, lines, position) {
   const at = start + position.character;
   if (at > start && at < lines.ends[position.line] && source.charCodeAt(at - 1) >= 0xd800 && source.charCodeAt(at - 1) <= 0xdbff && source.charCodeAt(at) >= 0xdc00 && source.charCodeAt(at) <= 0xdfff) throw new Error("Rename position splits a surrogate pair.");
   return at;
+}
+
+function signatureHelp(value) {
+  if (!value || !Array.isArray(value.signatures) || !value.signatures.length || value.signatures.length > 128) return null;
+  const result = new vscode.SignatureHelp();
+  for (const item of value.signatures) {
+    if (typeof item?.label !== "string" || item.label.length > 4096 || !Array.isArray(item.parameters) || item.parameters.length > 128) return null;
+    const signature = new vscode.SignatureInformation(item.label);
+    for (const parameter of item.parameters) {
+      const label = parameter?.label;
+      if (typeof label !== "string" && !(Array.isArray(label) && label.length === 2 &&
+          label.every(Number.isSafeInteger) && 0 <= label[0] && label[0] <= label[1] && label[1] <= item.label.length)) return null;
+      if (typeof label === "string" && label.length > 4096) return null;
+      signature.parameters.push(new vscode.ParameterInformation(label));
+    }
+    result.signatures.push(signature);
+  }
+  if (!Number.isSafeInteger(value.activeSignature) || value.activeSignature < 0 || value.activeSignature >= result.signatures.length ||
+      !Number.isSafeInteger(value.activeParameter) || value.activeParameter < 0 ||
+      value.activeParameter >= Math.max(1, result.signatures[value.activeSignature].parameters.length)) return null;
+  result.activeSignature = value.activeSignature;
+  result.activeParameter = value.activeParameter;
+  return result;
+}
+
+function semanticTokens(value, document) {
+  const data = value?.data;
+  if (!Array.isArray(data) || data.length % 5 !== 0 || data.length > 65536 * 5 ||
+      data.some((part) => !Number.isSafeInteger(part) || part < 0 || part > 0xffffffff)) return null;
+  const lines = document.getText().split(/\r\n|\r|\n/);
+  let line = 0, character = 0, previousLine = -1, previousEnd = 0;
+  for (let index = 0; index < data.length; index += 5) {
+    const [deltaLine, deltaCharacter, length, kind, modifiers] = data.slice(index, index + 5);
+    line += deltaLine;
+    character = deltaLine === 0 ? character + deltaCharacter : deltaCharacter;
+    if (line >= lines.length || !length || kind >= semanticTypes.length || modifiers >= (1 << semanticModifiers.length) ||
+        character + length > lines[line].length || (line === previousLine && character < previousEnd)) return null;
+    const text = lines[line];
+    const split = (at) => at > 0 && at < text.length && text.charCodeAt(at - 1) >= 0xd800 && text.charCodeAt(at - 1) <= 0xdbff &&
+      text.charCodeAt(at) >= 0xdc00 && text.charCodeAt(at) <= 0xdfff;
+    if (split(character) || split(character + length)) return null;
+    previousLine = line;
+    previousEnd = character + length;
+  }
+  return new vscode.SemanticTokens(new Uint32Array(data));
 }
 
 function range(value) {

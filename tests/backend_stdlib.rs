@@ -122,7 +122,7 @@ def main() {
                             print(value.count()); print(value.codepoint(0)); print(value.codepoint(1))
                             match json_quote(value) {
                                 case ResultText.error(message) { print("quote failed") }
-                                case ResultText.ok(quoted) { print(quoted.bytes) }
+                                case ResultText.ok(quoted) { print(quoted.bytes()) }
                             }
                         }
                     }

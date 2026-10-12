@@ -1,16 +1,18 @@
 import "result.bh"
 
-# A JSON document owns its bytes and a flat, bounded node table. Number tokens
+# A JSON document owns private bytes and a flat, bounded node table. Public
+# accessors never mutate parser state and return owned copies. Number tokens
 # retain their decimal spelling, including fractions and exponents.
 # Node columns: kind, start, end, parent, key-start, key-end, subtree-end.
 # Kinds: 1 null, 2 boolean, 3 number, 4 string, 5 array, 6 object.
 struct JsonDoc {
-    source: buffer
-    nodes: ints
-    cursor: int
-    error: int
+    private source: buffer
+    private nodes: ints
+    private cursor: int
+    private error: int
 
     def count(self) -> int { return len(self.nodes) / 7 }
+    def bytes(self) -> buffer { return self.source }
 
     def kind(self, node: int) -> int {
         if node < 0 or node >= self.count() { return -1 }
@@ -27,7 +29,7 @@ struct JsonDoc {
         if self.kind(node) != 4 { return ResultText.error(text("JSON value is not a string")) }
         var start = get(self.nodes, node * 7 + 1)
         var end = get(self.nodes, node * 7 + 2)
-        return ResultText.ok(Text(json_unquote(self.source, start, end)))
+        return text_decode(json_unquote(self.source, start, end))
     }
 
     def integer(self, node: int) -> ResultInt {
@@ -59,7 +61,7 @@ struct JsonDoc {
         while index < end {
             var start = get(self.nodes, index * 7 + 4)
             var stop = get(self.nodes, index * 7 + 5)
-            if same(json_unquote(self.source, start, stop), key.bytes) { return OptionInt.some(index) }
+            if same(json_unquote(self.source, start, stop), key.bytes()) { return OptionInt.some(index) }
             index = get(self.nodes, index * 7 + 6)
         }
         return OptionInt.none()
@@ -78,7 +80,7 @@ struct JsonDoc {
         return OptionInt.none()
     }
 
-    def white(self) {
+    private def white(self) {
         while self.cursor < len(self.source) {
             var byte = get(self.source, self.cursor)
             if byte != 32 and byte != 9 and byte != 10 and byte != 13 { return }
@@ -86,12 +88,12 @@ struct JsonDoc {
         }
     }
 
-    def peek(self) -> int {
+    private def peek(self) -> int {
         if self.cursor >= len(self.source) { return -1 }
         return get(self.source, self.cursor)
     }
 
-    def hex(self) -> int {
+    private def hex(self) -> int {
         var result = 0
         var count = 0
         while count < 4 {
@@ -104,7 +106,7 @@ struct JsonDoc {
         return result
     }
 
-    def scan_string(self) {
+    private def scan_string(self) {
         if self.peek() != 34 { self.error = 1; return }
         self.cursor = self.cursor + 1
         while self.cursor < len(self.source) {
@@ -138,13 +140,13 @@ struct JsonDoc {
         self.error = 1
     }
 
-    def digits(self) -> int {
+    private def digits(self) -> int {
         var start = self.cursor
         while self.peek() >= 48 and self.peek() <= 57 { self.cursor = self.cursor + 1 }
         return self.cursor - start
     }
 
-    def number(self) {
+    private def number(self) {
         if self.peek() == 45 { self.cursor = self.cursor + 1 }
         if self.peek() == 48 {
             self.cursor = self.cursor + 1
@@ -164,13 +166,13 @@ struct JsonDoc {
         }
     }
 
-    def literal(self, spelling: str, length: int) {
+    private def literal(self, spelling: str, length: int) {
         if len(self.source) - self.cursor < length { self.error = 1; return }
         if !same(slice(self.source, self.cursor, length), spelling) { self.error = 1; return }
         self.cursor = self.cursor + length
     }
 
-    def value(self, parent: int, key_start: int, key_end: int, depth: int) -> int {
+    private def value(self, parent: int, key_start: int, key_end: int, depth: int) -> int {
         self.white()
         if depth > 64 or self.count() >= 65536 { self.error = 2; return -1 }
         var start = self.cursor
@@ -251,7 +253,7 @@ def json_parse(source: buffer) -> JsonResult {
     return JsonResult.ok(document)
 }
 
-def json_hex(byte: int) -> int {
+private def json_hex(byte: int) -> int {
     if byte >= 48 and byte <= 57 { return byte - 48 }
     if byte >= 65 and byte <= 70 { return byte - 55 }
     if byte >= 97 and byte <= 102 { return byte - 87 }
@@ -259,7 +261,7 @@ def json_hex(byte: int) -> int {
 }
 
 # Called only on a string token validated by JsonDoc.scan_string.
-def json_unquote(source: buffer, start: int, end: int) -> buffer {
+private def json_unquote(source: buffer, start: int, end: int) -> buffer {
     var result = buffer()
     var index = start + 1
     while index < end - 1 {
@@ -300,9 +302,10 @@ def json_quote(value: Text) -> ResultText {
     if !value.valid() { return ResultText.error(text("invalid UTF-8 text")) }
     var result = buffer("\"")
     var digits = buffer("0123456789abcdef")
+    var bytes = value.bytes()
     var index = 0
-    while index < len(value.bytes) {
-        var byte = get(value.bytes, index)
+    while index < len(bytes) {
+        var byte = get(bytes, index)
         if byte == 34 or byte == 92 { push(result, 92); push(result, byte) } else {
             if byte < 32 {
                 append(result, "\\u00")
@@ -312,5 +315,5 @@ def json_quote(value: Text) -> ResultText {
         index = index + 1
     }
     push(result, 34)
-    return ResultText.ok(Text(result))
+    return ResultText.ok(text_from_bytes(result))
 }

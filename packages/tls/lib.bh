@@ -11,7 +11,7 @@ def https_write(socket: tls_socket, status: int, body: Text, timeout_ms: int) ->
 
 # Verified TLS constructor wrapped in a generic result.
 def tls_open(address: Text, port: int, server_name: Text, ca_file: Text, timeout_ms: int) -> Result[tls_socket] {
-    var socket = tls_connect(address.bytes, port, server_name.bytes, ca_file.bytes, timeout_ms)
+    var socket = tls_connect(address.bytes(), port, server_name.bytes(), ca_file.bytes(), timeout_ms)
     if tls_status(socket) != 0 { return Result[tls_socket].error(text("TLS connect, trust verification or handshake failed")) }
     return Result[tls_socket].ok(socket)
 }

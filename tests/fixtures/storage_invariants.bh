@@ -1,0 +1,37 @@
+import "@std"
+def main()->int {
+ var items=string_list();items.push(text(""));items.push(text("é中🙂"));items.push(text("end"))
+ var saved=items;items.set(1,text("replacement"));items.set(0,text("first"));items.set(2,text(""))
+ if !items.valid() or !saved.valid() or saved.count()!=3 or !same(saved.get(1).bytes(),"é中🙂"){return 1}
+ var detached=saved.get(1);detached.clear();if !same(saved.get(1).bytes(),"é中🙂"){return 2}
+ items.clear();if !items.valid() or items.count()!=0{return 3}
+ items.push(text("after clear"));if !same(items.get(0).bytes(),"after clear"){return 4}
+ var integers=string_int_map();integers.put(text("one"),1);integers.put(text("two"),2);integers.put(text("one"),3)
+ var integer_copy=integers;var keys=integers.keys_snapshot();keys.set(0,text("detached"));keys.clear()
+ if !integers.valid() or integers.count()!=2 or !same(integers.key_at(0).bytes(),"one") or integers.value_at(0)!=3{return 5}
+ integers.clear();if !integers.valid() or integers.count()!=0 or integer_copy.count()!=2{return 6}
+ integers.put(text("new"),9);match integers.get(text("new")){case OptionInt.some(n){if n!=9{return 7}}case OptionInt.none{return 8}}
+ var strings=string_map();strings.put(text("a"),text("old"));strings.put(text("b"),text("second"))
+ var string_copy=strings;var string_keys=strings.keys_snapshot();strings.put(text("a"),text("new"))
+ var extracted=strings.value_at(0);extracted.append(text("detached"))
+ if !strings.valid() or !same(strings.value_at(0).bytes(),"new") or !same(string_copy.value_at(0).bytes(),"old"){return 9}
+ strings.clear();if !strings.valid() or strings.count()!=0 or string_keys.count()!=2 or !same(string_keys.get(0).bytes(),"a"){return 10}
+ strings.put(text("after"),text("clear"));if !same(strings.key_at(0).bytes(),"after"){return 11}
+ var wire=buffer("{\"name\":\"hé\",\"items\":[7,true]}")
+ match json_parse(wire){
+  case JsonResult.error(e){return 12}
+  case JsonResult.ok(doc){
+   var original=doc.bytes();var changed=doc.bytes();set(changed,0,255);set(wire,0,255)
+   if !same(doc.bytes(),original) or doc.kind(0)!=6 or doc.count()!=5{return 13}
+   var raw=doc.raw(0);set(raw,0,255);if !same(doc.raw(0),original){return 14}
+   match doc.find(0,text("name")){case OptionInt.none{return 15}case OptionInt.some(node){
+    match doc.string(node){case ResultText.error(e){return 16}case ResultText.ok(t){t.clear()}}
+    match doc.string(node){case ResultText.error(e){return 17}case ResultText.ok(t){if !same(t.bytes(),"hé"){return 18}}}
+   }}
+   var copied=doc;var copy_bytes=copied.bytes();set(copy_bytes,0,255);if !same(doc.bytes(),copied.bytes()){return 19}
+   if doc.kind(-1)!=-1 or len(doc.raw(99))!=0{return 20}
+   match json_parse(doc.bytes()){case JsonResult.error(e){return 21}case JsonResult.ok(roundtrip){if roundtrip.count()!=doc.count(){return 22}}}
+  }
+ }
+ print("private collection and JSON storage passed");return 0
+}

@@ -28,7 +28,7 @@ def main() -> int {
                     body = text("{\"error\":\"invalid request\"}")
                 }
                 case HttpResult.ok(request) {
-                    if !same(request.method.bytes, "GET") or !same(request.path.bytes, "/health") {
+                    if !same(request.method.bytes(), "GET") or !same(request.path.bytes(), "/health") {
                         status = 404
                         body = text("{\"error\":\"not found\"}")
                     }
@@ -36,7 +36,7 @@ def main() -> int {
             }
             match https_write(socket, status, body, 2000) {
                 case ResultInt.ok(bytes) { var closed = tls_shutdown(socket, 2000) }
-                case ResultInt.error(message) { print(message.bytes) }
+                case ResultInt.error(message) { print(message.bytes()) }
             }
         }
         served = served + 1

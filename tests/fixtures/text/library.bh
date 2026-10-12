@@ -5,15 +5,16 @@ def main() -> int {
     if !original.valid() or original.count() != 4 { return 1 }
     if original.codepoint(3) != 128578 { return 2 }
     var piece = original.part(1, 2)
-    if !same(piece.bytes, "é中") { return 3 }
+    if !same(piece.bytes(), "é中") { return 3 }
     var status = piece.append_codepoint(0)
-    if status != 0 or len(piece.bytes) != 6 { return 4 }
+    if status != 0 or len(piece.bytes()) != 6 { return 4 }
     if original.count() != 4 { return 5 }
-    set(piece.bytes, 0, 255)
-    if piece.valid() or piece.count() != -1 or piece.codepoint(0) != -1 { return 6 }
-    match text_decode(piece.bytes) {
+    var detached = piece.bytes()
+    set(detached, 0, 255)
+    if !piece.valid() or piece.count() != 3 or piece.codepoint(0) != 233 { return 6 }
+    match text_decode(detached) {
         case ResultText.ok(value) { return 7 }
-        case ResultText.error(message) { if !same(message.bytes, "invalid UTF-8") { return 8 } }
+        case ResultText.error(message) { if !same(message.bytes(), "invalid UTF-8") { return 8 } }
     }
     var values = string_list()
     values.push(text(""))
@@ -22,13 +23,13 @@ def main() -> int {
     var copied = values
     values.set(1, text("new"))
     if !values.valid() or values.count() != 3 { return 9 }
-    if !same(copied.get(1).bytes, "Aé中🙂") { return 10 }
-    if !same(values.get(1).bytes, "new") { return 11 }
+    if !same(copied.get(1).bytes(), "Aé中🙂") { return 10 }
+    if !same(values.get(1).bytes(), "new") { return 11 }
     if copied.find(text("last")) != 2 or copied.find(text("absent")) != -1 { return 12 }
     values.set(0, text("first"))
     values.set(2, text(""))
-    if !values.valid() or !same(values.get(0).bytes, "first") { return 13 }
-    if len(values.get(2).bytes) != 0 { return 14 }
+    if !values.valid() or !same(values.get(0).bytes(), "first") { return 13 }
+    if len(values.get(2).bytes()) != 0 { return 14 }
     var counts = string_int_map()
     counts.put(text("one"), 1)
     counts.put(text("two"), 2)
@@ -49,10 +50,10 @@ def main() -> int {
     names.put(text("key"), text("after"))
     names.put(text("second"), text("two"))
     if !names.valid() or names.count() != 2 { return 20 }
-    if !same(saved.value_at(0).bytes, "before") { return 21 }
+    if !same(saved.value_at(0).bytes(), "before") { return 21 }
     match names.get(text("key")) {
         case OptionText.none { return 22 }
-        case OptionText.some(value) { if !same(value.bytes, "after") { return 23 } }
+        case OptionText.some(value) { if !same(value.bytes(), "after") { return 23 } }
     }
     match names.get(text("missing")) {
         case OptionText.none { }

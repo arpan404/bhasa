@@ -51,6 +51,8 @@ function environment(t, options = {}) {
       registerDefinitionProvider: provider("definition"),
       registerCompletionItemProvider: provider("completion"),
       registerHoverProvider: provider("hover"),
+      registerDocumentSemanticTokensProvider: provider("semantic"),
+      registerSignatureHelpProvider: provider("signature"),
       registerReferenceProvider: provider("references"),
       registerRenameProvider: provider("rename")
     },
@@ -61,6 +63,11 @@ function environment(t, options = {}) {
     CompletionItem: class { constructor(label, kind) { Object.assign(this, { label, kind }); } },
     CompletionList: class { constructor(items, isIncomplete) { Object.assign(this, { items, isIncomplete }); } },
     MarkdownString: class { constructor() { this.value = ""; } appendText(value) { this.value += value; return this; } },
+    SignatureHelp: class { constructor() { this.signatures = []; } },
+    SignatureInformation: class { constructor(label) { this.label = label; this.parameters = []; } },
+    ParameterInformation: class { constructor(label) { this.label = label; } },
+    SemanticTokensLegend: class { constructor(tokenTypes, tokenModifiers) { Object.assign(this, { tokenTypes, tokenModifiers }); } },
+    SemanticTokens: class { constructor(data) { this.data = data; } },
     Hover: class { constructor(contents, range) { Object.assign(this, { contents, range }); } },
     WorkspaceEdit: class { constructor() { this.entries = new Map(); } set(uri, edits) { this.entries.set(uri.toString(), edits); } },
     TextEdit: class { constructor(range, newText) { Object.assign(this, { range, newText }); } },
@@ -88,7 +95,7 @@ function environment(t, options = {}) {
         if (message.method === "initialize") {
           child.send({ id: message.id, result: { capabilities: {
             textDocumentSync: { openClose: true, change: 1, save: options.save ?? true }, positionEncoding: "utf-16",
-            documentFormattingProvider: true, documentSymbolProvider: true, definitionProvider: true, referencesProvider: true, renameProvider: { prepareProvider: true }, completionProvider: { triggerCharacters: ["."] }, hoverProvider: true
+            documentFormattingProvider: true, documentSymbolProvider: true, definitionProvider: true, referencesProvider: true, renameProvider: { prepareProvider: true }, completionProvider: { triggerCharacters: ["."] }, hoverProvider: true, semanticTokensProvider: options.semanticCapability === false ? undefined : { full: true, legend: { tokenTypes: options.semanticTypes || ["namespace", "struct", "enum", "enumMember", "function", "method", "property", "parameter", "variable", "keyword", "type"], tokenModifiers: ["declaration", "readonly"] } }, signatureHelpProvider: options.signatureCapability === false ? undefined : { triggerCharacters: ["(", ","] }
           } } });
         } else if (message.method === "shutdown") child.send({ id: message.id, result: null });
         else if (message.method === "exit") { child.exitCode = 0; child.stdout.end(); child.emit("close", 0, null); }
@@ -102,6 +109,10 @@ function environment(t, options = {}) {
           child.send({ id: message.id, result: options.completion || { isIncomplete: true, items: [{ label: "count", detail: "def count() -> int", kind: 2, textEdit: { range: locationRange, newText: "count" } }] } });
         } else if (message.method === "textDocument/hover" && !options.delayHover) {
           child.send({ id: message.id, result: options.hover || { contents: { kind: "plaintext", value: "var text: buffer [command:unsafe]" }, range: locationRange } });
+        } else if (message.method === "textDocument/signatureHelp" && !options.delaySignature) {
+          child.send({ id: message.id, result: options.signature === undefined ? { signatures: [{ label: "def add(left: int, right: int) -> int", parameters: [{ label: "left: int" }, { label: "right: int" }] }], activeSignature: 0, activeParameter: 1 } : options.signature });
+        } else if (message.method === "textDocument/semanticTokens/full" && !options.delaySemantic) {
+          child.send({ id: message.id, result: options.semantic === undefined ? { data: [0, 4, 4, 4, 1] } : options.semantic });
         } else if (message.method === "textDocument/references") {
           child.send({ id: message.id, result: [{ uri: document.uri.toString(), range: locationRange }] });
         } else if (message.method === "textDocument/prepareRename") {
@@ -582,4 +593,165 @@ test("close history uses weak document keys and ignores plaintext or absent sess
   env.document.isClosed = false; env.events.open(env.document);
   child.send({ id: request.id, result: renameResponse([env.document]) });
   assert.equal(await pending, null);
+});
+
+
+test("signature provider converts plain labels and advertises UTF-16 offsets", async (t) => {
+  const env = environment(t);
+  await tick();
+  const result = await env.providers.signature.provideSignatureHelp(env.document, { line: 0, character: 4 }, env.token);
+  assert.equal(result.signatures[0].label, "def add(left: int, right: int) -> int");
+  assert.equal(result.signatures[0].parameters[1].label, "right: int");
+  assert.equal(result.activeParameter, 1);
+  const capability = env.children[0].messages[0].params.capabilities.textDocument.signatureHelp;
+  assert.equal(capability.signatureInformation.parameterInformation.labelOffsetSupport, true);
+});
+
+test("signature provider rejects malformed replies and honors missing capability", async (t) => {
+  const valid = { signatures: [{ label: "[command:unsafe]", parameters: [{ label: [0, 4] }] }], activeSignature: 0, activeParameter: 0 };
+  for (const signature of [null, {}, { ...valid, activeSignature: 1 }, { ...valid, activeParameter: 1 },
+    { ...valid, signatures: [{ label: "abc", parameters: [{ label: [2, 1] }] }] }]) {
+    const env = environment(t, { signature });
+    await tick();
+    assert.equal(await env.providers.signature.provideSignatureHelp(env.document, { line: 0, character: 0 }, env.token), null);
+    await env.deactivate();
+  }
+  const env = environment(t, { signature: valid });
+  await tick();
+  const result = await env.providers.signature.provideSignatureHelp(env.document, { line: 0, character: 0 }, env.token);
+  assert.equal(result.signatures[0].label, "[command:unsafe]");
+  assert.deepEqual(Array.from(result.signatures[0].parameters[0].label), [0, 4]);
+  const missing = environment(t, { signatureCapability: false });
+  await tick();
+  assert.equal(await missing.providers.signature.provideSignatureHelp(missing.document, { line: 0, character: 0 }, missing.token), null);
+  assert.equal(missing.children[0].messages.some((m) => m.method === "textDocument/signatureHelp"), false);
+});
+
+test("signature provider discards edited closed canceled and restarted replies", async (t) => {
+  for (const action of ["edited", "closed", "canceled", "restart"]) {
+    const env = environment(t, { delaySignature: true });
+    await tick();
+    const child = env.children[0];
+    const pending = env.providers.signature.provideSignatureHelp(env.document, { line: 0, character: 0 }, env.token);
+    await tick();
+    const request = child.messages.find((m) => m.method === "textDocument/signatureHelp");
+    if (action === "edited") env.document.version++;
+    if (action === "closed") { env.document.isClosed = true; env.events.close(env.document); }
+    if (action === "canceled") env.token.isCancellationRequested = true;
+    if (action === "restart") { await env.events.restart(); }
+    if (action !== "restart") child.send({ id: request.id, result: { signatures: [{ label: "empty()", parameters: [] }], activeSignature: 0, activeParameter: 0 } });
+    assert.equal(await pending, null);
+    await env.deactivate();
+  }
+});
+
+
+test("checked graph queries sync all overlays before requesting a result", async (t) => {
+  const env = environment(t);
+  await tick();
+  const dependency = { ...env.document, uri: env.vscode.Uri.parse("file:///tmp/test/dependency.bh"), version: 7, text: "def answer()->int{return 42}" };
+  env.vscode.workspace.textDocuments.push(dependency);
+  await env.providers.hover.provideHover(env.document, { line: 0, character: 4 }, env.token);
+  const messages = env.children[0].messages;
+  const query = messages.findIndex((message) => message.method === "textDocument/hover");
+  const overlay = messages.findIndex((message) => message.method === "textDocument/didOpen" && message.params.textDocument.uri === dependency.uri.toString());
+  assert.ok(overlay >= 0 && overlay < query);
+});
+
+test("checked graph replies reject changed closed reopened saved and newly opened dependencies", async (t) => {
+  for (const action of ["changed", "closed", "reopened", "saved", "opened"]) {
+    const env = environment(t, { delaySignature: true });
+    await tick();
+    const dependency = { ...env.document, uri: env.vscode.Uri.parse("file:///tmp/test/dependency.bh"), version: 7, text: "def answer()->int{return 42}" };
+    env.vscode.workspace.textDocuments.push(dependency);
+    const pending = env.providers.signature.provideSignatureHelp(env.document, { line: 0, character: 4 }, env.token);
+    await tick();
+    const child = env.children[0];
+    const query = child.messages.find((message) => message.method === "textDocument/signatureHelp");
+    if (action === "changed") { dependency.version++; env.events.change({ document: dependency, contentChanges: [{}] }); }
+    if (action === "closed") { dependency.isClosed = true; env.events.close(dependency); }
+    if (action === "reopened") { dependency.isClosed = true; env.events.close(dependency); dependency.isClosed = false; await env.events.open(dependency); }
+    if (action === "saved") await env.events.save(dependency);
+    if (action === "opened") env.vscode.workspace.textDocuments.push({ ...dependency, uri: env.vscode.Uri.parse("file:///tmp/test/new.bh") });
+    child.send({ id: query.id, result: { signatures: [{ label: "old dependency signature", parameters: [] }], activeSignature: 0, activeParameter: 0 } });
+    assert.equal(await pending, null, action);
+    await env.deactivate();
+  }
+});
+
+test("checked graph replies survive changes to unrelated non-Bhasa documents", async (t) => {
+  const env = environment(t, { delayHover: true });
+  await tick();
+  const pending = env.providers.hover.provideHover(env.document, { line: 0, character: 4 }, env.token);
+  await tick();
+  env.vscode.workspace.textDocuments.push({ ...env.document, languageId: "plaintext", uri: env.vscode.Uri.parse("file:///tmp/notes.txt") });
+  const child = env.children[0];
+  const query = child.messages.find((message) => message.method === "textDocument/hover");
+  child.send({ id: query.id, result: { contents: { kind: "plaintext", value: "current signature" } } });
+  assert.equal((await pending).contents.value, "current signature");
+});
+
+
+test("semantic provider converts checked relative UTF-16 tokens", async (t) => {
+  const env = environment(t);
+  await tick();
+  const result = await env.providers.semantic.provideDocumentSemanticTokens(env.document, env.token);
+  assert.deepEqual(Array.from(result.data), [0, 4, 4, 4, 1]);
+  const capability = env.children[0].messages[0].params.capabilities.textDocument.semanticTokens;
+  assert.deepEqual(capability.formats, ["relative"]);
+  assert.equal(capability.overlappingTokenSupport, false);
+});
+
+test("semantic provider rejects invalid relative token data", async (t) => {
+  for (const data of [[0], [0, 0, 0, 8, 0], [0, 0, 1, 99, 0], [0, 0, 1, 8, 4],
+    [0, -1, 1, 8, 0], [0, 0, 1.5, 8, 0], [99, 0, 1, 8, 0], [0, 99, 1, 8, 0],
+    [0, 0, 4, 8, 0, 0, 2, 4, 8, 0], [0, 0, 0x100000000, 8, 0]]) {
+    const env = environment(t, { semantic: { data } });
+    await tick();
+    assert.equal(await env.providers.semantic.provideDocumentSemanticTokens(env.document, env.token), null);
+    await env.deactivate();
+  }
+});
+
+test("semantic provider checks surrogate boundaries and empty replies", async (t) => {
+  for (const data of [[0, 1, 1, 8, 0], [0, 0, 1, 8, 0]]) {
+    const env = environment(t, { documentText: "🌍x", semantic: { data } });
+    await tick();
+    assert.equal(await env.providers.semantic.provideDocumentSemanticTokens(env.document, env.token), null);
+    await env.deactivate();
+  }
+  const env = environment(t, { documentText: "🌍x\r\ny", semantic: { data: [0, 2, 1, 8, 0, 1, 0, 1, 8, 0] } });
+  await tick();
+  assert.deepEqual(Array.from((await env.providers.semantic.provideDocumentSemanticTokens(env.document, env.token)).data), [0, 2, 1, 8, 0, 1, 0, 1, 8, 0]);
+  const empty = environment(t, { semantic: { data: [] } });
+  await tick();
+  assert.equal((await empty.providers.semantic.provideDocumentSemanticTokens(empty.document, empty.token)).data.length, 0);
+});
+
+test("semantic provider honors missing or incompatible server legends", async (t) => {
+  for (const options of [{ semanticCapability: false }, { semanticTypes: ["variable"] }]) {
+    const env = environment(t, options);
+    await tick();
+    assert.equal(await env.providers.semantic.provideDocumentSemanticTokens(env.document, env.token), null);
+    assert.equal(env.children[0].messages.some((message) => message.method === "textDocument/semanticTokens/full"), false);
+    await env.deactivate();
+  }
+});
+
+test("semantic provider drops edited closed canceled and restarted responses", async (t) => {
+  for (const action of ["edited", "closed", "canceled", "restart"]) {
+    const env = environment(t, { delaySemantic: true });
+    await tick();
+    const child = env.children[0];
+    const pending = env.providers.semantic.provideDocumentSemanticTokens(env.document, env.token);
+    await tick();
+    const request = child.messages.find((message) => message.method === "textDocument/semanticTokens/full");
+    if (action === "edited") env.document.version++;
+    if (action === "closed") { env.document.isClosed = true; env.events.close(env.document); }
+    if (action === "canceled") env.token.isCancellationRequested = true;
+    if (action === "restart") await env.events.restart();
+    if (action !== "restart") child.send({ id: request.id, result: { data: [0, 4, 4, 4, 1] } });
+    assert.equal(await pending, null);
+    await env.deactivate();
+  }
 });
