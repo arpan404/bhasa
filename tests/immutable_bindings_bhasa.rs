@@ -69,9 +69,13 @@ def main()->int {
     for value in numbers {value=value+1;total=total+value}
     for index in range(3) {index=5;total=total+index}
     if total!=19 {return 14}
-    let success=worker(false);let failure=worker(true)
-    if count(forward(success))!=4 or count(forward(failure))!= -1 {return 15}
+    let success=worker(false)
+    let success_count=count(forward(success))
     match success {case Reply.ok(value){if value.value!=1 or not same(value.data,"task"){return 16}} case Reply.error(message){return 17}}
+    let failure=worker(true)
+    let failure_count=count(forward(failure))
+    match failure {case Reply.error(message){if not same(message,"failure"){return 15}} case Reply.ok(value){return 15}}
+    if success_count!=4 or failure_count!= -1 {return 15}
     for index in range(8) {
         let owned=Cell(index,buffer("loop"))
         if count(joined(false))!=7 or count(joined(true))!= -1 {return 18}

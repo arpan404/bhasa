@@ -466,6 +466,7 @@ fn compile_inner(
                     218 => "try requires an enum with exactly ok(value) and error(value)",
                     219 => "try requires a compatible result return type with the same error payload",
         220 => "immutable binding cannot be reassigned",
+                    221 => "result binding is pending; match, return or propagate it before discarding it",
                     _ => return Err("frontend returned an unknown diagnostic code".to_owned()),
                 };
                 Ok(Diagnostic::new(

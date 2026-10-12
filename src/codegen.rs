@@ -14,6 +14,10 @@ pub fn emit_llvm(
     program: &CheckedProgram,
     target_triple: &str,
 ) -> std::result::Result<String, Vec<Diagnostic>> {
+    let failures = crate::failure_use::check(&program.program);
+    if !failures.is_empty() {
+        return Err(failures);
+    }
     emit_module(program, target_triple).map_err(|error| vec![error])
 }
 

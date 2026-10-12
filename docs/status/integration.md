@@ -1,81 +1,87 @@
 # Compiler integration status
 
-Immutable local bindings are integrated and verified on ARM64 macOS with
-Rust/Cargo 1.98.0 and Apple Clang 21.0.0. Prior typed-error evidence is preserved
-in [integration-errors.md](integration-errors.md). The user authorized remaining
-backlog implementation, dedicated chats, progress commits and pushes.
+Local pending-result obligations are integrated and verified on ARM64 macOS.
+Immutable-binding evidence is archived in [integration-immutable.md](integration-immutable.md),
+and typed-error evidence in [integration-errors.md](integration-errors.md).
+The user authorized remaining backlog implementation, dedicated chats, progress
+commits and pushes. This report covers one bounded increment, not the full language.
 
 ## Delivered
 
-Both frontends accept `let name[:Type] = expression`, including initializer-only
-`try` and inferred task handles. Reassigning a let fails with S036 in Rust and
-BH220 in Bhasa. Owned copies, normal scope/loop/return cleanup, field/container
-mutation, synchronous borrowed calls and task consumption retain existing rules.
-This is binding immutability; read-only borrows, constants and aliases remain
-separate work. Ordinary functions, methods, generic parameters and variables
-named let remain valid; scanner token codes and runtime ABIs are unchanged.
+Both frontends reject result-shaped local values left pending at reachable scope,
+iteration or function exits, return, break/continue and overwrite. Direct exhaustive
+match, direct return and whole-initializer try discharge their named operand.
+Copies create separate obligations. Every continuing branch must handle its values;
+loops preserve the outer pre-loop state because they may run zero times. Result
+assignment to an outer binding inside a loop rejects conservatively. Try's implicit
+error return checks all other live results.
 
-AST and both local-state implementations carry reassignability separately from
-ownership/task metadata. Rust emission rejects reassignment after checked-AST
-mutation. Shared module/generic lowering protects contextual let/try markers and
-keeps original private and source identities. Imported generic diagnostics retain
-exact original CRLF/UTF-8 byte positions.
+The shape remains exactly two one-payload ok/error variants, with resolved nominal
+payload types. Parameters, aggregate contents, directly nested arguments,
+interprocedural handling summaries and assigned scalar statuses remain outside
+this slice. Passing a bound opaque private result to a public handler does not
+discharge it. [The error guide](../errors.md) describes this compatibility limit.
+Fatal traps remain uncatchable and do not unwind. No Rust-equivalent safety claim
+is made.
 
-Editor definitions/references/hover/prepareRename/rename identify the binder and
-reads in `let let = 1` and `let let = try read()`. Contextual markers have no
-ordinary symbol identity, including when a function is named let. Versioned
-rename preserves markers, comments and strings. Lexical grammar adds contextual
-let highlighting; no real VS Code GUI claim is made. See [language](../language.md)
-and the [example](../../examples/basics/bindings.bh).
+Rust reports S037 and rechecks the obligation pass at public LLVM emission, including
+mutated checked programs. Native BH221 uses local field 8 separately from ownership,
+task metadata and immutable field 7. Scanner/type/runtime ABIs are unchanged.
+Existing ordinary checker, private-member and task/foreign call-graph errors retain
+their rules and precedence. Imported generic diagnostics preserve original files,
+Unicode/CRLF byte positions and offset-free messages.
 
-Independent review found and root repaired marker hover resolving an ordinary
-symbol and native sanitizer acceptance permitting recoverable UBSan reports.
-The imported-path fixture now canonicalizes macOS paths. The complete example
-suite caught unsupported range spelling in the new example; it now uses the
-existing range(1, 4), followed by a complete frozen-source rerun.
+Owned fixtures now handle original results while retaining copy/mutation assertions.
+Two negative worker fixtures handle their joined result to isolate the original
+BH209 rule. The contextual variable named try fixture handles its own result before
+assertion returns. No check was disabled to migrate fixtures. Independent review
+found no further defect in the integrated local contract.
 
 ## Verification
 
 | Gate | Evidence |
 | --- | --- |
-| Complete reference | 468 passed; build/verify-immutable-reference-final.log |
-| Complete hybrid | 483 passed; build/verify-immutable-hybrid-final.log |
-| Focused language contract | Six reference groups, two native groups and two imported/generic host groups; tests/immutable_bindings_reference.rs, immutable_bindings_bhasa.rs and immutable_bindings_integration.rs |
-| Independent acceptance | 24 original-source cases pass in each frontend; build/verify-immutable-independent-reference.log and -native.log |
-| Owned cleanup | O0/O2 ASan/UBSan with nonrecover flags and atomic allocation counters; mutation, copies, try payloads, loop/match exits and task results |
-| Editor | 59 LSP and 82 Node tests pass; build/verify-immutable-focused-reference.log and editor-final.log |
-| Formatting/Clippy | Formatting and both configurations pass with warnings denied; build/verify-immutable-fmt.log and clippy-reference.log / -hybrid.log |
-| Refreshed releases | Both compilers execute thirteen examples and five package tests; build/verify-immutable-release-smoke.log |
-| Cache reuse | 32 native hits, four unchanged Rust adapter runs, zero Rust compilations; two unchanged hybrid builds reuse the same archive with zero compilations |
-| A → B → C | Complete compiler LLVM and committed example outputs agree at build/selfhost/run.V33q6Djk; build/verify-immutable-selfhost.log |
+| Complete reference | 477 passed; build/verify-failures-reference-final.log |
+| Complete hybrid | 502 passed; build/verify-failures-hybrid-final.log |
+| Focused local obligations | Eight reference groups, ten native groups, opaque-result boundary and original-file diagnostics; tests/failure_use_reference.rs, failure_use_bhasa.rs and failure_use_opaque.rs |
+| Owned cleanup and AST enforcement | O0/O2 nonrecovering ASan/UBSan and atomic allocation counters in the error/immutable suites; corrupted checked-AST regression |
+| Independent review | 16 additional cases agree across both frontends, plus two original-file generic JSON probes; build/backlog/safety-errors/final-integration-review.md |
+| Compatibility | Existing previously valid standalone examples/fixtures show no new failures; build/verify-failures-existing-sources.json |
+| Editor | 59 LSP tests in each complete suite, 82 Node tests; build/verify-failures-editor-final.log |
+| Formatting/Clippy | Formatting and both configurations pass with warnings denied; build/verify-failures-fmt.log and clippy-reference.log / -hybrid.log |
+| Refreshed releases | Both compilers execute thirteen examples and five package tests; build/verify-failures-release-smoke.log |
+| Cache reuse | 32 example/test native hits and four unchanged Rust adapter runs with zero Rust compilations; two unchanged hybrid builds reuse the same archive with zero compilations |
+| A -> B -> C | Complete compiler LLVM and example outputs agree at build/selfhost/run.EbbPYcIp; build/verify-failures-selfhost.log |
 
-Complete reference and hybrid suites ran serially with two Cargo build jobs and
-one test thread; loopback tests used authorized local networking. Final archive
-key is 89752ec3eb1d4387292584272e0b7eae37705041b0aa085299abc15f52a04998.
-Its scanner/emitter source exactly matches build/hybrid/run.4w9SLwHa/frontend.bh;
-release hashes are recorded in build/verify-immutable-artifact-identity.json.
-Both unchanged rebuild logs confirm that same archive and zero Compiling lines.
-No scoped immutable-binding criteria remain open. Caches remain intact.
+The complete suites ran serially with two Cargo jobs and one test thread, with
+local loopback networking authorized. Matching archive key is
+cac13c4c9ed6aa67e5812514d19391babaca15f477783246d0c69d8bca43778e.
+Its scanner/emitter bytes exactly match build/hybrid/run.DeJuY1kd/frontend.bh.
+Release/source hashes are in build/verify-failures-artifact-identity.json.
+Both unchanged build logs verify the same archive and zero Compiling lines.
+Caches remain intact. All acceptance criteria for this local slice pass.
 
 ## Active backlog
 
-[todo.md](../../todo.md) and [backlog-lanes.md](backlog-lanes.md) track remaining
-work. All eight chats delivered initial isolated drafts and received concrete
-second increments. Cursors/status are in [backlog-state.json](backlog-state.json).
-Drafts are not completed language features. The next integration is conservative
-local pending-result obligations (S037/BH221), with matching isolated native and
-independent review evidence plus migrations preserving owned-copy assertions.
-Full assigned/passed/aggregate failure safety remains outside that slice.
+[todo.md](../../todo.md) keeps parameter/aggregate/interprocedural failure safety
+unchecked. The eight existing backlog chats continue under [backlog-lanes.md](backlog-lanes.md),
+with cursors in [backlog-state.json](backlog-state.json). All other changes are isolated
+until integrated and tested. Alias allocation/canonical-identity repairs pass
+independent review; editor alias metadata consumption is in progress. Package
+lock/FFI and signature/semantic-token drafts have corrected review findings and
+await integration. Private Text/collection/JSON storage and streaming-file drafts
+have independent runtime/privacy evidence but still need combined integration.
 
-Alias review routed allocation-bound, root alias main and trailing-comma defects.
-Package/FFI review routed test-graph locks, symlink entry identity, graph-wide
-preflight and C/C++ reserved-symbol defects. Editor review routed new unsaved
-file identity and stale dependency signature replies. Corrected drafts await
-integration gates. Streaming files, channels, Wasm guest runtime and portable GPU
-work are also isolated until their full frontend/runtime contracts are verified.
+Channel review found exponential shared-type traversal, prefix-only intrinsic
+authority and unauthenticated getter bodies. These are routed for correction
+before exposing source-level channels. The next ownership slice is ratified in
+[owned-bindings-milestone.md](owned-bindings-milestone.md), limited to synchronous
+buffer/ints transfer with explicit modes and conservative control-flow rules.
+It is not implemented or verified yet.
 
-Ownership/borrows, richer types/functions, async/concurrency, standard/backend
-libraries, packaging, compiler performance and production acceptance remain open.
-No Rust-equivalent safety or C/Go performance parity is claimed. Actual prior
-Metal/TCP/TLS tests pass; CUDA/Vulkan hardware, compiled guest Wasm execution,
-Linux/Windows device execution and real VS Code GUI remain unverified or gated.
+Wasm policies/native objects and test-only Node fixtures do not establish a
+runnable compiled guest with no-GC production dependencies. A reviewed engine
+and guest compiler/linker remain real gates. Actual prior Metal/TCP/TLS checks
+pass; CUDA/Vulkan hardware, Linux/Windows execution and VS Code GUI remain
+unverified or gated. The remaining language, runtime, ecosystem, compiler
+performance and production acceptance backlog stays open.

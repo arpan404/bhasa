@@ -14,7 +14,8 @@
 # Signature node: next, name-token, result, argc, body-start, body-end, external,
 # owner-record-type (0 for global), followed by [parameter-name-token, parameter-type] pairs.
 # Local node: next, name-token, type, slot-register, scope-depth, ownership-state,
-# task-worker-signature (-1 for ordinary locals), reassignable (0 let / 1 ordinary).
+# task-worker-signature (-1 for ordinary locals), reassignable (0 let / 1 ordinary),
+# pending-result (independent of ownership/task/mutability).
 # Ownership state: 0 borrowed/scalar, 1 allocation, 2 pending task, 3 joined task.
 # Errors: 200 syntax, 201 type, 202 name/duplicate, 203 unsupported,
 # 204 depth limit, 205 control flow, 206 integer range, 207 ignored I/O status,
@@ -23,7 +24,7 @@
 # 214 overlapping record/field argument borrows, 215 enum/variant/pattern,
 # 216 duplicate or missing exhaustive match arms, 217 nonfinite float literal,
 # 218 invalid try operand shape, 219 incompatible try return/error type,
-# 220 reassignment of an immutable local binding.
+# 220 reassignment of an immutable local binding, 221 pending local result.
 
 def be_kind(tokens: ints, ctx: ints) -> int { return bh_token_kind(tokens, get(ctx, 0)) }
 def be_next(ctx: ints) { set(ctx, 0, get(ctx, 0) + 1) }
@@ -303,7 +304,7 @@ def be_bind(source: buffer, tokens: ints, ctx: ints, errors: ints, allocations: 
     var node = len(ctx)
     push(ctx, get(ctx, 7)); push(ctx, name); push(ctx, ty); push(ctx, slot); push(ctx, get(ctx, 8)); push(ctx, owns)
     var task_worker = -1; if ty == 6 { task_worker = get(ctx, 30) }
-    push(ctx, task_worker); push(ctx, 1)
+    push(ctx, task_worker); push(ctx, 1); push(ctx, 0)
     set(ctx, 7, node)
 }
 def be_string(globals: buffer, ctx: ints, text: buffer) -> buffer {
@@ -1251,6 +1252,7 @@ def be_loop_exit(tokens: ints, ctx: ints, errors: ints, body: buffer, is_break: 
     var loop = get(ctx, 29)
     if loop < 0 { be_error_at(tokens, errors, 205, token); return }
     be_pending_tasks(tokens, ctx, errors, get(ctx, loop + 3))
+    be_pending_results(tokens, ctx, errors, get(ctx, loop + 3), token)
     be_cleanup(body, ctx, get(ctx, loop + 3))
     var target = get(ctx, loop + 2)
     if is_break { target = get(ctx, loop + 1) }
@@ -1266,9 +1268,11 @@ def be_while(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buf
     if get(ctx, 14) != 2 { be_error(tokens, ctx, errors, 201) }
     be_branch(body, ctx, condition, loop_label, exit_label)
     be_start(body, ctx, loop_label)
+    var failure_before = be_failure_snapshot(ctx)
     var loop = be_loop_push(ctx, exit_label, condition_label, get(ctx, 7))
     be_block(source, tokens, ctx, errors, globals, allocations, body, true)
     set(ctx, 29, get(ctx, loop))
+    be_failure_restore(ctx, failure_before)
     if get(ctx, 4) == 0 { be_jump(body, ctx, condition_label) }
     be_start(body, ctx, exit_label)
 }
@@ -1334,6 +1338,7 @@ def be_for(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buffe
     }
     if len(errors) != 0 { return }
     var retained = get(ctx, 7)
+    var failure_before = be_failure_snapshot(ctx)
     if iterable_kind == 0 {
         var zero_step = be_reg(ctx)
         var guard = buffer(); append(guard, zero_step); append(guard, " = icmp eq i64 "); append(guard, step); append(guard, ", 0"); be_line(body, guard)
@@ -1388,15 +1393,18 @@ def be_for(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buffe
     }
     set(ctx, 8, get(ctx, 8) + 1)
     be_bind(source, tokens, ctx, errors, allocations, body, name, element_type, value, owns)
+    if len(errors) == 0 { be_failure_bind(source, tokens, ctx) }
     var continue_label = step_label
     if iterable_kind == 2 { continue_label = condition_label }
     var loop = be_loop_push(ctx, exit_label, continue_label, retained)
     be_block(source, tokens, ctx, errors, globals, allocations, body, false)
     if get(ctx, 4) == 0 {
+        be_pending_results(tokens, ctx, errors, retained, for_token)
         be_cleanup(body, ctx, retained)
         be_jump(body, ctx, step_label)
     }
     set(ctx, 7, retained); set(ctx, 8, get(ctx, 8) - 1); set(ctx, 29, get(ctx, loop))
+    be_failure_restore(ctx, failure_before)
     be_start(body, ctx, step_label)
     if iterable_kind != 2 {
         var next = be_reg(ctx)
@@ -1461,6 +1469,8 @@ def be_try(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buffe
     var propagated_type = get(ctx, result_type - 100 + 6 + get(ctx, propagated + 3) * 3)
     if error_type != propagated_type { be_error_at(tokens, errors, 219, marker); return buffer() }
     be_pending_tasks(tokens, ctx, errors, -1)
+    be_failure_discharge(source, tokens, ctx)
+    be_pending_results(tokens, ctx, errors, -1, marker)
     if len(errors) != 0 { return buffer() }
     value = be_own(body, ctx, ty, value, owned)
     var pointer = be_field_pointer(body, ctx, ty, value, 0)
@@ -1499,6 +1509,65 @@ def be_try(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buffe
     return payload
 }
 
+# Failure facts refer to lexical local-node identities, never name/read flags.
+# A snapshot contains [local-node, pending] pairs for the current scope chain.
+def be_failure_snapshot(ctx: ints) -> ints {
+    var state = ints(); var local = get(ctx, 7)
+    while local >= 0 {
+        push(state, local); push(state, get(ctx, local + 8))
+        local = get(ctx, local)
+    }
+    return state
+}
+def be_failure_restore(ctx: ints, state: ints) {
+    var i = 0
+    while i < len(state) { set(ctx, get(state, i) + 8, get(state, i + 1)); i = i + 2 }
+}
+def be_failure_join(ctx: ints, state: ints) {
+    var i = 0
+    while i < len(state) {
+        if get(state, i + 1) != 0 { set(ctx, get(state, i) + 8, 1) }
+        i = i + 2
+    }
+}
+def be_failure_accumulate(ctx: ints, state: ints) {
+    var i = 0
+    while i < len(state) {
+        if get(ctx, get(state, i) + 8) != 0 { set(state, i + 1, 1) }
+        i = i + 2
+    }
+}
+def be_failure_discharge(source: buffer, tokens: ints, ctx: ints) {
+    var path = get(ctx, 20)
+    # Expression paths preserve parenthesized names. Calls and compound values
+    # have no path; field paths have a parent and do not discharge their owner.
+    if path < 0 { return }
+    if get(ctx, path) >= 0 { return }
+    var local = be_find(source, tokens, ctx, get(ctx, 7), get(ctx, path + 1))
+    if local >= 0 { set(ctx, local + 8, 0) }
+}
+def be_failure_bind(source: buffer, tokens: ints, ctx: ints) {
+    var local = get(ctx, 7)
+    if be_result_variant(source, tokens, ctx, get(ctx, local + 2), true) >= 0 { set(ctx, local + 8, 1) }
+}
+def be_pending_results(tokens: ints, ctx: ints, errors: ints, stop: int, token: int) {
+    var local = get(ctx, 7)
+    while local != stop and local >= 0 {
+        if get(ctx, local + 8) != 0 { be_error_at(tokens, errors, 221, token); return }
+        local = get(ctx, local)
+    }
+}
+def be_failure_outer(ctx: ints, local: int) -> bool {
+    var loop = get(ctx, 29)
+    if loop < 0 { return false }
+    var retained = get(ctx, loop + 3)
+    while retained >= 0 {
+        if retained == local { return true }
+        retained = get(ctx, retained)
+    }
+    return false
+}
+
 # Like try, let is contextual. Existing calls, member access, assignments and
 # expressions using an ordinary identifier named let retain their grammar.
 def be_let_declaration(source: buffer, tokens: ints, ctx: ints) -> bool {
@@ -1532,11 +1601,15 @@ def be_statement(source: buffer, tokens: ints, ctx: ints, errors: ints, globals:
         if be_owned(ty) { binding_owns = 1 }
         if ty == 6 { binding_owns = 2 }
         be_bind(source, tokens, ctx, errors, allocations, body, name, ty, operand, binding_owns)
-        if kind != 302 and len(errors) == 0 { set(ctx, get(ctx, 7) + 7, 0) }
+        if len(errors) == 0 {
+            be_failure_bind(source, tokens, ctx)
+            if kind != 302 { set(ctx, get(ctx, 7) + 7, 0) }
+        }
         be_end(tokens, ctx, errors)
         return
     }
     if kind == 306 {
+        var return_token = get(ctx, 0)
         be_pending_tasks(tokens, ctx, errors, -1)
         be_next(ctx)
         be_statement_expression(tokens, ctx, 0)
@@ -1546,10 +1619,12 @@ def be_statement(source: buffer, tokens: ints, ctx: ints, errors: ints, globals:
         if be_kind(tokens, ctx) != 10 and be_kind(tokens, ctx) != 59 and be_kind(tokens, ctx) != 125 and be_kind(tokens, ctx) != 0 {
             operand = be_expression(source, tokens, ctx, errors, globals, allocations, body, 1)
             ty = get(ctx, 14)
+            be_failure_discharge(source, tokens, ctx)
             if ty == 0 { be_error(tokens, ctx, errors, 201) }
             operand = be_own(body, ctx, ty, operand, get(ctx, 15))
         }
         if ty != expected { be_error(tokens, ctx, errors, 201) }
+        be_pending_results(tokens, ctx, errors, -1, return_token)
         be_cleanup(body, ctx, -1)
         var line = buffer("ret "); append(line, be_llvm_type(expected))
         if expected != 0 { append(line, " "); append(line, operand) }
@@ -1563,10 +1638,13 @@ def be_statement(source: buffer, tokens: ints, ctx: ints, errors: ints, globals:
         var condition = be_expression(source, tokens, ctx, errors, globals, allocations, body, 1)
         if get(ctx, 14) != 2 { be_error(tokens, ctx, errors, 201) }
         var yes = be_label(ctx); var no = be_label(ctx); var merge = be_label(ctx)
+        var failure_before = be_failure_snapshot(ctx)
         be_branch(body, ctx, condition, yes, no)
         be_start(body, ctx, yes)
         be_block(source, tokens, ctx, errors, globals, allocations, body, true)
         var yes_returns = get(ctx, 4)
+        var failure_yes = be_failure_snapshot(ctx)
+        be_failure_restore(ctx, failure_before)
         if yes_returns == 0 { be_jump(body, ctx, merge) }
         be_newlines(tokens, ctx)
         be_start(body, ctx, no)
@@ -1575,6 +1653,9 @@ def be_statement(source: buffer, tokens: ints, ctx: ints, errors: ints, globals:
             be_next(ctx)
             be_block(source, tokens, ctx, errors, globals, allocations, body, true)
             no_returns = get(ctx, 4)
+        }
+        if yes_returns == 0 {
+            if no_returns == 0 { be_failure_join(ctx, failure_yes) } else { be_failure_restore(ctx, failure_yes) }
         }
         if no_returns == 0 { be_jump(body, ctx, merge) }
         be_start(body, ctx, merge)
@@ -1593,6 +1674,11 @@ def be_statement(source: buffer, tokens: ints, ctx: ints, errors: ints, globals:
         if get(ctx, local + 2) == 6 { be_error_at(tokens, errors, 208, name) }
         if get(ctx, local + 7) == 0 { be_error_at(tokens, errors, 220, name); return }
         if ty == 0 or get(ctx, local + 2) != ty { be_error(tokens, ctx, errors, 201) }
+        if get(ctx, local + 8) != 0 { be_error_at(tokens, errors, 221, name); return }
+        var result_pending = 0
+        if be_result_variant(source, tokens, ctx, ty, true) >= 0 { result_pending = 1 }
+        if result_pending == 1 and be_failure_outer(ctx, local) { be_error_at(tokens, errors, 221, name); return }
+        set(ctx, local + 8, result_pending)
         if be_owned(ty) and get(ctx, local + 5) == 0 { be_error(tokens, ctx, errors, 201) }
         operand = be_own(body, ctx, ty, operand, owns)
         if be_owned(ty) {
@@ -1628,7 +1714,9 @@ def be_block(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buf
         be_statement(source, tokens, ctx, errors, globals, allocations, body)
         be_skip(tokens, ctx)
     }
+    var exit_token = get(ctx, 0)
     be_expect(tokens, ctx, errors, 125)
+    if get(ctx, 4) == 0 { be_pending_results(tokens, ctx, errors, saved, exit_token) }
     be_pending_tasks(tokens, ctx, errors, saved)
     if get(ctx, 4) == 0 { be_cleanup(body, ctx, saved) }
     set(ctx, 7, saved)
@@ -2301,6 +2389,7 @@ def be_match(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buf
     be_statement_expression(tokens, ctx, 0)
     var value = be_expression(source, tokens, ctx, errors, globals, allocations, body, 1)
     var ty = get(ctx, 14); var info = be_enum_info(ctx, ty)
+    be_failure_discharge(source, tokens, ctx)
     if info < 0 { be_error_at(tokens, errors, 215, match_token); return }
     if get(ctx, 8) >= 128 { be_error_at(tokens, errors, 204, match_token); return }
     value = be_own(body, ctx, ty, value, get(ctx, 15))
@@ -2309,6 +2398,9 @@ def be_match(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buf
     # as an owned local lets ordinary return cleanup handle every branch.
     be_bind(source, tokens, ctx, errors, allocations, body, match_token, ty, value, 1)
     var snapshot = get(ctx, 7)
+    var failure_before = be_failure_snapshot(ctx)
+    var failure_join = be_failure_snapshot(ctx); var failure_i = 1
+    while failure_i < len(failure_join) { set(failure_join, failure_i, 0); failure_i = failure_i + 2 }
     var pointer = be_field_pointer(body, ctx, ty, value, 0)
     var tag = be_field_load(body, ctx, 1, pointer)
     var seen = ints(); var i = 0
@@ -2343,6 +2435,7 @@ def be_match(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buf
         var arm = be_label(ctx); var next_arm = be_label(ctx); var condition = be_reg(ctx)
         var line = buffer(); append(line, condition); append(line, " = icmp eq i64 "); append(line, tag); append(line, ", "); append(line, to_buffer(number)); be_line(body, line)
         be_branch(body, ctx, condition, arm, next_arm); be_start(body, ctx, arm)
+        be_failure_restore(ctx, failure_before)
         set(ctx, 8, get(ctx, 8) + 1)
         i = 0
         while i < len(bindings) and len(errors) == 0 {
@@ -2353,11 +2446,14 @@ def be_match(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buf
             operand = be_own(body, ctx, payload_type, operand, 0)
             var owns = 0; if be_owned(payload_type) { owns = 1 }
             be_bind(source, tokens, ctx, errors, allocations, body, get(bindings, i), payload_type, operand, owns)
+            if len(errors) == 0 { be_failure_bind(source, tokens, ctx) }
             i = i + 1
         }
         be_block(source, tokens, ctx, errors, globals, allocations, body, false)
         if get(ctx, 4) == 0 {
             all_return = false
+            be_pending_results(tokens, ctx, errors, snapshot, variant_name)
+            be_failure_accumulate(ctx, failure_join)
             be_cleanup(body, ctx, snapshot)
             be_jump(body, ctx, merge)
         }
@@ -2373,7 +2469,10 @@ def be_match(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buf
     }
     be_line(body, buffer("call void @llvm.trap()")); be_line(body, buffer("unreachable")); set(ctx, 4, 1)
     be_start(body, ctx, merge)
-    if all_return { be_line(body, buffer("unreachable")); set(ctx, 4, 1) } else { be_cleanup(body, ctx, saved) }
+    if all_return { be_line(body, buffer("unreachable")); set(ctx, 4, 1) } else {
+        be_failure_restore(ctx, failure_join)
+        be_cleanup(body, ctx, saved)
+    }
     set(ctx, 7, saved)
 }
 def be_enum_switch(definitions: buffer, ctx: ints, info: int) {

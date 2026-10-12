@@ -8,6 +8,7 @@ pub mod codegen;
 pub mod collections;
 pub mod diagnostic;
 pub mod driver;
+mod failure_use;
 pub mod format;
 pub mod generics;
 mod inspect;

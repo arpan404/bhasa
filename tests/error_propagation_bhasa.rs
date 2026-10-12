@@ -81,10 +81,13 @@ def main()->int {
     var named=try (41)
     if named!=42 {return 1}
     var counter=Counter(0)
-    var good=produce(counter,false);var bad=produce(counter,true)
-    if read_output(take(good))!=3 or read_output(take(bad))!= -1 {return 2}
+    var good=produce(counter,false)
+    var good_output=read_output(take(good))
     match good {case Input.ok(value) {if not same(value.data,"abc") or value.table.count()!=1 {return 3}} case Input.error(error) {return 4}}
+    var bad=produce(counter,true)
+    var bad_output=read_output(take(bad))
     match bad {case Input.error(error) {if not same(error.message,"error") or error.details.count()!=1 {return 5}} case Input.ok(value) {return 6}}
+    if good_output!=3 or bad_output!= -1 {return 2}
     counter.value=0
     if read_output(call_once(counter,true))!= -1 or counter.value!=1 {return 7}
     if read_output(call_once(counter,false))!=6 or counter.value!=3 {return 8}
@@ -93,7 +96,8 @@ def main()->int {
         if read_output(awaited(false))!=3 or read_output(awaited(true))!= -1 {return 10}
         if read_output(nested(good))!=3 or read_output(nested(bad))!= -1 {return 11}
         var worker_job=spawn(joined(true));var result=join(worker_job)
-        if read_output(result)!= -1 {return 12}
+        var result_output=read_output(result)
+        match result {case Output.ok(number) {return 12} case Output.error(error) {if result_output!= -1 {return 12}}}
     }
     var bytes=as_bytes(good)
     match bytes {case Bytes.ok(value) {set(value,0,90);if not same(value,"Zbc") {return 13}} case Bytes.error(error) {return 14}}
@@ -130,8 +134,8 @@ const INVALID: &[(&str, &str)] = &[
     ("enum R{ok(v:int);error(e:int)} def worker(v:int)->int{return v} def f(source:R)->R{var job=spawn(worker(1));var x=try source;var r=join(job);return R.ok(x)}", "BH208"),
     ("enum R{ok(v:int);error(e:int)} def worker(v:int)->R{return R.ok(v)} def f()->R{var other=spawn(worker(1));var job=spawn(worker(1));var x=try join(job);var r=join(other);return R.ok(x)}", "BH208"),
     ("enum R{ok(v:int);error(e:int)} def worker(v:int)->int{return v} def f(source:R)->R{var job=spawn(worker(1));for i in range(1){var x=try source};var r=join(job);return R.ok(1)}", "BH208"),
-    ("extern def unsafe(v:int)->int\nenum R{ok(v:int);error(e:int)} def source(v:int)->R{return R.ok(unsafe(v))} def worker(v:int)->R{var x=try source(v);return R.ok(x)} def main(){var job=spawn(worker(1));var r=join(job)}", "BH209"),
-    ("enum R{ok(v:int);error(e:int)} def source(v:int)->R{return R.ok(v)} def worker(v:int)->R{var job=spawn(source(v));var x=try await(job);return R.ok(x)} def main(){var job=spawn(worker(1));var r=join(job)}", "BH209"),
+    ("extern def unsafe(v:int)->int\nenum R{ok(v:int);error(e:int)} def source(v:int)->R{return R.ok(unsafe(v))} def worker(v:int)->R{var x=try source(v);return R.ok(x)} def main(){var job=spawn(worker(1));var r=join(job);match r{case R.ok(v){}case R.error(e){}}}", "BH209"),
+    ("enum R{ok(v:int);error(e:int)} def source(v:int)->R{return R.ok(v)} def worker(v:int)->R{var job=spawn(source(v));var x=try await(job);return R.ok(x)} def main(){var job=spawn(worker(1));var r=join(job);match r{case R.ok(v){}case R.error(e){}}}", "BH209"),
 ];
 
 const COMPATIBLE: &[&str] = &[

@@ -48,9 +48,36 @@ normal success retains their scopes.
 
 The compiler rejects immediately discarding a result-shaped expression,
 including a call, getter, constructor, result variable or joined task result.
-The existing integer status builtins also reject direct discard. An assigned
-or passed value may still go unhandled; this is not complete pending-failure
-analysis. The corresponding backlog item stays open.
+The existing integer status builtins also reject direct discard. A local binding
+holding a result-shaped enum must be handled before a reachable scope exit,
+return, break/continue or overwrite. Direct exhaustive `match binding`,
+`return binding` and entire-initializer `try binding` discharge that binding.
+Copies have separate obligations. Reading a value, passing it to a function or
+storing it inside a container does not discharge the original binding.
+
+```bhasa
+def show_file(path: buffer) {
+    let outcome = io.file_read(path)
+    match outcome {
+        case io.IoResult[buffer].ok(contents) { print(contents) }
+        case io.IoResult[buffer].error(problem) { print(problem.code()) }
+    }
+}
+```
+
+Every continuing branch must handle the value. Handling an outer result inside
+a loop does not prove handling after the loop, which may run zero times. Result
+assignment to an outer binding from a loop is conservatively rejected; bind and
+handle an iteration-local result instead. Propagation also checks every other
+live result at its possible error return. Rust reports S037; Bhasa reports BH221.
+
+This local rule deliberately excludes parameter obligations, field/container
+tracking, directly nested argument results and interprocedural handling summaries.
+In particular, an opaque private result bound by a caller cannot be discharged
+by passing it to a public handler. The defining module may expose a public
+result wrapper; an inline `handler(factory())` remains outside this local rule.
+Assigned scalar status values are also unchanged. Full passed/aggregate failure
+safety remains an open backlog item. Fatal traps remain fatal.
 
 There are no thrown exceptions or try/catch. Integer overflow, invalid shifts,
 bounds failures, invalid runtime tags/pointers and allocation failure stop the

@@ -257,11 +257,15 @@ def run()->int{
     let numbers=ints();push(numbers,42);set(numbers,0,43)
     if get(numbers,0)!=43{return 4}
     let success=Reply[buffer].ok(buffer("x"))
-    match propagate(success){case Reply[int].ok(value){if value!=2{return 5}}case Reply[int].error(problem){return 6}}
+    var success_status=0
+    match propagate(success){case Reply[int].ok(value){if value!=2{success_status=5}}case Reply[int].error(problem){success_status=6}}
     match success{case Reply[buffer].ok(value){if not same(value,"x"){return 7}}case Reply[buffer].error(problem){return 8}}
+    if success_status!=0{return success_status}
     let failure=Reply[buffer].error(buffer("failure"))
-    match propagate(failure){case Reply[int].ok(value){return 9}case Reply[int].error(problem){append(problem,"changed")}}
+    var failure_status=0
+    match propagate(failure){case Reply[int].ok(value){failure_status=9}case Reply[int].error(problem){append(problem,"changed")}}
     match failure{case Reply[buffer].ok(value){return 10}case Reply[buffer].error(problem){if not same(problem,"failure"){return 11}}}
+    if failure_status!=0{return failure_status}
     match joined(copied){case Reply[int].ok(value){if value!=5{return 12}}case Reply[int].error(problem){return 13}}
     let task=async_spawn(worker(copied));let result=await(task)
     match result{case Reply[Item].ok(value){if not same(value.bytes,"a!?!"){return 14}}case Reply[Item].error(problem){return 15}}

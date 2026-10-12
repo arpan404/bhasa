@@ -98,7 +98,11 @@ fn imported_generic_propagation_contextual_names_and_formatter_keep_behavior() {
             match multiline(){case Local.ok(value){if not same(value,"0"){return 6}}case Local.error(problem){return 7}}
             match failure(){case Local.ok(value){return 3}case Local.error(problem){if not same(problem,"missing"){return 4}}}
             var try=Source[int].ok(7)
-            match propagate[int](try){case Reply[int].ok(value){print(value)}case Reply[int].error(problem){return 5}}
+            var propagated=0;var failed=false
+            match propagate[int](try){case Reply[int].ok(value){propagated=value}case Reply[int].error(problem){failed=true}}
+            match try{case Source[int].ok(value){if value!=7{return 8}}case Source[int].error(problem){return 9}}
+            if failed{return 5}
+            print(propagated)
             return 0
         }
     "#);

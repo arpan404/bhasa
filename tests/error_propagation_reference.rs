@@ -177,7 +177,7 @@ fn contextual_try_preserves_existing_names_and_rejects_unsupported_positions() {
 }
 
 #[test]
-fn bare_result_discard_checks_every_expression_but_not_assigned_failures() {
+fn bare_and_bound_result_discard_require_handling() {
     let definitions="enum R{error(message:buffer);ok(value:int)}def make()->R{return R.ok(1)}struct Holder{value:R;def read(self)->R{return self.value}}def worker(value:int)->R{return R.ok(value)}";
     for statement in [
         "make()",
@@ -197,7 +197,7 @@ fn bare_result_discard_checks_every_expression_but_not_assigned_failures() {
             "{source}: {errors:?}"
         );
     }
-    bhasa::check(&format!("{definitions} def main(){{var unused=make();var task=spawn(worker(1));var ignored=join(task)}}")).unwrap();
+    assert!(bhasa::check(&format!("{definitions} def main(){{var unused=make();var task=spawn(worker(1));var ignored=join(task)}}")).unwrap_err().iter().any(|error| error.code == "S037"));
     bhasa::check("enum Option{none;some(value:int)}def main(){Option.none()}").unwrap();
     bhasa::check("enum Other{ok(value:int);error(value:int);pending}def main(){Other.pending()}")
         .unwrap();
@@ -270,11 +270,15 @@ def exercise()->bool{
  match nested(counter,true){case Output[int,Payload].ok(n){return false}case Output[int,Payload].error(e){if not same(e.message,"error") or e.items.count()!=1{return false};append(e.message," modified")}}
  if counter.calls!=2{return false}
  var source=Input[buffer,Payload].ok(buffer("original"))
- match measure(source){case Output[int,Payload].ok(n){if n!=9{return false}}case Output[int,Payload].error(e){return false}}
+ var measured_ok=false;var measured_size=0
+ match measure(source){case Output[int,Payload].ok(n){measured_ok=true;measured_size=n}case Output[int,Payload].error(e){measured_ok=false}}
  match source{case Input[buffer,Payload].ok(bytes){if not same(bytes,"original"){return false}}case Input[buffer,Payload].error(e){return false}}
+ if not measured_ok or measured_size!=9{return false}
  source=Input[buffer,Payload].error(payload())
- match measure(source){case Output[int,Payload].ok(n){return false}case Output[int,Payload].error(e){append(e.message," changed");e.items.clear();e.table.clear()}}
+ var measured_error=false
+ match measure(source){case Output[int,Payload].ok(n){measured_error=false}case Output[int,Payload].error(e){measured_error=true;append(e.message," changed");e.items.clear();e.table.clear()}}
  match source{case Input[buffer,Payload].ok(bytes){return false}case Input[buffer,Payload].error(e){if not same(e.message,"error") or e.items.count()!=1 or e.table.count()!=1{return false}}}
+ if not measured_error{return false}
  match joined(false){case Output[int,Payload].ok(n){if n!=6{return false}}case Output[int,Payload].error(e){return false}}
  match joined(true){case Output[int,Payload].ok(n){return false}case Output[int,Payload].error(e){if not same(e.message,"error"){return false}}}
  var numbers=ints();push(numbers,-7)

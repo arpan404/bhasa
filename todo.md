@@ -1,6 +1,6 @@
 # Bhasa implementation backlog
 
-Updated October 11, 2026. This is the complete backlog from the requested feature
+Updated October 12, 2026. This is the complete backlog from the requested feature
 inventory. A checked box means integrated and verified, not merely assigned or
 implemented in one frontend. Work proceeds in dependency order with local commits
 after verified increments. Existing caches are preserved.
@@ -17,6 +17,7 @@ after verified increments. Existing caches are preserved.
 - [x] Snapshot iteration for buffer/ints/Map keys, including cleanup and worker safety.
 - [x] Typed file errors, explicit initializer propagation and immediate Result-discard rejection.
 - [x] Binding-only immutable locals, both frontends, editor identity, cleanup and cache/self-rebuild acceptance.
+- [x] Local pending-result scope/branch/loop checking, preserving error/task/ownership contracts.
 - [ ] Eight dedicated chats implement remaining sections in `docs/status/backlog-lanes.md`; draft readiness does not complete a checkbox.
 
 Three workers may run alongside the coordinator in this session. The coordinator
@@ -82,6 +83,8 @@ tests and 38 editor tests. This evidence predates new work below.
 - [ ] Stronger enforcement of unused failure results.
   - [x] Reject immediately discarded result-shaped expressions.
   - [ ] Track assigned/passed/aggregated failures through control flow and calls.
+  - [x] Local bound-result scope/branch/loop obligations, both frontends and emission guards.
+  - [ ] Parameters, aggregate contents and interprocedural handling summaries.
 
 ## Collections and text
 
@@ -237,3 +240,8 @@ The coordinator records completed increments and their verification here.
   hits; four unchanged Rust adapter runs and two unchanged hybrid builds perform
   zero compilations. Evidence: `docs/status/integration.md` and `errors-milestone.md`.
   Binding-only let and eight new backlog chats remain unintegrated work.
+
+Local pending-result evidence: 477 reference / 502 hybrid tests, 59 LSP / 82 editor,
+both Clippy configurations, thirteen release examples, five package tests,
+A/B/C at run.EbbPYcIp and unchanged native/Cargo/archive reuse. See
+`docs/status/integration.md`. Parameter/aggregate/interprocedural obligations remain open.

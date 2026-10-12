@@ -71,6 +71,11 @@ pub fn check(mut program: Program) -> Result<CheckedProgram, Vec<Diagnostic>> {
         }
     }
     if checker.diagnostics.is_empty() {
+        checker
+            .diagnostics
+            .extend(crate::failure_use::check(&program));
+    }
+    if checker.diagnostics.is_empty() {
         Ok(CheckedProgram {
             program,
             signatures: checker.signatures,

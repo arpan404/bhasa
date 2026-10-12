@@ -349,3 +349,37 @@ from run.4w9SLwHa. The new example's range spelling was corrected before the
 complete frozen-source rerun. Scoped immutable work is accepted; broader
 readonly/aliases/constants remain open. Root is committing this verified
 increment before applying S037/BH221 and ownership-fixture migrations.
+
+Immutable work is committed and pushed as 4828aff. Root has now applied the
+contextual S037 host/emission pass and BH221 native pass, with independent
+pending state separate from mutability/task/ownership. Focused source, owned
+cleanup, corrupted-AST and opaque-result gates pass. Existing valid examples
+and standalone fixtures show no regressions. Two BH209 negative fixtures now
+exhaustively handle their joined results to isolate the original unsafe-worker
+rule; the imported contextual variable named try fixture handles its own
+result before assertion returns. No compiler rule was disabled for migrations.
+Complete frozen-source reference validation is running; hybrid/archive/release
+gates remain pending. The bounded local rule does not complete passed/aggregate
+failure safety. Its opaque-result handler-call restriction is documented.
+
+## Local pending-result acceptance
+
+October 12: frozen S037/BH221 sources pass 477 reference / 502 hybrid tests,
+59 LSP / 82 Node, both Clippy configurations and formatting. Both releases
+execute thirteen examples and five package tests. A/B/C passes at run.EbbPYcIp.
+32 example/test native hits, four unchanged Rust adapter runs and two unchanged
+hybrid builds show zero compilations. Matching archive is
+cac13c4c9ed6aa67e5812514d19391babaca15f477783246d0c69d8bca43778e,
+source-exact at run.DeJuY1kd. Independent final review adds 16 paired cases and
+two imported Unicode/CRLF JSON location probes with no new finding. Scoped local
+obligations are accepted; parameter/aggregate/call summaries remain open.
+
+Independent alias review confirms final Cow edit repair and all 22 source cases.
+Package/FFI and checked signature/highlighting corrections await integration.
+Private storage and file runtime review found no new invariant/ownership issue;
+stale file-result fixture is corrected and two stale backend-guide sentences
+are routed to safety. File driver/cache linkage and file_handle editor reservation
+remain root-owned. Channel identity/getter/DAG traversal findings are routed
+before source wiring. Owned buffer/ints transfer has a separately ratified small
+contract; broader borrows/resources/Results are deferred. No other checkbox is
+completed by these draft reviews.
