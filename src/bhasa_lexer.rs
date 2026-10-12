@@ -467,6 +467,7 @@ fn compile_inner(
                     219 => "try requires a compatible result return type with the same error payload",
         220 => "immutable binding cannot be reassigned",
                     221 => "result binding is pending; match, return or propagate it before discarding it",
+                    222 => "invalid ownership transfer or use of a moved binding",
                     _ => return Err("frontend returned an unknown diagnostic code".to_owned()),
                 };
                 Ok(Diagnostic::new(

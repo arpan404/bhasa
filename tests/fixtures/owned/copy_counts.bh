@@ -1,0 +1,10 @@
+
+def changed(x:buffer)->buffer {append(x,"!");return x}
+def copyints(x:ints)->ints {return x}
+def main() {
+ var x=buffer("copy");var y=x;set(y,0,67)
+ var z=changed(x);push(z,63)
+ print(x);print(y);print(z)
+ var values=ints();push(values,4);var copied=copyints(values);set(copied,0,9)
+ print(get(values,0));print(get(copied,0))
+}

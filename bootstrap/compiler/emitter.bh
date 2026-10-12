@@ -7,15 +7,17 @@
 # statement-call-token, statement-mode (initializer 1 / expression 2), task-call,
 # record-head, expression-path, argument-access-head, record-allocator,
 # expression-tree-depth, method-head, call-edge-head, spawned-worker-head, enum-head,
-# collection-head, loop-head, inferred-task-worker.
+# collection-head, loop-head, inferred-task-worker, owned-mode-head, control-depth,
+# allow-move, expression-operation, moved-local, active-loan-head.
 # Path node: parent, name-token, type. Access node: next, path, type, token.
 # Types: void 0, int 1, bool 2, str 3, buffer 4, ints 5, task 6,
-# tcp_listener 7, tcp_socket 8, tls_socket 9, float 10, records node+100.
+# tcp_listener 7, tcp_socket 8, tls_socket 9, float 10, file_handle 11, records node+100.
 # Signature node: next, name-token, result, argc, body-start, body-end, external,
 # owner-record-type (0 for global), followed by [parameter-name-token, parameter-type] pairs.
 # Local node: next, name-token, type, slot-register, scope-depth, ownership-state,
 # task-worker-signature (-1 for ordinary locals), reassignable (0 let / 1 ordinary),
-# pending-result (independent of ownership/task/mutability).
+# pending-result (independent of ownership/task/mutability), initialized,
+# transfer-owner, binding-control-depth.
 # Ownership state: 0 borrowed/scalar, 1 allocation, 2 pending task, 3 joined task.
 # Errors: 200 syntax, 201 type, 202 name/duplicate, 203 unsupported,
 # 204 depth limit, 205 control flow, 206 integer range, 207 ignored I/O status,
@@ -24,7 +26,7 @@
 # 214 overlapping record/field argument borrows, 215 enum/variant/pattern,
 # 216 duplicate or missing exhaustive match arms, 217 nonfinite float literal,
 # 218 invalid try operand shape, 219 incompatible try return/error type,
-# 220 reassignment of an immutable local binding, 221 pending local result.
+# 220 immutable assignment, 221 pending local result, 222 ownership transfer.
 
 def be_kind(tokens: ints, ctx: ints) -> int { return bh_token_kind(tokens, get(ctx, 0)) }
 def be_next(ctx: ints) { set(ctx, 0, get(ctx, 0) + 1) }
@@ -69,6 +71,7 @@ def be_type(source: buffer, tokens: ints, ctx: ints, errors: ints) -> int {
         if same(word, "tcp_listener") { result = 7 }
         if same(word, "tcp_socket") { result = 8 }
         if same(word, "tls_socket") { result = 9 }
+        if same(word, "file_handle") { result = 11 }
         if result < 0 {
             var record = be_find(source, tokens, ctx, get(ctx, 19), get(ctx, 0))
             if record >= 0 { result = record + 100 } else { be_error(tokens, ctx, errors, 211); return 0 }
@@ -85,7 +88,7 @@ def be_llvm_type(ty: int) -> buffer {
     if ty == 2 { return buffer("i1") }
     return buffer("ptr")
 }
-def be_owned(ty: int) -> bool { return ty == 4 or ty == 5 or ty == 7 or ty == 8 or ty == 9 or ty >= 100 }
+def be_owned(ty: int) -> bool { return ty == 4 or ty == 5 or ty == 7 or ty == 8 or ty == 9 or ty == 11 or ty >= 100 }
 def be_number(prefix: str, value: int) -> buffer {
     var text = buffer(prefix)
     append(text, to_buffer(value))
@@ -132,7 +135,7 @@ def be_trap(body: buffer, ctx: ints, condition: buffer) {
     be_line(body, buffer("unreachable"))
     be_start(body, ctx, good)
 }
-def be_meta(ctx: ints, ty: int, owns: int) { set(ctx, 14, ty); set(ctx, 15, owns); set(ctx, 20, -1); set(ctx, 23, 1) }
+def be_meta(ctx: ints, ty: int, owns: int) { set(ctx, 14, ty); set(ctx, 15, owns); set(ctx, 20, -1); set(ctx, 23, 1); set(ctx, 34, 0); set(ctx, 35, -1) }
 def be_same_name(source: buffer, tokens: ints, left: int, right: int) -> bool {
     return same(bh_token_text(source, tokens, left), bh_token_text(source, tokens, right))
 }
@@ -144,8 +147,13 @@ def be_find(source: buffer, tokens: ints, ctx: ints, head: int, name: int) -> in
     }
     return -1
 }
+# Every operation accesses unsynchronized shared file state. File status and
+# position also require use, preserving the reference builtin contract.
+def be_is_file_operation(name: buffer) -> bool {
+    return same(name, "file_open") or same(name, "file_status") or same(name, "file_read_chunk") or same(name, "file_write_chunk") or same(name, "file_seek") or same(name, "file_position") or same(name, "file_flush") or same(name, "file_close")
+}
 def be_is_builtin(name: buffer) -> bool {
-    return same(name, "print") or same(name, "int") or same(name, "float") or same(name, "buffer") or same(name, "ints") or same(name, "len") or same(name, "get") or same(name, "set") or same(name, "push") or same(name, "append") or same(name, "slice") or same(name, "same") or same(name, "to_buffer") or same(name, "arg_count") or same(name, "arg") or same(name, "read_file") or same(name, "write_file") or same(name, "read_stdin") or same(name, "write_stdout") or same(name, "write_stderr") or same(name, "args_push") or same(name, "process_run") or same(name, "spawn") or same(name, "join") or same(name, "gpu_available") or same(name, "gpu_dispatch") or same(name, "tcp_listen") or same(name, "tcp_listen_on") or same(name, "tcp_connect") or same(name, "tcp_accept") or same(name, "tcp_listener_status") or same(name, "tcp_socket_status") or same(name, "tcp_local_port") or same(name, "tcp_read") or same(name, "tcp_write") or same(name, "utf8_valid") or same(name, "utf8_count") or same(name, "utf8_get") or same(name, "utf8_slice") or same(name, "utf8_append") or same(name, "tcp_accept_timeout") or same(name, "tcp_read_timeout") or same(name, "tcp_write_timeout") or same(name, "tcp_connect_timeout") or same(name, "monotonic_millis") or same(name, "async_spawn") or same(name, "await") or same(name, "tls_connect") or same(name, "tls_accept") or same(name, "tls_status") or same(name, "tls_read") or same(name, "tls_write") or same(name, "tls_shutdown") or same(name, "stream_read") or same(name, "stream_write")
+    return be_is_file_operation(name) or same(name, "print") or same(name, "int") or same(name, "float") or same(name, "buffer") or same(name, "ints") or same(name, "len") or same(name, "get") or same(name, "set") or same(name, "push") or same(name, "append") or same(name, "slice") or same(name, "same") or same(name, "to_buffer") or same(name, "arg_count") or same(name, "arg") or same(name, "read_file") or same(name, "write_file") or same(name, "read_stdin") or same(name, "write_stdout") or same(name, "write_stderr") or same(name, "args_push") or same(name, "process_run") or same(name, "spawn") or same(name, "join") or same(name, "gpu_available") or same(name, "gpu_dispatch") or same(name, "tcp_listen") or same(name, "tcp_listen_on") or same(name, "tcp_connect") or same(name, "tcp_accept") or same(name, "tcp_listener_status") or same(name, "tcp_socket_status") or same(name, "tcp_local_port") or same(name, "tcp_read") or same(name, "tcp_write") or same(name, "utf8_valid") or same(name, "utf8_count") or same(name, "utf8_get") or same(name, "utf8_slice") or same(name, "utf8_append") or same(name, "tcp_accept_timeout") or same(name, "tcp_read_timeout") or same(name, "tcp_write_timeout") or same(name, "tcp_connect_timeout") or same(name, "monotonic_millis") or same(name, "async_spawn") or same(name, "await") or same(name, "tls_connect") or same(name, "tls_accept") or same(name, "tls_status") or same(name, "tls_read") or same(name, "tls_write") or same(name, "tls_shutdown") or same(name, "stream_read") or same(name, "stream_write")
 }
 def be_reserved(name: buffer) -> bool {
     if be_is_builtin(name) or same(name, "range") { return true }
@@ -168,6 +176,81 @@ def be_function_symbol(source: buffer, tokens: ints, ctx: ints, node: int) -> bu
     append(symbol, bh_token_text(source, tokens, get(ctx, node + 1)))
     return symbol
 }
+# Mode nodes: next, signature, parameter-index, mode=1, owned-token, declared-type.
+# Ordinary signature parameter pairs retain their existing two-slot stride.
+def be_parameter_mode(ctx: ints, signature: int, index: int) -> int {
+    var node = get(ctx, 31); var steps = 0
+    while node >= 0 {
+        if node < 37 or node + 5 >= len(ctx) or steps >= len(ctx) { return -1 }
+        if get(ctx, node + 1) == signature and get(ctx, node + 2) == index {
+            if signature < 37 or index < 0 or signature + 9 + index * 2 >= len(ctx) { return -1 }
+            if get(ctx, node + 4) != get(ctx, signature + 8 + index * 2) - 1 or get(ctx, node + 5) != get(ctx, signature + 9 + index * 2) { return -1 }
+            return get(ctx, node + 3)
+        }
+        node = get(ctx, node); steps = steps + 1
+    }
+    return 0
+}
+def be_has_owned(ctx: ints, signature: int) -> bool {
+    var i = 0
+    while i < get(ctx, signature + 3) {
+        if be_parameter_mode(ctx, signature, i) != 0 { return true }
+        i = i + 1
+    }
+    return false
+}
+def be_owned_marker(source: buffer, tokens: ints, token: int) -> bool {
+    return bh_token_kind(tokens, token) == 1 and same(bh_token_text(source, tokens, token), "owned") and bh_token_kind(tokens, token + 1) == 1
+}
+def be_validate_modes(source: buffer, tokens: ints, ctx: ints, errors: ints, signature: int) {
+    if signature < 37 or signature + 7 >= len(ctx) { be_error_at(tokens, errors, 222, 0); return }
+    var count = get(ctx, signature + 3)
+    if count < 0 or count > (len(ctx) - signature - 8) / 2 { be_error_at(tokens, errors, 222, 0); return }
+    var i = 0
+    while i < count {
+        var name = get(ctx, signature + 8 + i * 2); var ty = get(ctx, signature + 9 + i * 2)
+        if name < 0 or name >= len(tokens) / 3 { be_error_at(tokens, errors, 222, 0); return }
+        var mode = be_parameter_mode(ctx, signature, i)
+        var expected = 0
+        if name > 0 { if be_owned_marker(source, tokens, name - 1) { expected = 1 } }
+        if mode != expected { be_error_at(tokens, errors, 222, name); return }
+        if mode == 1 {
+            var word = bh_token_text(source, tokens, get(ctx, signature + 1))
+            var generic = false; if len(word) >= 6 { generic = same(slice(word, 0, 6), "__bhg_") }
+            if (ty != 4 and ty != 5) or get(ctx, signature + 6) != 0 or get(ctx, signature + 7) != 0 or generic { be_error_at(tokens, errors, 222, name); return }
+        }
+        i = i + 1
+    }
+}
+def be_transfer_loan(ctx: ints, local: int) {
+    var node = len(ctx); push(ctx, get(ctx, 36)); push(ctx, local); set(ctx, 36, node)
+}
+def be_transfer_root(source: buffer, tokens: ints, ctx: ints, path: int) -> int {
+    if path < 0 { return -1 }
+    while get(ctx, path) >= 0 { path = get(ctx, path) }
+    return be_find(source, tokens, ctx, get(ctx, 7), get(ctx, path + 1))
+}
+def be_move(source: buffer, tokens: ints, ctx: ints, errors: ints, body: buffer) -> buffer {
+    var marker = get(ctx, 0)
+    if marker < 0 or marker + 1 >= len(tokens) / 3 { be_error_at(tokens, errors, 222, 0); be_meta(ctx, 0, 0); return buffer() }
+    if not same(bh_token_text(source, tokens, marker), "move") or bh_token_kind(tokens, marker + 1) != 1 { be_error_at(tokens, errors, 222, marker); be_meta(ctx, 0, 0); return buffer() }
+    be_next(ctx)
+    var name = get(ctx, 0); be_next(ctx)
+    var local = be_find(source, tokens, ctx, get(ctx, 7), name)
+    if local < 0 { be_error_at(tokens, errors, 222, marker); be_meta(ctx, 0, 0); return buffer() }
+    var ty = get(ctx, local + 2)
+    if get(ctx, 33) == 0 or get(ctx, get(ctx, 12) + 7) >= 100 or (ty != 4 and ty != 5) or get(ctx, local + 5) != 1 or get(ctx, local + 10) != 1 or get(ctx, local + 9) != 1 or get(ctx, local + 11) != get(ctx, 32) { be_error_at(tokens, errors, 222, marker); be_meta(ctx, ty, 0); return buffer() }
+    var loan = get(ctx, 36)
+    while loan >= 0 {
+        if get(ctx, loan + 1) == local { be_error_at(tokens, errors, 222, marker); be_meta(ctx, ty, 0); return buffer() }
+        loan = get(ctx, loan)
+    }
+    var value = be_load(body, ctx, local)
+    set(ctx, local + 9, 0)
+    be_meta(ctx, ty, 1); set(ctx, 34, 1); set(ctx, 35, local)
+    return value
+}
+
 def be_declare_function(source: buffer, tokens: ints, ctx: ints, errors: ints, owner: int) {
     var head = 6
     if owner >= 100 { head = 24 }
@@ -188,20 +271,23 @@ def be_declare_function(source: buffer, tokens: ints, ctx: ints, errors: ints, o
     push(ctx, 0); push(ctx, 0); push(ctx, external); push(ctx, owner)
     set(ctx, head, node)
     be_expect(tokens, ctx, errors, 40)
-    var count = 0
+    var count = 0; var modes = ints(); var mode_tokens = ints()
     if owner >= 100 {
         var receiver = get(ctx, 0)
         be_expect(tokens, ctx, errors, 1)
         if not same(bh_token_text(source, tokens, receiver), "self") { be_error_at(tokens, errors, 201, receiver) }
-        push(ctx, receiver); push(ctx, owner); count = 1
+        push(ctx, receiver); push(ctx, owner); push(modes, 0); push(mode_tokens, receiver); count = 1
         if be_kind(tokens, ctx) == 44 { be_next(ctx) } else {
             if be_kind(tokens, ctx) != 41 { be_error(tokens, ctx, errors, 200) }
         }
     }
     while be_kind(tokens, ctx) != 41 and len(errors) == 0 {
+        var mode = 0; var mode_token = get(ctx, 0)
+        if be_owned_marker(source, tokens, get(ctx, 0)) { mode = 1; be_next(ctx) }
         var parameter = get(ctx, 0)
         be_expect(tokens, ctx, errors, 1)
         be_expect(tokens, ctx, errors, 58)
+        if mode == 1 and same(bh_token_text(source, tokens, get(ctx, 0)), "task") { be_error_at(tokens, errors, 222, parameter); return }
         var ty = be_type(source, tokens, ctx, errors)
         if ty == 0 or be_reserved(bh_token_text(source, tokens, parameter)) { be_error(tokens, ctx, errors, 201) }
         if external == 1 and ty != 1 { be_error_at(tokens, errors, 201, parameter) }
@@ -210,7 +296,7 @@ def be_declare_function(source: buffer, tokens: ints, ctx: ints, errors: ints, o
             if be_same_name(source, tokens, get(ctx, node + 8 + i * 2), parameter) { be_error(tokens, ctx, errors, 202) }
             i = i + 1
         }
-        push(ctx, parameter); push(ctx, ty); count = count + 1
+        push(ctx, parameter); push(ctx, ty); push(modes, mode); push(mode_tokens, mode_token); count = count + 1
         if be_kind(tokens, ctx) == 44 { be_next(ctx) } else {
             if be_kind(tokens, ctx) != 41 { be_error(tokens, ctx, errors, 200) }
         }
@@ -219,6 +305,15 @@ def be_declare_function(source: buffer, tokens: ints, ctx: ints, errors: ints, o
     var result = 0
     if be_kind(tokens, ctx) == 262 { be_next(ctx); result = be_type(source, tokens, ctx, errors) }
     set(ctx, node + 2, result); set(ctx, node + 3, count)
+    var mode_i = 0
+    while mode_i < count {
+        if get(modes, mode_i) == 1 {
+            var entry = len(ctx)
+            push(ctx, get(ctx, 31)); push(ctx, node); push(ctx, mode_i); push(ctx, 1); push(ctx, get(mode_tokens, mode_i)); push(ctx, get(ctx, node + 9 + mode_i * 2)); set(ctx, 31, entry)
+        }
+        mode_i = mode_i + 1
+    }
+    be_validate_modes(source, tokens, ctx, errors, node)
     if external == 1 and result != 0 and result != 1 { be_error_at(tokens, errors, 201, name) }
     if owner == 0 and same(bh_token_text(source, tokens, name), "main") and (external == 1 or count != 0 or (result != 0 and result != 1)) { be_error_at(tokens, errors, 201, name) }
     if external == 1 {
@@ -249,6 +344,7 @@ def be_owned_symbol(ty: int, cloning: bool) -> buffer {
         if ty == 7 { append(symbol, "tcp_listener") }
         if ty == 8 { append(symbol, "tcp_socket") }
         if ty == 9 { append(symbol, "tls_socket") }
+        if ty == 11 { append(symbol, "file") }
         append(symbol, "_")
     }
     if cloning { append(symbol, "clone") } else { append(symbol, "free") }
@@ -284,7 +380,7 @@ def be_load(body: buffer, ctx: ints, local: int) -> buffer {
 def be_cleanup(body: buffer, ctx: ints, stop: int) {
     var local = get(ctx, 7)
     while local != stop and local >= 0 {
-        if get(ctx, local + 5) == 1 {
+        if get(ctx, local + 5) == 1 and get(ctx, local + 9) == 1 {
             var value = be_load(body, ctx, local)
             be_release(body, get(ctx, local + 2), value, 1)
         }
@@ -304,7 +400,9 @@ def be_bind(source: buffer, tokens: ints, ctx: ints, errors: ints, allocations: 
     var node = len(ctx)
     push(ctx, get(ctx, 7)); push(ctx, name); push(ctx, ty); push(ctx, slot); push(ctx, get(ctx, 8)); push(ctx, owns)
     var task_worker = -1; if ty == 6 { task_worker = get(ctx, 30) }
-    push(ctx, task_worker); push(ctx, 1); push(ctx, 0)
+    push(ctx, task_worker); push(ctx, 1); push(ctx, 0); push(ctx, 1)
+    var transfer_owner = 0; if owns == 1 and (ty == 4 or ty == 5) { transfer_owner = 1 }
+    push(ctx, transfer_owner); push(ctx, get(ctx, 32))
     set(ctx, 7, node)
 }
 def be_string(globals: buffer, ctx: ints, text: buffer) -> buffer {
@@ -626,6 +724,14 @@ def be_builtin(name: buffer, args: ints, ctx: ints, tokens: ints, errors: ints) 
     if same(name, "stream_write") and count == 3 and (a == 8 or a == 9) and b == 4 and c == 1 {
         if a == 9 { append(symbol, "tls_write") } else { append(symbol, "tcp_write_timeout") }; ty = 1
     }
+    if same(name, "file_open") and count == 2 and (a == 3 or a == 4) and b == 1 {
+        append(symbol, "file_open"); if a == 3 { append(symbol, "_str") }; ty = 11
+    }
+    if (same(name, "file_status") or same(name, "file_position") or same(name, "file_flush") or same(name, "file_close")) and count == 1 and a == 11 { append(symbol, name); ty = 1 }
+    if same(name, "file_read_chunk") and count == 3 and a == 11 and b == 4 and c == 1 { append(symbol, name); ty = 1 }
+    if same(name, "file_write_chunk") and count == 2 and a == 11 and b == 4 { append(symbol, name); ty = 1 }
+    if same(name, "file_seek") and count == 2 and a == 11 and b == 1 { append(symbol, name); ty = 1 }
+    if be_is_file_operation(name) { be_call_edge(ctx, -2) }
     if ty < 0 { be_error(tokens, ctx, errors, 201); ty = 0 }
     var owns = 0
     if be_owned(ty) { owns = 1 }
@@ -633,7 +739,7 @@ def be_builtin(name: buffer, args: ints, ctx: ints, tokens: ints, errors: ints) 
     return symbol
 }
 def be_must_use(name: buffer) -> bool {
-    return same(name, "read_file") or same(name, "write_file") or same(name, "read_stdin") or same(name, "write_stdout") or same(name, "write_stderr") or same(name, "process_run") or same(name, "gpu_dispatch") or same(name, "tcp_read") or same(name, "tcp_write") or same(name, "utf8_append") or same(name, "tcp_read_timeout") or same(name, "tcp_write_timeout") or same(name, "tls_read") or same(name, "tls_write") or same(name, "tls_shutdown") or same(name, "stream_read") or same(name, "stream_write")
+    return be_is_file_operation(name) or same(name, "read_file") or same(name, "write_file") or same(name, "read_stdin") or same(name, "write_stdout") or same(name, "write_stderr") or same(name, "process_run") or same(name, "gpu_dispatch") or same(name, "tcp_read") or same(name, "tcp_write") or same(name, "utf8_append") or same(name, "tcp_read_timeout") or same(name, "tcp_write_timeout") or same(name, "tls_read") or same(name, "tls_write") or same(name, "tls_shutdown") or same(name, "stream_read") or same(name, "stream_write")
 }
 def be_print(body: buffer, globals: buffer, ctx: ints, tokens: ints, errors: ints, args: ints, operands: buffer) {
     if len(args) != 4 { be_error(tokens, ctx, errors, 201); return }
@@ -661,6 +767,7 @@ def be_print(body: buffer, globals: buffer, ctx: ints, tokens: ints, errors: int
     append(line, be_llvm_type(ty)); append(line, " "); append(line, operand); append(line, ")"); be_line(body, line)
 }
 def be_statement_expression(tokens: ints, ctx: ints, mode: int) {
+    set(ctx, 33, 0)
     var index = get(ctx, 0)
     while bh_token_kind(tokens, index) == 40 { index = index + 1 }
     set(ctx, 16, index); set(ctx, 17, mode); set(ctx, 18, 0)
@@ -676,6 +783,38 @@ def be_call_edge(ctx: ints, callee: int) {
     var node = len(ctx)
     push(ctx, get(ctx, 25)); push(ctx, get(ctx, 12)); push(ctx, callee); set(ctx, 25, node)
 }
+# Aggregate schemas retain field/payload types, including specialization type
+# fields for List/Map. Walk those identities iteratively and tolerate cycles.
+# These shared handles are owned sequentially, but cannot cross worker threads.
+def be_contains_file(ctx: ints, ty: int) -> bool {
+    var pending = ints(); push(pending, ty)
+    var visited = ints(); var cursor = 0
+    while cursor < len(pending) {
+        var current = get(pending, cursor); cursor = cursor + 1
+        if current == 11 { return true }
+        if current >= 100 {
+            var known = false; var i = 0
+            while i < len(visited) { if get(visited, i) == current { known = true }; i = i + 1 }
+            if not known {
+                push(visited, current)
+                var record = current - 100; i = 0
+                while i < get(ctx, record + 2) {
+                    push(pending, get(ctx, record + 6 + i * 3)); i = i + 1
+                }
+            }
+        }
+    }
+    return false
+}
+def be_signature_contains_file(ctx: ints, signature: int) -> bool {
+    if be_contains_file(ctx, get(ctx, signature + 2)) { return true }
+    var i = 0
+    while i < get(ctx, signature + 3) {
+        if be_contains_file(ctx, get(ctx, signature + 9 + i * 2)) { return true }
+        i = i + 1
+    }
+    return false
+}
 def be_worker_has_extern(ctx: ints, worker: int) -> bool {
     var pending = ints(); push(pending, worker)
     var visited = ints()
@@ -688,7 +827,7 @@ def be_worker_has_extern(ctx: ints, worker: int) -> bool {
         if not known {
             push(visited, node)
             if node == -2 { return true }
-            if get(ctx, node + 6) == 1 { return true }
+            if get(ctx, node + 6) == 1 or be_signature_contains_file(ctx, node) { return true }
             var edge = get(ctx, 25)
             while edge >= 0 {
                 if get(ctx, edge + 1) == node { push(pending, get(ctx, edge + 2)) }
@@ -740,6 +879,8 @@ def be_task_call(source: buffer, tokens: ints, ctx: ints, errors: ints, globals:
         if get(ctx, worker + 6) != 0 or get(ctx, worker + 3) != 1 or get(ctx, worker + 2) == 6 {
             be_error_at(tokens, errors, 209, argument_name); be_meta(ctx, 1, 0); return buffer("0")
         }
+        if be_has_owned(ctx, worker) { be_error_at(tokens, errors, 222, argument_name); be_meta(ctx, 1, 0); return buffer("0") }
+        if be_signature_contains_file(ctx, worker) { be_error_at(tokens, errors, 209, argument_name); be_meta(ctx, 1, 0); return buffer("0") }
         var argument_type = get(ctx, worker + 9)
         if argument_type == 0 or argument_type == 6 or be_find(source, tokens, ctx, get(ctx, 7), argument_name) >= 0 {
             be_error_at(tokens, errors, 209, argument_name); be_meta(ctx, 1, 0); return buffer("0")
@@ -748,7 +889,9 @@ def be_task_call(source: buffer, tokens: ints, ctx: ints, errors: ints, globals:
         var request = len(ctx)
         push(ctx, get(ctx, 26)); push(ctx, worker); push(ctx, argument_name); set(ctx, 26, request)
         be_expect(tokens, ctx, errors, 40)
+        var saved_move = get(ctx, 33); set(ctx, 33, 0)
         var value = be_expression(source, tokens, ctx, errors, globals, allocations, body, 1)
+        set(ctx, 33, saved_move)
         if get(ctx, 14) != argument_type { be_error_at(tokens, errors, 201, argument_name) }
         value = be_own(body, ctx, argument_type, value, get(ctx, 15))
         if be_kind(tokens, ctx) == 44 { be_next(ctx) }
@@ -891,6 +1034,10 @@ def be_invoke(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: bu
     if method < 0 and (same(name, "spawn") or same(name, "join") or same(name, "async_spawn") or same(name, "await")) { return be_task_call(source, tokens, ctx, errors, globals, allocations, body, name_token) }
     var record = -1
     if method < 0 { record = be_find(source, tokens, ctx, get(ctx, 19), name_token) }
+    var transfer_signature = method
+    if method < 0 and record < 0 and not be_is_builtin(name) { transfer_signature = be_find(source, tokens, ctx, get(ctx, 6), name_token) }
+    if transfer_signature >= 0 { be_validate_modes(source, tokens, ctx, errors, transfer_signature) }
+    var saved_move = get(ctx, 33); var saved_loans = get(ctx, 36)
     be_expect(tokens, ctx, errors, 40)
     var earlier = ints()
     var tree_depth = 1
@@ -907,9 +1054,20 @@ def be_invoke(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: bu
     while be_kind(tokens, ctx) != 41 and len(errors) == 0 {
         var argument_token = get(ctx, 0)
         var access_before = get(ctx, 21)
+        var parameter_mode = 0
+        if transfer_signature >= 0 { parameter_mode = be_parameter_mode(ctx, transfer_signature, len(args) / 4) }
+        set(ctx, 33, parameter_mode)
         var operand = be_expression(source, tokens, ctx, errors, globals, allocations, body, 1)
         if tree_depth < get(ctx, 23) + 1 { tree_depth = get(ctx, 23) + 1 }
         var ty = get(ctx, 14); var owns = get(ctx, 15); var path = get(ctx, 20)
+        if parameter_mode == 1 {
+            if (get(ctx, 34) != 1 and get(ctx, 34) != 3) or owns != 1 or (ty != 4 and ty != 5) { be_error_at(tokens, errors, 222, argument_token) }
+            # Pointer adoption. The argument vector no longer schedules caller release.
+            owns = 0
+        } else {
+            var root = be_transfer_root(source, tokens, ctx, path)
+            if be_owned(ty) and root >= 0 { be_transfer_loan(ctx, root) }
+        }
         if record < 0 {
             if path >= 0 and be_owned(ty) { be_overlap(source, tokens, ctx, errors, earlier, path, ty, argument_token) }
             var access = get(ctx, 21)
@@ -1009,7 +1167,8 @@ def be_invoke(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: bu
         be_release(body, get(args, i), slice(operands, get(args, i + 2), get(args, i + 3)), get(args, i + 1))
         i = i + 4
     }
-    be_meta(ctx, result_type, result_owned)
+    set(ctx, 33, saved_move); set(ctx, 36, saved_loans)
+    be_meta(ctx, result_type, result_owned); set(ctx, 34, 3)
     set(ctx, 23, tree_depth)
     set(ctx, 13, 0)
     if method < 0 and be_must_use(name) { set(ctx, 13, 1) }
@@ -1046,6 +1205,7 @@ def be_primary(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: b
         return be_call(source, tokens, ctx, errors, globals, allocations, body, name)
     }
     if kind == 1 {
+        if same(bh_token_text(source, tokens, get(ctx, 0)), "move") and bh_token_kind(tokens, get(ctx, 0) + 1) == 1 { return be_move(source, tokens, ctx, errors, body) }
         var name = get(ctx, 0)
         be_next(ctx)
         if be_kind(tokens, ctx) == 40 { return be_call(source, tokens, ctx, errors, globals, allocations, body, name) }
@@ -1063,7 +1223,9 @@ def be_primary(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: b
         }
         if local < 0 { be_error(tokens, ctx, errors, 202); be_meta(ctx, 1, 0); return buffer("0") }
         if get(ctx, local + 2) == 6 { be_error_at(tokens, errors, 208, name); be_meta(ctx, 1, 0); return buffer("0") }
+        if get(ctx, local + 9) != 1 { be_error_at(tokens, errors, 222, name); be_meta(ctx, get(ctx, local + 2), 0); return buffer() }
         var value = be_load(body, ctx, local)
+        set(ctx, 34, 2)
         set(ctx, 20, be_path(ctx, -1, get(ctx, local + 1), get(ctx, local + 2)))
         return value
     }
@@ -1075,6 +1237,7 @@ def be_postfix(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: b
     var value = be_primary(source, tokens, ctx, errors, globals, allocations, body)
     var tree_depth = get(ctx, 23)
     while be_kind(tokens, ctx) == 46 and len(errors) == 0 {
+        if get(ctx, 34) == 1 { be_error(tokens, ctx, errors, 222); return value }
         tree_depth = tree_depth + 1
         if tree_depth + get(ctx, 8) > 128 { be_error(tokens, ctx, errors, 204); return value }
         var ty = get(ctx, 14); var owns = get(ctx, 15); var path = get(ctx, 20)
@@ -1114,7 +1277,9 @@ def be_unary(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buf
     if kind == 45 and be_kind(tokens, ctx) == 2 { return be_literal(source, tokens, ctx, errors, true) }
     if get(ctx, 9) + get(ctx, 8) >= 128 { be_error(tokens, ctx, errors, 204); return buffer("0") }
     set(ctx, 9, get(ctx, 9) + 1)
+    var saved_move = get(ctx, 33); set(ctx, 33, 0)
     var operand = be_unary(source, tokens, ctx, errors, globals, allocations, body)
+    set(ctx, 33, saved_move)
     var tree_depth = get(ctx, 23) + 1
     set(ctx, 9, get(ctx, 9) - 1)
     var expected = 1
@@ -1141,13 +1306,16 @@ def be_expression(source: buffer, tokens: ints, ctx: ints, errors: ints, globals
     if get(ctx, 9) + get(ctx, 8) >= 128 { be_error(tokens, ctx, errors, 204); be_meta(ctx, 1, 0); return buffer("0") }
     set(ctx, 9, get(ctx, 9) + 1)
     var left = be_unary(source, tokens, ctx, errors, globals, allocations, body)
-    var left_type = get(ctx, 14)
+    var left_type = get(ctx, 14); var left_move = get(ctx, 34) == 1
     var tree_depth = get(ctx, 23)
     var operation = be_kind(tokens, ctx)
     while be_precedence(operation) >= minimum and be_precedence(operation) > 0 and len(errors) == 0 {
+        if left_move { be_error(tokens, ctx, errors, 222); return left }
         if get(ctx, 18) == 1 { be_error_at(tokens, errors, 208, get(ctx, 16)); return left }
         be_next(ctx)
+        var saved_move = get(ctx, 33); set(ctx, 33, 0)
         if operation == 260 or operation == 261 {
+            set(ctx, 32, get(ctx, 32) + 1)
             if left_type != 2 { be_error(tokens, ctx, errors, 201) }
             var left_block = get(ctx, 3)
             var right_label = be_label(ctx); var merge = be_label(ctx)
@@ -1160,6 +1328,7 @@ def be_expression(source: buffer, tokens: ints, ctx: ints, errors: ints, globals
             if tree_depth < get(ctx, 23) { tree_depth = get(ctx, 23) }
             tree_depth = tree_depth + 1
             if get(ctx, 14) != 2 { be_error(tokens, ctx, errors, 201) }
+            set(ctx, 32, get(ctx, 32) - 1)
             var right_block = get(ctx, 3)
             be_jump(body, ctx, merge); be_start(body, ctx, merge)
             var result = be_reg(ctx)
@@ -1184,6 +1353,7 @@ def be_expression(source: buffer, tokens: ints, ctx: ints, errors: ints, globals
             left = be_binary(body, ctx, operation, left, right, left_type)
             left_type = result_type
         }
+        set(ctx, 33, saved_move)
         be_meta(ctx, left_type, 0); set(ctx, 13, 0); set(ctx, 23, tree_depth)
         if tree_depth + get(ctx, 8) > 128 { be_error(tokens, ctx, errors, 204) }
         operation = be_kind(tokens, ctx)
@@ -1260,6 +1430,7 @@ def be_loop_exit(tokens: ints, ctx: ints, errors: ints, body: buffer, is_break: 
     be_end(tokens, ctx, errors)
 }
 def be_while(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buffer, allocations: buffer, body: buffer) {
+    set(ctx, 32, get(ctx, 32) + 1)
     be_next(ctx)
     be_statement_expression(tokens, ctx, 0)
     var condition_label = be_label(ctx); var loop_label = be_label(ctx); var exit_label = be_label(ctx)
@@ -1275,8 +1446,10 @@ def be_while(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buf
     be_failure_restore(ctx, failure_before)
     if get(ctx, 4) == 0 { be_jump(body, ctx, condition_label) }
     be_start(body, ctx, exit_label)
+    set(ctx, 32, get(ctx, 32) - 1)
 }
 def be_for(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buffer, allocations: buffer, body: buffer) {
+    set(ctx, 32, get(ctx, 32) + 1)
     var for_token = get(ctx, 0); be_next(ctx)
     var name = get(ctx, 0); be_expect(tokens, ctx, errors, 1)
     be_expect(tokens, ctx, errors, 320)
@@ -1425,6 +1598,7 @@ def be_for(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buffe
     be_jump(body, ctx, condition_label)
     be_start(body, ctx, exit_label)
     be_cleanup(body, ctx, saved); set(ctx, 7, saved)
+    set(ctx, 32, get(ctx, 32) - 1)
 }
 
 # Contextual only at an entire variable initializer. Calls/member access and
@@ -1591,10 +1765,11 @@ def be_statement(source: buffer, tokens: ints, ctx: ints, errors: ints, globals:
         if be_try_initializer(source, tokens, ctx) {
             operand = be_try(source, tokens, ctx, errors, globals, allocations, body)
         } else {
-            be_statement_expression(tokens, ctx, 1)
+            be_statement_expression(tokens, ctx, 1); set(ctx, 33, 1)
             operand = be_expression(source, tokens, ctx, errors, globals, allocations, body, 1)
         }
         var ty = get(ctx, 14); var owns = get(ctx, 15)
+        if get(ctx, 34) == 1 { if be_same_name(source, tokens, name, get(ctx, get(ctx, 35) + 1)) { be_error_at(tokens, errors, 222, name) } }
         if ty == 0 or (annotation >= 0 and annotation != ty) { be_error(tokens, ctx, errors, 201) }
         operand = be_own(body, ctx, ty, operand, owns)
         var binding_owns = 0
@@ -1612,7 +1787,7 @@ def be_statement(source: buffer, tokens: ints, ctx: ints, errors: ints, globals:
         var return_token = get(ctx, 0)
         be_pending_tasks(tokens, ctx, errors, -1)
         be_next(ctx)
-        be_statement_expression(tokens, ctx, 0)
+        be_statement_expression(tokens, ctx, 0); set(ctx, 33, 1)
         var expected = get(ctx, 5)
         var operand = buffer()
         var ty = 0
@@ -1633,6 +1808,7 @@ def be_statement(source: buffer, tokens: ints, ctx: ints, errors: ints, globals:
         return
     }
     if kind == 303 {
+        set(ctx, 32, get(ctx, 32) + 1)
         be_next(ctx)
         be_statement_expression(tokens, ctx, 0)
         var condition = be_expression(source, tokens, ctx, errors, globals, allocations, body, 1)
@@ -1660,6 +1836,7 @@ def be_statement(source: buffer, tokens: ints, ctx: ints, errors: ints, globals:
         if no_returns == 0 { be_jump(body, ctx, merge) }
         be_start(body, ctx, merge)
         if yes_returns == 1 and no_returns == 1 { be_line(body, buffer("unreachable")); set(ctx, 4, 1) }
+        set(ctx, 32, get(ctx, 32) - 1)
         return
     }
     if kind == 305 { be_while(source, tokens, ctx, errors, globals, allocations, body); return }
@@ -1680,11 +1857,13 @@ def be_statement(source: buffer, tokens: ints, ctx: ints, errors: ints, globals:
         if result_pending == 1 and be_failure_outer(ctx, local) { be_error_at(tokens, errors, 221, name); return }
         set(ctx, local + 8, result_pending)
         if be_owned(ty) and get(ctx, local + 5) == 0 { be_error(tokens, ctx, errors, 201) }
+        if get(ctx, local + 9) == 0 and get(ctx, local + 4) != get(ctx, 8) { be_error_at(tokens, errors, 222, name); return }
         operand = be_own(body, ctx, ty, operand, owns)
-        if be_owned(ty) {
+        if be_owned(ty) and get(ctx, local + 9) == 1 {
             var previous = be_load(body, ctx, local)
             be_release(body, ty, previous, 1)
         }
+        set(ctx, local + 9, 1)
         var line = buffer("store "); append(line, be_llvm_type(ty)); append(line, " "); append(line, operand)
         append(line, ", ptr "); append(line, be_number("%r", get(ctx, local + 3))); be_line(body, line)
         be_end(tokens, ctx, errors)
@@ -1723,6 +1902,9 @@ def be_block(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buf
     if nested { set(ctx, 8, get(ctx, 8) - 1) }
 }
 def be_function(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buffer, definitions: buffer, node: int) {
+    be_validate_modes(source, tokens, ctx, errors, node)
+    if len(errors) != 0 { return }
+    set(ctx, 32, 0); set(ctx, 33, 0); set(ctx, 36, -1)
     set(ctx, 0, get(ctx, node + 4)); set(ctx, 1, 0); set(ctx, 2, 1); set(ctx, 3, 0)
     set(ctx, 4, 0); set(ctx, 5, get(ctx, node + 2)); set(ctx, 7, -1); set(ctx, 8, 0); set(ctx, 9, 0); set(ctx, 12, node); set(ctx, 29, -1)
     var allocations = buffer()
@@ -1735,12 +1917,13 @@ def be_function(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: 
         var operand = be_number("%a", i)
         if i != 0 { append(parameters, ", ") }
         append(parameters, be_llvm_type(ty)); append(parameters, " "); append(parameters, operand)
-        be_bind(source, tokens, ctx, errors, allocations, body, name, ty, operand, 0)
+        var owns = 0; if be_parameter_mode(ctx, node, i) == 1 { owns = 1 }
+        be_bind(source, tokens, ctx, errors, allocations, body, name, ty, operand, owns)
         i = i + 1
     }
     be_block(source, tokens, ctx, errors, globals, allocations, body, false)
     if get(ctx, 4) == 0 {
-        if get(ctx, 5) != 0 { be_error(tokens, ctx, errors, 205) } else { be_line(body, buffer("ret void")) }
+        if get(ctx, 5) != 0 { be_error(tokens, ctx, errors, 205) } else { be_cleanup(body, ctx, -1); be_line(body, buffer("ret void")) }
     }
     append(definitions, "define "); append(definitions, be_llvm_type(get(ctx, node + 2)))
     append(definitions, " @"); append(definitions, be_function_symbol(source, tokens, ctx, node))
@@ -1775,6 +1958,7 @@ def be_declarations(ctx: ints) -> buffer {
     append(declarations, "declare i64 @bhasa_rt_utf8_valid(ptr)\ndeclare i64 @bhasa_rt_utf8_count(ptr)\ndeclare i64 @bhasa_rt_utf8_get(ptr, i64)\ndeclare ptr @bhasa_rt_utf8_slice(ptr, i64, i64)\ndeclare i64 @bhasa_rt_utf8_append(ptr, i64)\ndeclare ptr @bhasa_rt_tcp_accept_timeout(ptr, i64)\ndeclare ptr @bhasa_rt_tcp_connect_timeout(ptr, i64, i64)\ndeclare ptr @bhasa_rt_tcp_connect_timeout_str(ptr, i64, i64)\ndeclare i64 @bhasa_rt_tcp_read_timeout(ptr, ptr, i64, i64)\ndeclare i64 @bhasa_rt_tcp_write_timeout(ptr, ptr, i64)\ndeclare i64 @bhasa_rt_monotonic_millis()\n")
     append(declarations, "declare ptr @bhasa_rt_async_spawn_i64(ptr, i64)\ndeclare i64 @bhasa_rt_await_i64(ptr)\ndeclare ptr @bhasa_rt_tls_connect(ptr, i64, ptr, ptr, i64)\ndeclare ptr @bhasa_rt_tls_accept(ptr, ptr, ptr, i64)\ndeclare i64 @bhasa_rt_tls_status(ptr)\ndeclare i64 @bhasa_rt_tls_read(ptr, ptr, i64, i64)\ndeclare i64 @bhasa_rt_tls_write(ptr, ptr, i64)\ndeclare i64 @bhasa_rt_tls_shutdown(ptr, i64)\ndeclare ptr @bhasa_rt_tls_socket_clone(ptr)\ndeclare void @bhasa_rt_tls_socket_free(ptr)\n")
     append(declarations, "declare ptr @bhasa_rt_list_new(i64, ptr, ptr)\ndeclare ptr @bhasa_rt_map_new(i64, i64, ptr, ptr, ptr, ptr, ptr, ptr)\ndeclare void @bhasa_rt_list_get(ptr, i64, ptr)\ndeclare void @bhasa_rt_list_push(ptr, ptr)\ndeclare void @bhasa_rt_list_set(ptr, i64, ptr)\ndeclare void @bhasa_rt_map_get(ptr, ptr, ptr)\ndeclare i64 @bhasa_rt_map_next_key(ptr, ptr, ptr)\ndeclare void @bhasa_rt_map_put(ptr, ptr, ptr)\ndeclare i64 @bhasa_rt_map_contains(ptr, ptr)\ndeclare i64 @bhasa_rt_map_remove(ptr, ptr)\ndeclare ptr @bhasa_rt_list_clone(ptr)\ndeclare void @bhasa_rt_list_free(ptr)\ndeclare i64 @bhasa_rt_list_count(ptr)\ndeclare void @bhasa_rt_list_clear(ptr)\ndeclare ptr @bhasa_rt_map_clone(ptr)\ndeclare void @bhasa_rt_map_free(ptr)\ndeclare i64 @bhasa_rt_map_count(ptr)\ndeclare void @bhasa_rt_map_clear(ptr)\ndeclare i64 @bhasa_rt_map_hash_i64(ptr)\ndeclare i64 @bhasa_rt_map_equal_i64(ptr, ptr)\ndeclare i64 @bhasa_rt_map_hash_str(ptr)\ndeclare i64 @bhasa_rt_map_equal_str(ptr, ptr)\n")
+    append(declarations, "declare ptr @bhasa_rt_file_open(ptr, i64)\ndeclare ptr @bhasa_rt_file_open_str(ptr, i64)\ndeclare ptr @bhasa_rt_file_clone(ptr)\ndeclare void @bhasa_rt_file_free(ptr)\ndeclare i64 @bhasa_rt_file_status(ptr)\ndeclare i64 @bhasa_rt_file_read_chunk(ptr, ptr, i64)\ndeclare i64 @bhasa_rt_file_write_chunk(ptr, ptr)\ndeclare i64 @bhasa_rt_file_seek(ptr, i64)\ndeclare i64 @bhasa_rt_file_position(ptr)\ndeclare i64 @bhasa_rt_file_flush(ptr)\ndeclare i64 @bhasa_rt_file_close(ptr)\n")
     append(declarations, "declare ptr @bhasa_rt_spawn_owned(ptr, ptr)\ndeclare ptr @bhasa_rt_async_spawn_owned(ptr, ptr)\ndeclare ptr @bhasa_rt_join_owned(ptr)\ndeclare ptr @bhasa_rt_await_owned(ptr)\ndeclare ptr @bhasa_rt_task_alloc(i64)\ndeclare void @bhasa_rt_task_free(ptr)\n")
     return declarations
 }
@@ -1832,9 +2016,10 @@ def be_skip_header_type(tokens: ints, ctx: ints, errors: ints) {
     var kind = be_kind(tokens, ctx)
     if kind == 1 or kind == 309 or kind == 310 or kind == 311 or kind == 312 or kind == 318 { be_next(ctx) } else { be_error(tokens, ctx, errors, 200) }
 }
-def be_skip_external_header(tokens: ints, ctx: ints, errors: ints) {
+def be_skip_external_header(source: buffer, tokens: ints, ctx: ints, errors: ints) {
     be_expect(tokens, ctx, errors, 40)
     while be_kind(tokens, ctx) != 41 and len(errors) == 0 {
+        if be_owned_marker(source, tokens, get(ctx, 0)) { be_next(ctx) }
         be_expect(tokens, ctx, errors, 1)
         be_expect(tokens, ctx, errors, 58)
         be_skip_header_type(tokens, ctx, errors)
@@ -1857,7 +2042,7 @@ def be_record_names(source: buffer, tokens: ints, ctx: ints, errors: ints) {
             be_expect(tokens, ctx, errors, 1)
             if len(errors) != 0 { return }
             var word = bh_token_text(source, tokens, name)
-            if be_reserved(word) or same(word, "task") or same(word, "tcp_listener") or same(word, "tcp_socket") or same(word, "tls_socket") or be_record_find(source, tokens, ctx, name) >= 0 {
+            if be_reserved(word) or same(word, "task") or same(word, "tcp_listener") or same(word, "tcp_socket") or same(word, "tls_socket") or same(word, "file_handle") or be_record_find(source, tokens, ctx, name) >= 0 {
                 be_error_at(tokens, errors, 212, name); return
             }
             be_newlines(tokens, ctx)
@@ -1882,7 +2067,7 @@ def be_record_names(source: buffer, tokens: ints, ctx: ints, errors: ints) {
             be_expect(tokens, ctx, errors, 300)
             be_expect(tokens, ctx, errors, 1)
             if len(errors) != 0 { return }
-            if external { be_skip_external_header(tokens, ctx, errors) } else {
+            if external { be_skip_external_header(source, tokens, ctx, errors) } else {
                 var searching = true
                 while searching and len(errors) == 0 {
                     var kind = be_kind(tokens, ctx)
@@ -2398,6 +2583,7 @@ def be_match(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buf
     # as an owned local lets ordinary return cleanup handle every branch.
     be_bind(source, tokens, ctx, errors, allocations, body, match_token, ty, value, 1)
     var snapshot = get(ctx, 7)
+    set(ctx, 32, get(ctx, 32) + 1)
     var failure_before = be_failure_snapshot(ctx)
     var failure_join = be_failure_snapshot(ctx); var failure_i = 1
     while failure_i < len(failure_join) { set(failure_join, failure_i, 0); failure_i = failure_i + 2 }
@@ -2474,6 +2660,7 @@ def be_match(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buf
         be_cleanup(body, ctx, saved)
     }
     set(ctx, 7, saved)
+    set(ctx, 32, get(ctx, 32) - 1)
 }
 def be_enum_switch(definitions: buffer, ctx: ints, info: int) {
     append(definitions, "  switch i64 %tag, label %invalid [\n")
@@ -2563,8 +2750,9 @@ def bh_compile(source: buffer, tokens: ints, errors: ints, target: buffer) -> bu
     }
     var ctx = ints()
     var i = 0
-    while i < 31 { push(ctx, 0); i = i + 1 }
+    while i < 37 { push(ctx, 0); i = i + 1 }
     set(ctx, 6, -1); set(ctx, 7, -1); set(ctx, 19, -1); set(ctx, 20, -1); set(ctx, 21, -1); set(ctx, 24, -1); set(ctx, 25, -1); set(ctx, 26, -1); set(ctx, 27, -1); set(ctx, 28, -1); set(ctx, 29, -1)
+    set(ctx, 31, -1); set(ctx, 35, -1); set(ctx, 36, -1)
     if len(target) == 0 { be_error(tokens, ctx, errors, 200); return buffer() }
     i = 0
     while i < len(target) {
@@ -2617,6 +2805,7 @@ def bh_compile(source: buffer, tokens: ints, errors: ints, target: buffer) -> bu
     if be_contains(definitions, buffer("@bhasa_rt_utf8_")) { append(module, "; bhasa runtime: text\n") }
     if be_contains(definitions, buffer("@bhasa_rt_tcp_")) or be_contains(definitions, buffer("@bhasa_rt_monotonic_millis")) { append(module, "; bhasa runtime: net\n") }
     if be_contains(definitions, buffer("@bhasa_rt_spawn_")) or be_contains(definitions, buffer("@bhasa_rt_async_spawn_")) or be_contains(definitions, buffer("@bhasa_rt_await_")) or be_contains(definitions, buffer("@bhasa_rt_join_")) or be_contains(definitions, buffer("@bhasa_rt_task_alloc")) { append(module, "; bhasa runtime: threads\n") }
+    if be_contains(definitions, buffer("@bhasa_rt_file_")) { append(module, "; bhasa runtime: file\n") }
     if be_contains(definitions, buffer("@bhasa_rt_tls_")) { append(module, "; bhasa runtime: tls\n") }
     if be_contains(definitions, buffer("@bhasa_rt_gpu_")) { append(module, "; bhasa runtime: gpu\n") }
     append(module, "target triple = \""); append(module, target); append(module, "\"\n\n"); append(module, be_declarations(ctx))

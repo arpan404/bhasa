@@ -133,6 +133,14 @@ impl Query<'_> {
                             Value::object([
                                 ("name", param.name.clone().into()),
                                 ("type", self.ty(param.ty)),
+                                (
+                                    "mode",
+                                    match param.mode {
+                                        crate::ast::ParamMode::Borrowed => "borrowed",
+                                        crate::ast::ParamMode::Owned => "owned",
+                                    }
+                                    .into(),
+                                ),
                             ])
                         })
                         .collect(),

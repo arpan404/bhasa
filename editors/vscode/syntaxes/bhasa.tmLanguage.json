@@ -60,6 +60,22 @@
       }
     },
     {
+      "match": "(?:\\(|,)[ \\t]*(owned)\\b(?=[ \\t]+[A-Za-z_][A-Za-z_0-9]*[ \\t]*:)",
+      "captures": {
+        "1": {
+          "name": "storage.modifier.ownership.bhasa"
+        }
+      }
+    },
+    {
+      "match": "\\b(move)\\b(?=[ \\t]+(?!and\\b|or\\b|not\\b|true\\b|false\\b)[A-Za-z_][A-Za-z_0-9]*\\b)",
+      "captures": {
+        "1": {
+          "name": "keyword.operator.transfer.bhasa"
+        }
+      }
+    },
+    {
       "name": "keyword.control.bhasa",
       "match": "\\b(?:extern|private|as|var|if|else|while|for|in|break|continue|return|import|struct|enum|match|case)\\b"
     },
@@ -73,7 +89,7 @@
     },
     {
       "name": "storage.type.bhasa",
-      "match": "\\b(?:int|float|List|Map|bool|str|void|buffer|ints|task|tcp_listener|tcp_socket|tls_socket)\\b"
+      "match": "\\b(?:int|float|List|Map|bool|str|void|buffer|ints|task|tcp_listener|tcp_socket|tls_socket|file_handle)\\b"
     },
     {
       "name": "constant.language.bhasa",

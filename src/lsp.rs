@@ -873,6 +873,7 @@ fn valid_rename_name(name: &str) -> bool {
                 | "tcp_socket"
                 | "tcp_listener"
                 | "tls_socket"
+                | "file_handle"
         )
         && !["bhasa_rt_", "__bhg_", "__bhm_"]
             .iter()
@@ -1184,6 +1185,9 @@ impl Server {
                 };
                 let tokens = crate::lexer::lex(&file.source).unwrap_or_default();
                 let mut markers = crate::modules::contextual_binding_markers(&tokens);
+                if let Some(program) = &graph.program {
+                    markers.extend(checked_ownership_markers(program, &tokens, file.base));
+                }
                 markers.extend(tokens.iter().enumerate().filter_map(|(index, token)| {
                     alias_markers
                         .contains(&(file.base + token.span.start))
@@ -1640,6 +1644,18 @@ impl Server {
         };
         let file = &analysis.files[file_index];
         let global_offset = file.base + offset;
+        if let (Some(program), Ok(tokens)) = (&analysis.program, crate::lexer::lex(&doc.source)) {
+            if checked_ownership_markers(program, &tokens, file.base)
+                .iter()
+                .any(|i| tokens[*i].span == word.span)
+            {
+                return if completion {
+                    empty_completion()
+                } else {
+                    Value::Null
+                };
+            }
+        }
         let expansion = crate::expand_files(&analysis.files).ok();
         if expansion.as_ref().is_some_and(|map| {
             map.modules.type_aliases.iter().any(|alias| {
@@ -1958,7 +1974,15 @@ fn checked_semantic_tokens(uri: &str, doc: &Document, analysis: &Analysis) -> Va
     let Ok(tokens) = crate::lexer::lex(&doc.source) else {
         return empty();
     };
-    let markers = crate::modules::contextual_binding_markers(&tokens);
+    let mut markers = crate::modules::contextual_binding_markers(&tokens);
+    if let Some(program) = &analysis.program {
+        let base = analysis
+            .files
+            .iter()
+            .find(|file| file.path == doc.path.clone().unwrap_or_default())
+            .map_or(0, |file| file.base);
+        markers.extend(checked_ownership_markers(program, &tokens, base));
+    }
     let mut keyword_spans: BTreeSet<_> = markers
         .iter()
         .map(|index| (tokens[*index].span.start, tokens[*index].span.end))
@@ -2056,6 +2080,67 @@ fn checked_semantic_tokens(uri: &str, doc: &Document, analysis: &Analysis) -> Va
     Value::object([("data", Value::Array(data))])
 }
 
+fn parameter_label(
+    program: &Program,
+    param: &ast::Param,
+    expansion: Option<&crate::ExpandedFiles>,
+) -> String {
+    let prefix = match param.mode {
+        ast::ParamMode::Borrowed => "",
+        ast::ParamMode::Owned => "owned ",
+    };
+    format!(
+        "{prefix}{}: {}",
+        param.name,
+        display_type(program, param.ty, expansion)
+    )
+}
+
+// Mark only operations and modes carried by a successful checked AST. Ordinary
+// names spelled owned/move retain their checked identity.
+fn checked_ownership_markers(program: &Program, tokens: &[Token], base: usize) -> BTreeSet<usize> {
+    let mut markers = BTreeSet::new();
+    for function in program
+        .functions
+        .iter()
+        .chain(program.records.iter().flat_map(|r| &r.methods))
+    {
+        for param in &function.params {
+            if param.mode == ast::ParamMode::Owned {
+                if let Ok(index) =
+                    tokens.binary_search_by_key(&param.span.start, |t| t.span.start + base)
+                {
+                    if let Some(previous) = index.checked_sub(1) {
+                        if matches!(&tokens[previous].kind, TokenKind::Ident(name) if name == "owned")
+                        {
+                            markers.insert(previous);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(body) = &function.body {
+            visit_expressions(body, &mut |expr| {
+                if let ExprKind::Move { name_span, .. } = &expr.kind {
+                    if let Ok(index) =
+                        tokens.binary_search_by_key(&name_span.start, |t| t.span.start + base)
+                    {
+                        if let Some(previous) = index.checked_sub(1) {
+                            if matches!(&tokens[previous].kind, TokenKind::Ident(name) if name == "move")
+                                && tokens[previous].span.start + base >= expr.span.start
+                                && tokens[index].span.end + base <= expr.span.end
+                            {
+                                markers.insert(previous);
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    }
+    markers
+}
+
 fn typed_signature(
     program: &Program,
     function: &ast::Function,
@@ -2070,13 +2155,7 @@ fn typed_signature(
         .params
         .iter()
         .skip(usize::from(method))
-        .map(|param| {
-            format!(
-                "{}: {}",
-                param.name,
-                display_type(program, param.ty, expansion)
-            )
-        })
+        .map(|param| parameter_label(program, param, expansion))
         .collect::<Vec<_>>()
         .join(", ");
     bounded_detail(&format!(
@@ -2224,10 +2303,10 @@ fn checked_signature_help(analysis: &Analysis, doc: &Document, offset: usize) ->
                                     .params
                                     .iter()
                                     .skip(usize::from(method))
-                                    .map(|param| format!(
-                                        "{}: {}",
-                                        param.name,
-                                        display_type(program, param.ty, expansion.as_ref())
+                                    .map(|param| parameter_label(
+                                        program,
+                                        param,
+                                        expansion.as_ref()
                                     ))
                                     .collect::<Vec<_>>()
                                     .join(", "),
@@ -2240,12 +2319,7 @@ fn checked_signature_help(analysis: &Analysis, doc: &Document, offset: usize) ->
                                 .map(|param| {
                                     Value::object([(
                                         "label",
-                                        format!(
-                                            "{}: {}",
-                                            param.name,
-                                            display_type(program, param.ty, expansion.as_ref())
-                                        )
-                                        .into(),
+                                        parameter_label(program, param, expansion.as_ref()).into(),
                                     )])
                                 })
                                 .collect::<Vec<_>>(),
@@ -2413,7 +2487,12 @@ fn visit_expressions<'a>(block: &'a Block, visit: &mut impl FnMut(&'a Expr)) {
                 }
             }
             ExprKind::Field { base, .. } => expr(base, visit),
-            _ => {}
+            ExprKind::Int(_)
+            | ExprKind::Float(_)
+            | ExprKind::Bool(_)
+            | ExprKind::Str(_)
+            | ExprKind::Name(_)
+            | ExprKind::Move { .. } => {}
         }
     }
     for statement in block {
@@ -2614,9 +2693,18 @@ fn lexical_bindings(
             ]
         })
         .collect();
+    let owned_parameters: BTreeSet<_> = program
+        .functions
+        .iter()
+        .chain(program.records.iter().flat_map(|r| &r.methods))
+        .flat_map(|f| &f.params)
+        .filter(|p| p.mode == ast::ParamMode::Owned)
+        .map(|p| p.span.start)
+        .collect();
     let mut bindings: Vec<(usize, Suggestion)> = Vec::new();
     let mut add = |name: &str, ty: Option<Type>, declaration: Span, visible: usize, block: Span| {
         let immutable = immutable_declarations.contains(&declaration.start);
+        let owned = owned_parameters.contains(&declaration.start);
         let declaration = declaration_span(name, declaration);
         if (block.start <= offset && offset <= block.end && visible <= offset)
             || (declaration.start <= offset && offset < declaration.end)
@@ -2626,7 +2714,13 @@ fn lexical_bindings(
                 |ty| {
                     format!(
                         "{}{name}: {}",
-                        if immutable { "let " } else { "" },
+                        if owned {
+                            "owned "
+                        } else if immutable {
+                            "let "
+                        } else {
+                            ""
+                        },
                         display_type(program, ty, expansion)
                     )
                 },
@@ -3847,6 +3941,7 @@ impl ReferenceIndex<'_> {
                 self.expression(right);
             }
             ExprKind::Name(name) => self.local_use(name, expr.span),
+            ExprKind::Move { name, name_span } => self.local_use(name, *name_span),
             ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) => {}
         }
     }

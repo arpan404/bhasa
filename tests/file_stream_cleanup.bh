@@ -1,0 +1,77 @@
+import "io.bh" as io
+
+struct FileHolder { file: file_handle }
+
+def close_alias(value: FileHolder) -> int { return file_close(value.file) }
+
+def roundtrip(path: buffer) -> io.IoResult[int] {
+    let file = try io.file_stream_open(path, 3)
+    var holder = FileHolder(file)
+    var copy = holder
+    let written = try io.file_stream_write(holder.file, buffer("123456789"))
+    let offset = try io.file_stream_seek(copy.file, 0)
+    let bytes = try io.file_stream_read(file, 9)
+    if written != 9 or offset != 0 or !same(bytes, "123456789") {
+        return io.IoResult[int].ok(-1)
+    }
+    let position = try io.file_stream_position(copy.file)
+    if position != 9 { return io.IoResult[int].ok(-2) }
+    var closed = close_alias(copy)
+    if closed != 0 or file_status(holder.file) == 0 { return io.IoResult[int].ok(-3) }
+    return io.IoResult[int].ok(len(bytes))
+}
+
+def early_failure(path: buffer, missing: buffer) -> io.IoResult[int] {
+    let file = try io.file_stream_open(path, 3)
+    var first = FileHolder(file)
+    var second = first
+    let ignored = try io.file_stream_open(missing, 0)
+    return io.IoResult[int].ok(file_status(second.file))
+}
+
+def main() -> int {
+    if arg_count() != 3 { return 2 }
+    let path = arg(1)
+    let missing = arg(2)
+    match roundtrip(path) {
+        case io.IoResult[int].ok(count) { print(count == 9) }
+        case io.IoResult[int].error(error) { print(error.operation()); return 3 }
+    }
+    match early_failure(path, missing) {
+        case io.IoResult[int].ok(count) { return 4 }
+        case io.IoResult[int].error(error) {
+            let native = file_open(missing, 0)
+            print(error.code() == file_status(native))
+            match error.domain() { case io.ErrorDomain.os { print(true) } }
+            print(same(buffer(error.operation()), "file_open"))
+            var message = error.message()
+            message.clear()
+            print(same(error.message().bytes(), "file open failed"))
+        }
+    }
+    var i = 0
+    while i < 3 {
+        let file = file_open(path, 0)
+        var holder = FileHolder(file)
+        if file_status(holder.file) != 0 { return 5 }
+        i = i + 1
+        if i == 1 { continue }
+        break
+    }
+    match io.file_stream_open(path, 0) {
+        case io.IoResult[file_handle].error(error) { return 6 }
+        case io.IoResult[file_handle].ok(file) {
+            var prior = buffer("unchanged")
+            let status = file_read_chunk(file, prior, -1)
+            match io.file_stream_read(file, -1) {
+                case io.IoResult[buffer].ok(bytes) { return 7 }
+                case io.IoResult[buffer].error(error) {
+                    print(error.code() == status)
+                    print(same(buffer(error.operation()), "file_read_chunk"))
+                    print(same(prior, "unchanged"))
+                }
+            }
+        }
+    }
+    return 0
+}

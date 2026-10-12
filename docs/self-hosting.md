@@ -80,15 +80,19 @@ concrete and generic Result/Option types, text, typed collections, JSON and
 bounded HTTP. The optional TLS package adds HTTPS through generic transport
 helpers.
 
-Record helpers clone and destroy nested owned values. Parameters borrow during
-a call; borrowed returns become owned copies. The frontend checks recursive
+Record helpers clone and destroy nested owned values. Unqualified parameters
+borrow during a call; ordinary returns become owned copies. Buffer/ints `owned`
+parameters and whole-value `move` also work in the supported synchronous free-
+function slice. Regular-file handles share cursor/close state and reject worker
+transfer. The A/B/C gate executes both additions. The frontend checks recursive
 schemas, constructor types, field access and overlapping record/field borrows.
 Methods infer the enclosing record type for their first `self` parameter. The
 receiver is evaluated once and borrowed for the call; temporary receivers remain
 alive until owned return values have been acquired. Methods resolve by record
 type and name, and participate in worker call-graph checks. Direct method spawn,
 static methods and method values are unsupported.
-TCP copies duplicate descriptor ownership. GPU support calls the same trusted
+TCP copies atomically retain shared descriptor state, preserve constructor status
+and close only on final owner release. GPU support calls the same trusted
 native adapters as the Rust frontend; it does not compile Bhasa GPU kernels.
 
 Enums use private tags and owned active payloads. A match snapshots its value

@@ -27,9 +27,10 @@ event-loop async I/O and cancellation are not implemented.
 | `tcp_write_timeout(socket, contents, milliseconds)` | Zero or positive errno; sends all bytes within one deadline |
 | `monotonic_millis()` | Monotonic milliseconds for elapsed-time and shared-deadline calculations |
 
-Check a resource's status before using it. A failed constructor, accept or clone
-still returns an owned handle carrying the error. It holds no open descriptor.
-Status getters report the fixed creation result. They do not check whether a
+Check a resource's status before using it. A failed constructor or accept still
+returns an owned handle carrying the error, with no open descriptor. A copy
+preserves that fixed constructor status and does not attempt descriptor
+duplication. Status getters report the fixed creation result. They do not check whether a
 peer is still connected and do not replace checking read/write results.
 
 A successful read replaces the destination. An error leaves all destination
@@ -87,8 +88,8 @@ The ordinary `tcp_connect` retains DNS support and has no application deadline.
 
 All runtime sockets remain nonblocking at the descriptor level. Ordinary calls
 wait with `poll` without a deadline; timed calls wait only for their remaining
-budget. Cloned descriptors share endpoint state, so operations never temporarily
-toggle blocking flags on a shared connection.
+budget. Copied owners retain shared descriptor state, so operations never
+temporarily toggle blocking flags on a shared connection.
 
 The [backend library](backend.md) uses these calls to read a bounded HTTP/1.0 or
 HTTP/1.1 request under one deadline and write a response under another. The caller
@@ -98,23 +99,34 @@ the TCP examples use plain connections.
 
 ## Ownership
 
-Each local resource owns a descriptor and a small C allocation. Scope exit,
-return and temporary cleanup close that descriptor and free the allocation.
-The TCP adapter has no garbage collector or reference counter. TLS uses separate
-shared-session ownership described in the [TLS guide](tls.md).
+Each successful resource owns a small C handle that retains shared descriptor
+state through an atomic reference count. Failed resources own only a handle
+carrying their constructor status. Scope exit, return and temporary cleanup free
+that handle and release its reference. Final release closes the descriptor once
+and frees the shared state. Cleanup remains deterministic with no garbage
+collector. TLS uses separate shared-session ownership described in the
+[TLS guide](tls.md).
 
-Binding or assigning an existing resource duplicates its descriptor. The
-descriptors refer to the same kernel listener or connection. Freeing one copy
-leaves the other usable; reads through either socket copy consume the same
-incoming stream. The peer receives EOF after the final copy closes. Copies do
-not open new connections or copy queued bytes. Descriptor exhaustion can make a
-copy an error handle, so check its status too.
+Binding or assigning an existing resource retains the same descriptor state.
+Copies do not open new connections, copy queued bytes or duplicate descriptors.
+Freeing one owner leaves the others usable; reads through any socket copy consume
+the same incoming stream. Releasing owners causes peer EOF only after final
+local release. Peer shutdown or connection errors can still cause EOF or errors
+independently. Descriptor exhaustion cannot turn a successful copy into an error
+handle. Allocation failure or reference-count overflow is fatal, as with other
+runtime allocation failures.
+
+Distinct retained owners may be used, copied and released across threads. An
+owner must remain live during use or copying and cannot race its own release.
+The reference count does not serialize I/O or provide message framing.
 
 Function parameters borrow resources for the duration of the call. The C ABI in
 `runtime/net.h` keeps listener and socket layouts opaque. Native callers must
 free each returned handle exactly once with the matching `_free` function and
 must not retain borrowed buffers. `_free(NULL)` is harmless. Destruction does
-not call `shutdown`, because that would also affect live descriptor copies.
+not call `shutdown`, because that would also affect live owners of the same
+connection. Native fd borrows remain valid while their owner is live. Copied
+owners borrow the same fd number; never close a borrowed fd or change its flags.
 
 Sockets use close-on-exec descriptors. On Linux, creation and accept set this
 flag atomically. On macOS, creation and accept set it with `fcntl` before
@@ -123,7 +135,7 @@ streams from inheritance, including sockets waiting for that flag. It
 explicitly preserves eligible standard input, output and error descriptors.
 Concurrent foreign spawning that does not use the same policy can still inherit
 a socket and delay EOF or listener release.
-Both platforms duplicate descriptors atomically with `F_DUPFD_CLOEXEC`. The
+Copying creates no descriptor and retains the existing close-on-exec flag. The
 [core runtime safety report](status/runtime-safety.md) records the process
 inheritance fix and its regression tests.
 

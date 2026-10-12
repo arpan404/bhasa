@@ -133,3 +133,55 @@ fn inspection_errors_are_structured_located_and_never_report_unchecked_types() {
         assert_eq!(report(&output).get("ok"), Some(&Value::Bool(false)));
     }
 }
+
+#[test]
+fn inspection_owned_parameter_modes_are_checked_and_preserve_imported_alias_apis() {
+    let workspace = Workspace::new("inspect-owned-aliases");
+    workspace.write("lib.bh","struct Point{value:int}\nstruct Box[T]{value:T}\ntype Item=Box[Point]\ntype Bytes=buffer\ndef take(owned value:Bytes)->Bytes{return move value}\ndef read(value:Bytes)->int{return len(value)}\ndef owned(owned:int)->int{return owned}\ndef move(value:int)->int{return value}\n");
+    let source=workspace.write("main.bh","import \"lib.bh\" as lib\ndef main(){let input=buffer(\"x\");let output=lib.take(move input);print(lib.read(output));print(lib.owned(lib.move(1)))}\n");
+    let invoke = || {
+        workspace
+            .command()
+            .arg("inspect")
+            .arg(&source)
+            .arg("--json")
+            .env("BHASA_CLANG", workspace.file("missing-clang"))
+            .env("CARGO", workspace.file("missing-cargo"))
+            .output()
+            .unwrap()
+    };
+    let output = invoke();
+    succeeds(&output);
+    assert_eq!(output.stdout, invoke().stdout);
+    let value = report(&output);
+    let declarations = value.get("declarations").unwrap().as_array().unwrap();
+    for (name, mode, ty) in [
+        ("take", "owned", "buffer"),
+        ("read", "borrowed", "buffer"),
+        ("owned", "borrowed", "int"),
+        ("move", "borrowed", "int"),
+    ] {
+        let function = declarations
+            .iter()
+            .find(|v| v.get("name").and_then(Value::as_str) == Some(name))
+            .unwrap();
+        let param = &function.get("parameters").unwrap().as_array().unwrap()[0];
+        assert_eq!(param.get("mode").and_then(Value::as_str), Some(mode));
+        assert_eq!(param.get("type").and_then(Value::as_str), Some(ty));
+    }
+    assert!(declarations
+        .iter()
+        .any(|v| v.get("name").and_then(Value::as_str) == Some("Item")
+            && v.get("kind").and_then(Value::as_str) == Some("type_alias")));
+    assert!(!stdout(&output).contains("__bhm_") && !stdout(&output).contains("__bhg_"));
+    assert!(!workspace.file("build").exists());
+}
+#[test]
+fn inspection_owned_rejects_invalid_transfer_before_reporting_api() {
+    let workspace = Workspace::new("inspect-owned-reject");
+    for source in ["def take(owned value:int){}\ndef main(){}", "def take(owned value:buffer){}\ndef main(){let value=buffer();take(move value);print(value)}"] {
+        let file=workspace.write("main.bh",source);let output=workspace.command().arg("inspect").arg(file).output().unwrap();fails(&output);
+        let value=report(&output);assert_eq!(value.get("ok"),Some(&Value::Bool(false)));assert!(value.get("declarations").is_none());
+        assert!(value.get("diagnostics").unwrap().as_array().unwrap().iter().any(|v|v.get("code").and_then(Value::as_str)==Some("S038")));
+    }
+}

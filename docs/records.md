@@ -41,11 +41,12 @@ includes independent nested records, active enum payloads, byte buffers, and int
 Changing a copied field or container cannot change its source. Copying large
 buffers has a cost; this compiler does not promise copy elimination.
 
-Copying a TCP handle duplicates its owned descriptor. The descriptors refer
-to the same operating-system socket or listener, so they share the same
-connection and network state. Closing or dropping one descriptor does not
-destroy the other copy's ownership. A record copy does not create another
-network connection.
+Copying a TCP handle atomically retains shared descriptor state for the same
+operating-system socket or listener. Copies share connection and network state
+while preserving independent owner lifetimes. Dropping one owner leaves other
+owners usable; final release closes the descriptor once. A record copy creates
+no new connection or descriptor and cannot change a successful TCP constructor
+status through descriptor exhaustion.
 
 Copies of a `tls_socket` retain one shared TLS session with serialized I/O;
 the last owned copy releases it. See [TLS ownership](tls.md).

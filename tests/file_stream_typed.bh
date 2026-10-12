@@ -1,0 +1,55 @@
+# Typed fixture for the integrated file runtime; wrappers borrow shared handles.
+# Argument 1 is a coordinator-provided temporary regular-file path.
+import "io.bh" as io
+
+def main() -> int {
+    var path = arg(1)
+    match io.file_stream_open(path, 1) {
+        case io.IoResult[file_handle].error(error) { print("unexpected open failure"); return 1 }
+        case io.IoResult[file_handle].ok(handle) {
+            var alias = handle
+            var bytes = buffer("a")
+            push(bytes, 0)
+            append(bytes, "bc")
+            match io.file_stream_write(handle, bytes) {
+                case io.IoResult[int].error(error) { print("unexpected write failure"); return 1 }
+                case io.IoResult[int].ok(count) { print(count == 4) }
+            }
+            match io.file_stream_position(alias) {
+                case io.IoResult[int].error(error) { print("unexpected position failure"); return 1 }
+                case io.IoResult[int].ok(offset) { print(offset == 4) }
+            }
+            match io.file_stream_close(handle) {
+                case io.IoResult[int].error(error) { print("unexpected close failure"); return 1 }
+                case io.IoResult[int].ok(status) { print(status == 0) }
+            }
+            print(file_status(alias) != 0)
+            match io.file_stream_read(alias, 4) {
+                case io.IoResult[buffer].error(error) { print(error.code() == file_status(alias)) }
+                case io.IoResult[buffer].ok(bytes) { print(false) }
+            }
+        }
+    }
+    match io.file_stream_open(path, 0) {
+        case io.IoResult[file_handle].error(error) { print("unexpected read open failure"); return 1 }
+        case io.IoResult[file_handle].ok(handle) {
+            match io.file_stream_read(handle, 2) {
+                case io.IoResult[buffer].error(error) { print("unexpected read failure"); return 1 }
+                case io.IoResult[buffer].ok(bytes) { print(len(bytes) == 2 and get(bytes, 0) == 97 and get(bytes, 1) == 0) }
+            }
+            match io.file_stream_seek(handle, 0) {
+                case io.IoResult[int].error(error) { print("unexpected seek failure"); return 1 }
+                case io.IoResult[int].ok(offset) { print(offset == 0) }
+            }
+            match io.file_stream_read(handle, 4) {
+                case io.IoResult[buffer].error(error) { print("unexpected second read failure"); return 1 }
+                case io.IoResult[buffer].ok(bytes) { print(len(bytes) == 4 and get(bytes, 3) == 99) }
+            }
+            match io.file_stream_read(handle, 1) {
+                case io.IoResult[buffer].error(error) { print("unexpected EOF failure"); return 1 }
+                case io.IoResult[buffer].ok(bytes) { print(len(bytes) == 0) }
+            }
+        }
+    }
+    return 0
+}

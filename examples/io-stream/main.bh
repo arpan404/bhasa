@@ -1,0 +1,28 @@
+# bhasa run examples/io-stream/main.bh -- INPUT
+import "@std" as io
+
+def show(path: buffer) -> io.IoResult[int] {
+    let file = try io.file_stream_open(path, 0)
+    var total = 0
+    while true {
+        let bytes = try io.file_stream_read(file, 65536)
+        if len(bytes) == 0 { break }
+        print(bytes)
+        total = total + len(bytes)
+    }
+    let status = try io.file_stream_close(file)
+    return io.IoResult[int].ok(total)
+}
+
+def main() -> int {
+    if arg_count() != 2 { print("usage: io-stream INPUT"); return 2 }
+    match show(arg(1)) {
+        case io.IoResult[int].ok(count) { print(count); return 0 }
+        case io.IoResult[int].error(error) {
+            print(error.operation())
+            print(error.message().bytes())
+            print(error.code())
+            return 1
+        }
+    }
+}

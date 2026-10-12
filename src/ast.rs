@@ -29,6 +29,7 @@ pub enum Type {
     TcpListener,
     TcpSocket,
     TlsSocket,
+    FileHandle,
     Task,
     Void,
     /// Index into the containing program's `type_names` table.
@@ -48,6 +49,7 @@ impl std::fmt::Display for Type {
             Self::TcpListener => "tcp_listener",
             Self::TcpSocket => "tcp_socket",
             Self::TlsSocket => "tls_socket",
+            Self::FileHandle => "file_handle",
             Self::Task => "task",
             Self::Void => "void",
             Self::Record(id) => return write!(f, "record#{id}"),
@@ -64,6 +66,7 @@ impl Type {
                 | Self::TcpListener
                 | Self::TcpSocket
                 | Self::TlsSocket
+                | Self::FileHandle
                 | Self::Record(_)
                 | Self::Enum(_)
         )
@@ -110,6 +113,37 @@ impl Program {
             self.type_names.push(name.to_owned());
             id
         }
+    }
+
+    /// File resources have unsynchronized shared state and cannot cross threads.
+    pub fn contains_file_handle(&self, ty: Type) -> bool {
+        fn visit(
+            program: &Program,
+            ty: Type,
+            seen: &mut std::collections::BTreeSet<usize>,
+        ) -> bool {
+            match ty {
+                Type::FileHandle => true,
+                Type::Record(id) | Type::Enum(id) if seen.insert(id) => {
+                    if let Some(record) = program.record(id) {
+                        record
+                            .fields
+                            .iter()
+                            .any(|field| visit(program, field.ty, seen))
+                    } else if let Some(declaration) = program.enum_decl(id) {
+                        declaration
+                            .variants
+                            .iter()
+                            .flat_map(|variant| &variant.fields)
+                            .any(|field| visit(program, field.ty, seen))
+                    } else {
+                        false
+                    }
+                }
+                _ => false,
+            }
+        }
+        visit(self, ty, &mut std::collections::BTreeSet::new())
     }
 
     /// Merge a parsed module after converting its local type IDs to this program's
@@ -191,7 +225,8 @@ fn remap_expression(expr: &mut Expr, ids: &[usize]) {
         | ExprKind::Float(_)
         | ExprKind::Bool(_)
         | ExprKind::Str(_)
-        | ExprKind::Name(_) => {}
+        | ExprKind::Name(_)
+        | ExprKind::Move { .. } => {}
     }
 }
 
@@ -376,8 +411,15 @@ pub struct Function {
     pub body: Option<Block>,
     pub span: Span,
 }
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ParamMode {
+    #[default]
+    Borrowed,
+    Owned,
+}
 #[derive(Debug, Clone)]
 pub struct Param {
+    pub mode: ParamMode,
     pub name: String,
     pub ty: Type,
     pub span: Span,
@@ -470,6 +512,10 @@ impl Expr {
 }
 #[derive(Debug, Clone)]
 pub enum ExprKind {
+    Move {
+        name: String,
+        name_span: Span,
+    },
     Int(i64),
     Float(f64),
     Bool(bool),
@@ -527,6 +573,7 @@ pub enum BinaryOp {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionSig {
+    pub modes: Vec<ParamMode>,
     pub params: Vec<Type>,
     pub return_type: Type,
     pub external: bool,
@@ -561,7 +608,12 @@ mod tests {
                 }
             }
             ExprKind::Field { base, .. } => expression_types(base, visit),
-            _ => {}
+            ExprKind::Int(_)
+            | ExprKind::Float(_)
+            | ExprKind::Bool(_)
+            | ExprKind::Str(_)
+            | ExprKind::Name(_)
+            | ExprKind::Move { .. } => {}
         }
     }
 

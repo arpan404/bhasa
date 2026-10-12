@@ -2,7 +2,8 @@
 
 use crate::ast::{
     BinaryOp, Block, EnumDecl, EnumVariant, Expr, ExprKind, ForSource, Function, MatchArm,
-    MatchBinding, Param, Program, RecordDecl, RecordField, Span, Stmt, StmtKind, Type, UnaryOp,
+    MatchBinding, Param, ParamMode, Program, RecordDecl, RecordField, Span, Stmt, StmtKind, Type,
+    UnaryOp,
 };
 use crate::diagnostic::Diagnostic;
 use crate::lexer::{lex, Token, TokenKind};
@@ -211,6 +212,7 @@ impl Parser {
                 return Err(self.error("method receiver 'self' has its record type inferred; remove the type annotation"));
             }
             params.push(Param {
+                mode: crate::ast::ParamMode::Borrowed,
                 name: "self".to_owned(),
                 ty: Type::Record(record_id),
                 span,
@@ -221,6 +223,17 @@ impl Parser {
         }
         if !self.at(&TokenKind::RightParen) {
             loop {
+                let mode = if matches!(&self.current().kind, TokenKind::Ident(name) if name == "owned")
+                    && self
+                        .tokens
+                        .get(self.cursor + 1)
+                        .is_some_and(|token| matches!(token.kind, TokenKind::Ident(_)))
+                {
+                    self.advance();
+                    ParamMode::Owned
+                } else {
+                    ParamMode::Borrowed
+                };
                 let (name, param_start) = self.identifier("a parameter name")?;
                 if receiver.is_some() && name == "self" {
                     return Err(Diagnostic::new(
@@ -232,6 +245,7 @@ impl Parser {
                 self.expect(&TokenKind::Colon, "':' and a type after the parameter name")?;
                 let (ty, type_span) = self.type_name()?;
                 params.push(Param {
+                    mode,
                     name,
                     ty,
                     span: param_start.join(type_span),
@@ -665,6 +679,10 @@ impl Parser {
                 return Ok((Expr::new(ExprKind::Call { name, args }, token.span.join(end)), tree_depth));
             }
             TokenKind::Ident(name) => {
+                if name == "move" && matches!(self.current().kind, TokenKind::Ident(_)) {
+                    let (name, name_span) = self.identifier("a move source")?;
+                    return Ok((Expr::new(ExprKind::Move { name, name_span }, token.span.join(name_span)), 1));
+                }
                 if self.take(&TokenKind::LeftParen).is_none() {
                     return Ok((Expr::new(ExprKind::Name(name), token.span), 1));
                 }
@@ -725,6 +743,7 @@ impl Parser {
             TokenKind::Ident(name) if name == "tcp_listener" => Type::TcpListener,
             TokenKind::Ident(name) if name == "tcp_socket" => Type::TcpSocket,
             TokenKind::Ident(name) if name == "tls_socket" => Type::TlsSocket,
+            TokenKind::Ident(name) if name == "file_handle" => Type::FileHandle,
             TokenKind::Ident(name) => Type::Record(self.intern_type_name(&name)),
             _ => return Err(self.error("expected a builtin type or a struct name")),
         };

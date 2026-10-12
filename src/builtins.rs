@@ -24,6 +24,14 @@ pub fn is_builtin(name: &str) -> bool {
             | "to_buffer"
             | "arg_count"
             | "arg"
+            | "file_open"
+            | "file_status"
+            | "file_read_chunk"
+            | "file_write_chunk"
+            | "file_seek"
+            | "file_position"
+            | "file_flush"
+            | "file_close"
             | "read_file"
             | "write_file"
             | "read_stdin"
@@ -66,7 +74,15 @@ pub fn is_builtin(name: &str) -> bool {
 pub fn must_use(name: &str) -> bool {
     matches!(
         name,
-        "read_file"
+        "file_open"
+            | "file_status"
+            | "file_read_chunk"
+            | "file_write_chunk"
+            | "file_seek"
+            | "file_position"
+            | "file_flush"
+            | "file_close"
+            | "read_file"
             | "write_file"
             | "read_stdin"
             | "write_stdout"
@@ -100,6 +116,11 @@ pub fn signature(name: &str, args: &[Type]) -> Option<Result<Type, String>> {
         ("same", [Buffer, Buffer | Str]) => Bool,
         ("to_buffer" | "arg", [Int]) => Buffer,
         ("arg_count", []) => Int,
+        ("file_open", [Buffer | Str, Int]) => FileHandle,
+        ("file_status" | "file_position" | "file_flush" | "file_close", [FileHandle]) => Int,
+        ("file_read_chunk", [FileHandle, Buffer, Int])
+        | ("file_write_chunk", [FileHandle, Buffer])
+        | ("file_seek", [FileHandle, Int]) => Int,
         ("read_file" | "write_file", [Buffer | Str, Buffer]) => Int,
         ("read_stdin" | "write_stdout" | "write_stderr" | "process_run", [Buffer]) => Int,
         ("gpu_available", []) => Bool,
@@ -182,7 +203,7 @@ pub fn runtime_name(name: &str, args: &[Type]) -> Option<String> {
             }
         ),
         "slice" => "buffer_slice".to_owned(),
-        "read_file" | "write_file" => format!(
+        "file_open" | "read_file" | "write_file" => format!(
             "{name}{}",
             if args.first() == Some(&Str) {
                 "_str"
@@ -208,7 +229,14 @@ pub fn runtime_name(name: &str, args: &[Type]) -> Option<String> {
                 ""
             }
         ),
-        "tcp_listen"
+        "file_status"
+        | "file_read_chunk"
+        | "file_write_chunk"
+        | "file_seek"
+        | "file_position"
+        | "file_flush"
+        | "file_close"
+        | "tcp_listen"
         | "tcp_accept"
         | "tcp_listener_status"
         | "tcp_socket_status"
@@ -233,4 +261,19 @@ pub fn runtime_name(name: &str, args: &[Type]) -> Option<String> {
         _ => return None,
     };
     Some(format!("bhasa_rt_{stem}"))
+}
+
+/// These operations access shared, single-thread file-resource state.
+pub fn is_file_operation(name: &str) -> bool {
+    matches!(
+        name,
+        "file_open"
+            | "file_status"
+            | "file_read_chunk"
+            | "file_write_chunk"
+            | "file_seek"
+            | "file_position"
+            | "file_flush"
+            | "file_close"
+    )
 }

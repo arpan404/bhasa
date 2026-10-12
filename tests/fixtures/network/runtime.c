@@ -473,10 +473,12 @@ static void check_intercepted_bind(const char *host, int family, uint16_t port,
 static void test_listen_on(void) {
     int baseline = descriptor_count();
     for (int overload = 0; overload < 2; ++overload) {
-        /* Only the owned handle may allocate; address conversion uses the stack. */
-        allocations_until_failure = 1;
+        /* Exactly owner + shared state allocate; address conversion uses the stack. */
+        int allocations_before = atomic_load(&live_allocations);
+        allocations_until_failure = 2;
         bhasa_tcp_listener *value = listen_numeric("127.0.0.1", 0, overload);
-        assert(allocations_until_failure == 0);
+        assert(allocations_until_failure == 0 && bhasa_rt_tcp_listener_status(value) == 0);
+        assert(atomic_load(&live_allocations) == allocations_before + 2);
         allocations_until_failure = -1;
         exchange_on_listener(value, "127.0.0.1");
         assert(descriptor_count() == baseline);
@@ -566,9 +568,12 @@ static void test_listen_on_ipv6(void) {
                 (long long)status, strerror((int)status));
     exchange_on_listener(value, "::1");
     for (int overload = 0; overload < 2; ++overload) {
-        allocations_until_failure = 1;
+        /* Exactly owner + shared state allocate, including IPv6 conversion. */
+        int allocations_before = atomic_load(&live_allocations);
+        allocations_until_failure = 2;
         value = listen_numeric("0:0:0:0:0:0:0:1", 0, overload);
-        assert(allocations_until_failure == 0);
+        assert(allocations_until_failure == 0 && bhasa_rt_tcp_listener_status(value) == 0);
+        assert(atomic_load(&live_allocations) == allocations_before + 2);
         allocations_until_failure = -1;
         exchange_on_listener(value, "::1");
         assert(descriptor_count() == baseline);
@@ -660,9 +665,14 @@ static void test_injected(void) {
     server = listener();
     inject("accept", ECONNABORTED, 1);
     failed_socket(bhasa_rt_tcp_accept(server), ECONNABORTED);
+    int before_copy = descriptor_count();
     inject("dup", EMFILE, 1);
-    failed_listener(bhasa_rt_tcp_listener_clone(server), EMFILE);
-    assert(fault_remaining == 0);
+    bhasa_tcp_listener *retained_listener = bhasa_rt_tcp_listener_clone(server);
+    assert(bhasa_rt_tcp_listener_status(retained_listener) == 0);
+    assert(bhasa_rt_tcp_local_port(retained_listener) == bhasa_rt_tcp_local_port(server));
+    assert(fault_remaining == 1 && descriptor_count() == before_copy);
+    fault_remaining = 0; /* No dup was attempted; remove the unused injection. */
+    bhasa_rt_tcp_listener_free(retained_listener);
     bhasa_buffer *host = bhasa_rt_buffer_from_str("127.0.0.1");
     allocations_until_failure = 1;
     bhasa_tcp_socket *host_failed = bhasa_rt_tcp_connect(host, bhasa_rt_tcp_local_port(server));
@@ -677,9 +687,14 @@ static void test_injected(void) {
     inject("accept", EINTR, 1);
     bhasa_tcp_socket *accepted = bhasa_rt_tcp_accept(server);
     assert(fault_remaining == 0 && bhasa_rt_tcp_socket_status(accepted) == 0);
+    before_copy = descriptor_count();
     inject("dup", EMFILE, 1);
-    failed_socket(bhasa_rt_tcp_socket_clone(client), EMFILE);
-    assert(fault_remaining == 0);
+    bhasa_tcp_socket *retained_socket = bhasa_rt_tcp_socket_clone(client);
+    assert(bhasa_rt_tcp_socket_status(retained_socket) == 0);
+    assert(bhasa_rt_tcp_socket_fd(retained_socket) == bhasa_rt_tcp_socket_fd(client));
+    assert(fault_remaining == 1 && descriptor_count() == before_copy);
+    fault_remaining = 0; /* Copy preserves success without a fallible OS dup. */
+    bhasa_rt_tcp_socket_free(retained_socket);
 
     bhasa_buffer *payload = bytes(100);
     send_limit = 7;

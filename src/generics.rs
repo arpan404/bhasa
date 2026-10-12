@@ -124,6 +124,9 @@ impl Expansion {
         fn expression(expansion: &Expansion, value: &mut ast::Expr) {
             value.span = expansion.map_span(value.span);
             match &mut value.kind {
+                ast::ExprKind::Move { name_span, .. } => {
+                    *name_span = expansion.map_span(*name_span)
+                }
                 ast::ExprKind::Call { args, .. } => {
                     for arg in args {
                         expression(expansion, arg);
@@ -142,7 +145,11 @@ impl Expansion {
                     expression(expansion, left);
                     expression(expansion, right);
                 }
-                _ => {}
+                ast::ExprKind::Int(_)
+                | ast::ExprKind::Float(_)
+                | ast::ExprKind::Bool(_)
+                | ast::ExprKind::Str(_)
+                | ast::ExprKind::Name(_) => {}
             }
         }
         fn block(expansion: &Expansion, body: &mut ast::Block) {
@@ -328,6 +335,7 @@ fn primitive(name: &str) -> bool {
             | "tcp_listener"
             | "tcp_socket"
             | "tls_socket"
+            | "file_handle"
     )
 }
 fn keyword(name: &str) -> bool {
@@ -1196,7 +1204,24 @@ impl Engine<'_> {
             token.span.start += template.span.start;
             token.span.end += template.span.start;
         }
-        crate::parser::parse_tokens(tokens).map_err(|errors| errors.into_iter().next().unwrap())
+        let program = crate::parser::parse_tokens(tokens)
+            .map_err(|errors| errors.into_iter().next().unwrap())?;
+        for function in program
+            .functions
+            .iter()
+            .chain(program.records.iter().flat_map(|r| r.methods.iter()))
+        {
+            for param in &function.params {
+                if param.mode == ast::ParamMode::Owned {
+                    return Err(error(
+                        "S038",
+                        "generic owned parameter modes are unsupported",
+                        param.span,
+                    ));
+                }
+            }
+        }
+        Ok(program)
     }
 }
 

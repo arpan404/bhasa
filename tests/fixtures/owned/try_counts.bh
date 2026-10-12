@@ -1,0 +1,5 @@
+
+enum Result {ok(value:buffer);error(value:int)}
+def fallible(flag:bool)->Result {if flag {return Result.ok(buffer("ok"))} return Result.error(7)}
+def guarded(owned x:buffer,flag:bool)->Result {var y=try fallible(flag);return Result.ok(y)}
+def main(){var a=guarded(buffer("cleanup"),false);match a {case Result.ok(value){print(value)} case Result.error(code){print(code)}} var b=guarded(buffer("cleanup-ok"),true);match b {case Result.ok(value){print(value)} case Result.error(code){print(code)}}}

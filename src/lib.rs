@@ -18,6 +18,7 @@ pub mod lexer;
 mod lock_cli;
 pub mod lsp;
 pub mod modules;
+pub mod ownership;
 pub mod package_lock;
 pub mod parser;
 pub mod project;

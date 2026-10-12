@@ -40,6 +40,9 @@ pub fn check(mut program: Program) -> Result<CheckedProgram, Vec<Diagnostic>> {
             checker.enums.insert(id, declaration.clone());
         }
     }
+    checker
+        .diagnostics
+        .extend(crate::ownership::check_modes(&program));
     checker.declare_records(&program.records);
     checker.check_enums(&program);
     // Bodies may refer to any declared function, including themselves.
@@ -63,6 +66,15 @@ pub fn check(mut program: Program) -> Result<CheckedProgram, Vec<Diagnostic>> {
     // after every method call has a resolved key, including forward/cyclic calls.
     checker.calls = call_graph(&program);
     for (worker, span) in std::mem::take(&mut checker.pending_workers) {
+        if let Some(operation) =
+            file_worker_violation(&program, &checker.signatures, &checker.calls, &worker)
+        {
+            checker.error(
+                "S020",
+                format!("worker '{worker}' reaches single-thread file resource '{operation}'"),
+                span,
+            );
+        }
         if let Some(operation) = checker.reachable_async(&worker) {
             checker.error("S020", format!("worker '{worker}' can call '{operation}'; scheduling or awaiting pooled tasks from workers could deadlock"), span);
         }
@@ -71,6 +83,9 @@ pub fn check(mut program: Program) -> Result<CheckedProgram, Vec<Diagnostic>> {
         }
     }
     if checker.diagnostics.is_empty() {
+        checker
+            .diagnostics
+            .extend(crate::ownership::check(&program));
         checker
             .diagnostics
             .extend(crate::failure_use::check(&program));
@@ -179,6 +194,7 @@ impl Checker {
                         | "task"
                         | "tcp_socket"
                         | "tls_socket"
+                        | "file_handle"
                         | "tcp_listener"
                 )
             {
@@ -384,6 +400,7 @@ impl Checker {
                     | "tcp_listener"
                     | "tcp_socket"
                     | "tls_socket"
+                    | "file_handle"
             ) {
                 self.error(
                     "S024",
@@ -575,6 +592,7 @@ impl Checker {
             );
         }
         let signature = FunctionSig {
+            modes: function.params.iter().map(|param| param.mode).collect(),
             params: function.params.iter().map(|param| param.ty).collect(),
             return_type: function.return_type,
             external: function.body.is_none(),
@@ -658,7 +676,7 @@ impl Checker {
         self.borrowed_params = function
             .params
             .iter()
-            .filter(|param| param.ty.is_owned())
+            .filter(|param| param.ty.is_owned() && param.mode == ParamMode::Borrowed)
             .map(|param| param.name.clone())
             .collect();
         let mut scope = BTreeMap::new();
@@ -1399,6 +1417,21 @@ impl Checker {
                 }
                 Some(Type::Str)
             }
+            ExprKind::Move { name, .. } => match self.lookup_local(name) {
+                Some(Some(Type::Task)) => {
+                    self.error("S038", "task handles cannot be moved", expression.span);
+                    None
+                }
+                Some(ty) => ty,
+                None => {
+                    self.error(
+                        "S038",
+                        "move source is not a local binding",
+                        expression.span,
+                    );
+                    None
+                }
+            },
             ExprKind::Name(name) => {
                 match self.lookup_local(name) {
                     Some(Some(Type::Task)) => {
@@ -1856,7 +1889,12 @@ fn normalize_enum_types(program: &mut Program) {
                 expression(left, ids);
                 expression(right, ids);
             }
-            _ => {}
+            ExprKind::Int(_)
+            | ExprKind::Float(_)
+            | ExprKind::Bool(_)
+            | ExprKind::Str(_)
+            | ExprKind::Name(_)
+            | ExprKind::Move { .. } => {}
         }
     }
     fn block(body: &mut Block, ids: &BTreeSet<usize>) {
@@ -2018,7 +2056,18 @@ fn argument_mutations(
             argument_mutations(left, record_names, enum_names, output);
             argument_mutations(right, record_names, enum_names, output);
         }
-        _ => {}
+        ExprKind::MethodCall { receiver, args, .. } => {
+            argument_mutations(receiver, record_names, enum_names, output);
+            for arg in args {
+                argument_mutations(arg, record_names, enum_names, output);
+            }
+        }
+        ExprKind::Int(_)
+        | ExprKind::Float(_)
+        | ExprKind::Bool(_)
+        | ExprKind::Str(_)
+        | ExprKind::Name(_)
+        | ExprKind::Move { .. } => {}
     }
 }
 
@@ -2028,7 +2077,7 @@ fn is_reserved(name: &str) -> bool {
         || name.starts_with("bhasa_rt_")
 }
 
-fn call_graph(program: &Program) -> BTreeMap<String, BTreeSet<String>> {
+pub(crate) fn call_graph(program: &Program) -> BTreeMap<String, BTreeSet<String>> {
     fn expression(expr: &Expr, calls: &mut BTreeSet<String>) {
         match &expr.kind {
             ExprKind::Call { name, args } => {
@@ -2043,7 +2092,18 @@ fn call_graph(program: &Program) -> BTreeMap<String, BTreeSet<String>> {
                 expression(left, calls);
                 expression(right, calls);
             }
-            _ => {}
+            ExprKind::MethodCall { receiver, args, .. } => {
+                expression(receiver, calls);
+                for arg in args {
+                    expression(arg, calls);
+                }
+            }
+            ExprKind::Int(_)
+            | ExprKind::Float(_)
+            | ExprKind::Bool(_)
+            | ExprKind::Str(_)
+            | ExprKind::Name(_)
+            | ExprKind::Move { .. } => {}
         }
     }
     fn block(statements: &Block, calls: &mut BTreeSet<String>) {
@@ -2120,6 +2180,37 @@ fn call_graph(program: &Program) -> BTreeMap<String, BTreeSet<String>> {
             (key, calls)
         })
         .collect()
+}
+
+/// Also used by emission so a corrupted checked AST cannot transfer file state.
+pub(crate) fn file_worker_violation(
+    program: &Program,
+    signatures: &BTreeMap<String, FunctionSig>,
+    calls: &BTreeMap<String, BTreeSet<String>>,
+    worker: &str,
+) -> Option<String> {
+    let mut pending = vec![worker.to_owned()];
+    let mut visited = BTreeSet::new();
+    while let Some(name) = pending.pop() {
+        if !visited.insert(name.clone()) {
+            continue;
+        }
+        if crate::builtins::is_file_operation(&name)
+            || signatures.get(&name).is_some_and(|signature| {
+                program.contains_file_handle(signature.return_type)
+                    || signature
+                        .params
+                        .iter()
+                        .any(|ty| program.contains_file_handle(*ty))
+            })
+        {
+            return Some(name);
+        }
+        if let Some(edges) = calls.get(&name) {
+            pending.extend(edges.iter().cloned());
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -2211,6 +2302,7 @@ mod tests {
             params: params
                 .iter()
                 .map(|(name, ty)| Param {
+                    mode: crate::ast::ParamMode::Borrowed,
                     name: (*name).into(),
                     ty: *ty,
                     span: Span::new(4, 5),
@@ -2276,6 +2368,7 @@ mod tests {
         assert_eq!(
             checked.signatures["native"],
             FunctionSig {
+                modes: vec![ParamMode::Borrowed],
                 params: vec![Type::Int],
                 return_type: Type::Int,
                 external: true,
@@ -2909,7 +3002,18 @@ mod tests {
                         visit_expr(arg);
                     }
                 }
-                _ => {}
+                ExprKind::MethodCall { receiver, args, .. } => {
+                    visit_expr(receiver);
+                    for arg in args {
+                        visit_expr(arg);
+                    }
+                }
+                ExprKind::Int(_)
+                | ExprKind::Float(_)
+                | ExprKind::Bool(_)
+                | ExprKind::Str(_)
+                | ExprKind::Name(_)
+                | ExprKind::Move { .. } => {}
             }
         }
         fn visit_block(block: &Block) {

@@ -15,6 +15,7 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <stdatomic.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <poll.h>
@@ -25,14 +26,19 @@
 #include <time.h>
 #include <unistd.h>
 
-struct bhasa_tcp_listener {
+typedef struct tcp_shared {
+    atomic_uint references;
     int fd;
+} tcp_shared;
+
+struct bhasa_tcp_listener {
+    tcp_shared *shared;
     int status;
     int64_t port;
 };
 
 struct bhasa_tcp_socket {
-    int fd;
+    tcp_shared *shared;
     int status;
 };
 
@@ -45,15 +51,37 @@ static void *new_handle(size_t size) {
     return value;
 }
 
+static tcp_shared *new_shared(int fd) {
+    tcp_shared *shared = new_handle(sizeof(*shared));
+    atomic_init(&shared->references, 1);
+    shared->fd = fd;
+    return shared;
+}
+
+/* The caller keeps its own owner alive throughout retain. Distinct owners
+ * may retain/release concurrently; nobody may resurrect a released owner. */
+static tcp_shared *retain_shared(tcp_shared *shared) {
+    if (shared == NULL) return NULL;
+    unsigned references = atomic_load_explicit(&shared->references, memory_order_relaxed);
+    for (;;) {
+        if (references == UINT_MAX) {
+            fputs("Bhasa runtime error: TCP reference count overflow\n", stderr);
+            exit(1);
+        }
+        if (atomic_compare_exchange_weak_explicit(&shared->references, &references,
+                references + 1, memory_order_relaxed, memory_order_relaxed)) return shared;
+    }
+}
+
 static bhasa_tcp_listener *new_listener(void) {
     bhasa_tcp_listener *value = new_handle(sizeof(*value));
-    *value = (bhasa_tcp_listener){-1, 0, 0};
+    *value = (bhasa_tcp_listener){NULL, 0, 0};
     return value;
 }
 
 static bhasa_tcp_socket *new_socket(void) {
     bhasa_tcp_socket *value = new_handle(sizeof(*value));
-    *value = (bhasa_tcp_socket){-1, 0};
+    *value = (bhasa_tcp_socket){NULL, 0};
     return value;
 }
 
@@ -142,10 +170,6 @@ static int fd_control_deadline(int fd, int command, int argument,
     return result;
 }
 
-static int fd_control(int fd, int command, int argument) {
-    return fd_control_deadline(fd, command, argument, &(net_deadline){0, 0});
-}
-
 static int configure_socket(int fd, const net_deadline *deadline) {
     if (fd_control_deadline(fd, F_SETFD, FD_CLOEXEC, deadline) < 0) return os_error();
     int flags = fd_control_deadline(fd, F_GETFL, 0, deadline);
@@ -214,7 +238,7 @@ static bhasa_tcp_listener *listen_address(bhasa_tcp_listener *value, int family,
         status = EIO;
         goto failed;
     }
-    value->fd = fd;
+    value->shared = new_shared(fd);
     return value;
 failed:
     close_socket(fd);
@@ -352,7 +376,7 @@ static bhasa_tcp_socket *connect_host(bhasa_tcp_socket *value, const char *host,
         status = configure_socket(fd, &(net_deadline){0, 0});
         if (status == 0) status = connect_socket(fd, item->ai_addr, item->ai_addrlen, &(net_deadline){0, 0});
         if (status == 0) {
-            value->fd = fd;
+            value->shared = new_shared(fd);
             break;
         }
         close_socket(fd);
@@ -394,14 +418,14 @@ static bhasa_tcp_socket *accept_deadline(bhasa_tcp_socket *value,
     for (;;) {
         int fd;
 #if defined(__linux__)
-        fd = accept4(listener->fd, NULL, NULL, SOCK_CLOEXEC | SOCK_NONBLOCK);
+        fd = accept4(listener->shared->fd, NULL, NULL, SOCK_CLOEXEC | SOCK_NONBLOCK);
 #else
-        fd = accept(listener->fd, NULL, NULL);
+        fd = accept(listener->shared->fd, NULL, NULL);
 #endif
         if (fd >= 0) {
             value->status = configure_socket(fd, deadline);
             if (value->status != 0) close_socket(fd);
-            else value->fd = fd;
+            else value->shared = new_shared(fd);
             return value;
         }
         int status = os_error();
@@ -409,7 +433,7 @@ static bhasa_tcp_socket *accept_deadline(bhasa_tcp_socket *value,
             value->status = status;
             return value;
         }
-        value->status = wait_socket(listener->fd, POLLIN, deadline);
+        value->status = wait_socket(listener->shared->fd, POLLIN, deadline);
         if (value->status != 0) return value;
     }
 }
@@ -444,7 +468,7 @@ static bhasa_tcp_socket *connect_numeric_deadline(bhasa_tcp_socket *value,
     if (value->status == 0)
         value->status = connect_socket(fd, (const struct sockaddr *)&address, length, &deadline);
     if (value->status != 0) close_socket(fd);
-    else value->fd = fd;
+    else value->shared = new_shared(fd);
     return value;
 }
 
@@ -484,7 +508,7 @@ int64_t bhasa_rt_tcp_local_port(const bhasa_tcp_listener *listener) {
 int bhasa_rt_tcp_socket_fd(const bhasa_tcp_socket *socket) {
     int status = (int)bhasa_rt_tcp_socket_status(socket);
     if (status != 0) { errno = status; return -1; }
-    return socket->fd;
+    return socket->shared->fd;
 }
 
 static int64_t read_deadline(const bhasa_tcp_socket *socket,
@@ -500,11 +524,11 @@ static int64_t read_deadline(const bhasa_tcp_socket *socket,
         bytes = malloc((size_t)limit);
         if (bytes == NULL) return ENOMEM;
         for (;;) {
-            count = recv(socket->fd, bytes, (size_t)limit, 0);
+            count = recv(socket->shared->fd, bytes, (size_t)limit, 0);
             if (count >= 0) break;
             status = os_error();
             if (status == EINTR || status == EAGAIN || status == EWOULDBLOCK)
-                status = wait_socket(socket->fd, POLLIN, deadline);
+                status = wait_socket(socket->shared->fd, POLLIN, deadline);
             if (status != 0) { free(bytes); return status; }
         }
     }
@@ -548,14 +572,14 @@ static int64_t write_deadline(const bhasa_tcp_socket *socket,
         size_t count = (size_t)contents->len - offset;
         if (count > (size_t)SSIZE_MAX) count = (size_t)SSIZE_MAX;
 #if defined(__linux__)
-        ssize_t sent = send(socket->fd, contents->data + offset, count, MSG_NOSIGNAL);
+        ssize_t sent = send(socket->shared->fd, contents->data + offset, count, MSG_NOSIGNAL);
 #else
-        ssize_t sent = send(socket->fd, contents->data + offset, count, 0);
+        ssize_t sent = send(socket->shared->fd, contents->data + offset, count, 0);
 #endif
         if (sent < 0) {
             status = os_error();
             if (status == EINTR || status == EAGAIN || status == EWOULDBLOCK)
-                status = wait_socket(socket->fd, POLLOUT, deadline);
+                status = wait_socket(socket->shared->fd, POLLOUT, deadline);
             if (status != 0) return status;
             continue;
         }
@@ -583,9 +607,8 @@ bhasa_tcp_listener *bhasa_rt_tcp_listener_clone(const bhasa_tcp_listener *listen
     bhasa_tcp_listener *value = new_listener();
     value->status = (int)bhasa_rt_tcp_listener_status(listener);
     if (value->status != 0) return value;
-    value->fd = fd_control(listener->fd, F_DUPFD_CLOEXEC, 0);
-    if (value->fd < 0) value->status = os_error();
-    else value->port = listener->port;
+    value->shared = retain_shared(listener->shared);
+    value->port = listener->port;
     return value;
 }
 
@@ -593,19 +616,26 @@ bhasa_tcp_socket *bhasa_rt_tcp_socket_clone(const bhasa_tcp_socket *socket) {
     bhasa_tcp_socket *value = new_socket();
     value->status = (int)bhasa_rt_tcp_socket_status(socket);
     if (value->status != 0) return value;
-    value->fd = fd_control(socket->fd, F_DUPFD_CLOEXEC, 0);
-    if (value->fd < 0) value->status = os_error();
+    value->shared = retain_shared(socket->shared);
     return value;
+}
+
+static void release_shared(tcp_shared *shared) {
+    if (shared != NULL && atomic_fetch_sub_explicit(&shared->references, 1,
+            memory_order_acq_rel) == 1) {
+        close_socket(shared->fd);
+        free(shared);
+    }
 }
 
 void bhasa_rt_tcp_listener_free(bhasa_tcp_listener *listener) {
     if (listener == NULL) return;
-    close_socket(listener->fd);
+    release_shared(listener->shared);
     free(listener);
 }
 
 void bhasa_rt_tcp_socket_free(bhasa_tcp_socket *socket) {
     if (socket == NULL) return;
-    close_socket(socket->fd);
+    release_shared(socket->shared);
     free(socket);
 }

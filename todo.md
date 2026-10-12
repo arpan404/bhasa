@@ -22,6 +22,7 @@ after verified increments. Existing caches are preserved.
 - [x] Checked signature help and semantic tokens with guarded editor snapshots.
 - [x] Private Text, collection and JSON storage with copy-returning public APIs.
 - [x] Transparent nongeneric type aliases, checked alias editor identity and inspection metadata.
+- [x] Owned buffer/ints transfer, typed regular-file streams and atomic TCP shared-owner copies; both frontends and release/cache/self-rebuild gates.
 - [ ] Eight dedicated chats implement remaining sections in `docs/status/backlog-lanes.md`; draft readiness does not complete a checkbox.
 
 Three workers may run alongside the coordinator in this session. The coordinator
@@ -51,12 +52,17 @@ tests and 38 editor tests. This evidence predates new work below.
 ## Ownership and memory
 
 - [ ] Efficient ownership transfer and owned parameters.
+  - [x] Zero-clone buffer/ints transfer and owned parameters in synchronous monomorphic free functions.
+  - [ ] Aggregate/resource transfer and broader parameter modes.
 - [ ] Explicit read-only and mutable borrows with alias checking.
 - [ ] Borrowed returns, lifetime analysis and safe non-owning views.
 - [ ] Recursive owned structures with explicit heap indirection.
 - [ ] User-defined deterministic resource cleanup.
 - [ ] Safe ownership transfer/sharing between threads.
+  - [x] Atomic TCP shared-descriptor copies with distinct live owners and final-close checks.
 - [ ] Copy elision and allocation/copy benchmarks.
+  - [x] Exact O0/O2 allocation/copy/drop counters for the bounded owned buffer/ints slice.
+  - [ ] Representative allocation/runtime benchmarks and broader elision.
 - [ ] Fallible allocation and bounded-memory/custom allocator profiles.
 
 ## Systems types and data
@@ -113,7 +119,7 @@ tests and 38 editor tests. This evidence predates new work below.
 
 ## OS and standard library
 
-- [ ] Streaming file handles, seek and fallible file operations.
+- [x] Streaming regular-file handles, seek and typed fallible operations; POSIX64 runtime, verified on ARM64 macOS.
 - [ ] Paths, directories, metadata and filesystem watching.
 - [ ] Environment access and signal handling.
 - [ ] Subprocess capture, environment overrides and async process handles.
@@ -276,3 +282,15 @@ runs and two unchanged hybrid builds perform zero compilations. Matching archive
 is 366a75f3c915ffe34aa5529155ad732dc7b5e977320d34a7bc527ad931538b69.
 See `docs/status/integration.md`. Generic aliases, constants, ownership transfers,
 streaming files, channels and broader failure obligations remain open.
+
+Owned/files/TCP increment: 649 complete reference / 681 full-hybrid tests,
+98 LSP groups per configuration and 94 Node tests. Independently reviewed
+structural Clippy corrections retain semantics and pass 20 reference / 22 hybrid
+focused groups. Both Clippy configurations, formatting, refreshed releases with
+16 examples/five package tests per frontend, A/B/C at run.lWdKWpz3, 38 unchanged
+native hits, four unchanged Rust adapter runs and two unchanged hybrid builds
+pass. Final matching archive is
+cdd251ae2afa392702ef70570587f3500c3723875c4c6de2f8ed59419f096a8a.
+See docs/status/integration.md for scope, exact instrumentation and retained
+failures. Borrows, channels, network/process/TLS errors and broader ownership
+remain separate work. Git history records this progress commit's identity.

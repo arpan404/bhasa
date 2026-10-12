@@ -1,22 +1,22 @@
 {
   "updated": "2026-10-12",
   "coordinator": "01a12ba1-6cad-7f00-a505-1eb6a34b6e41",
-  "sourceIntegration": "591d1a7 transparent alias increment is verified and pushed:597 reference/622 hybrid,93 LSP each/93 Node,both Clippy/fmt,matching releases14 examples+5 tests each,A/B/C run.DqAvmtmF,34 native hits/four unchanged Rust adapter runs/two unchanged hybrid builds0Compiling; matching archive366a75f3c915ffe34aa5529155ad732dc7b5e977320d34a7bc527ad931538b69 and56 frozen source hashes. Prior621a977 report is integration-tools.md. Next actual source integration is corrected owned transfer/editor/API + TCP shared-owner copies + streaming files, followed by reviewed workspace/API docs/actions and channel native parity. Channel target P1 independently corrected; native raw manifest is trusted synchronous FFI, not cryptographic raw-caller authentication. Workspace amplification and both public-boundary findings independently corrected (16 rerun groups; original36 artifacts preserved). S036 corrections independently pass8 server/37 reviewer-client/107 author-client tests, originals20 artifacts preserved, custom client no-edit. Explicit borrow host independent review is finishing; late Result-parameter host implementation assigned with original precedence; typed network/process/TLS real listener waits TCP. Target capability inspection resumed after capacity failure. Protect eight worker files/isolated drafts. No other scope is complete. API docs independent real-report review passes, synthetic bare-CR literal Markdown gap routed to packages for separate correction before wiring.",
+  "sourceIntegration": "Verified actual owned/file/TCP increment atop 591d1a7/60d7424, pending authorized progress commit/push. Complete649 reference/681 hybrid pass; post-broad exact structural Clippy fixes independently reconstruct original bytes and pass20 reference/22 hybrid focused groups. Final270input identities match;98 LSP/94 Node, both Clippy/fmt, refreshed16examples+5package tests each, A/B/C run.lWdKWpz3,38 scheduled native hits/four unchanged Rust adapterruns0Compiling/two unchanged hybrid builds0Compiling. Final archive cdd251ae2afa392702ef70570587f3500c3723875c4c6de2f8ed59419f096a8a (broad equivalent-source archive d825a66628aafcdcb8c8154449e667abac80bc35a52ccda02fcb3fccfe7a6459). Channel family/schema source/existingbinary independent replay closes finding; actual wiring later. Native explicit-borrow source prep assigned atop corrected family channel, modes0/1/2/3 and context40 floor. Typednet/process/TLS/HTTP contextual rebase independently reviewed; HTTP tail/body prevalidation and exact-wire-header boundary findings routed to std separate correction. Toolchain pure parser corrections independently replay clean; bounded production process-adapter draft assigned GPU, root CLI/configured-tool wiring later. Workspace/API/actions/resultparameters remain isolated. Preserve worker files/original failures/caches and diagnostic precedence.",
   "threads": [
     {
       "lane": "safety-errors",
       "threadId": "01a12e2c-e72a-7720-a922-6a5c7a033306",
       "hostId": "local",
       "title": "Bhasa error handling and safety",
-      "cursor": "f162c2d6-fa50-4030-9e57-400b8a7d8d12:4",
-      "status": "active"
+      "cursor": "f162c2d6-fa50-4030-9e57-400b8a7d8d12:5",
+      "status": "notLoaded"
     },
     {
       "lane": "ownership-types",
       "threadId": "01a12e2c-fae4-7743-bb86-0c2a50e8a887",
       "hostId": "local",
       "title": "Bhasa ownership and core language",
-      "cursor": "430a7584-3bb8-41f3-ba91-d27f1b753398:3",
+      "cursor": "430a7584-3bb8-41f3-ba91-d27f1b753398:5",
       "status": "idle"
     },
     {
@@ -24,7 +24,7 @@
       "threadId": "01a12e2d-07c5-7c40-bab3-8d50ed614b10",
       "hostId": "local",
       "title": "Bhasa compiler parity and performance",
-      "cursor": "a1cdda68-bfde-4dd8-b572-40489571e4cc:5",
+      "cursor": "a1cdda68-bfde-4dd8-b572-40489571e4cc:14",
       "status": "active"
     },
     {
@@ -32,23 +32,23 @@
       "threadId": "01a12e2d-7701-7980-a579-93348eec37a0",
       "hostId": "local",
       "title": "Bhasa concurrency and async",
-      "cursor": "62f4cf6d-4ce4-432a-aed8-f05d7d851e17:2",
-      "status": "active"
+      "cursor": "62f4cf6d-4ce4-432a-aed8-f05d7d851e17:3",
+      "status": "notLoaded"
     },
     {
       "lane": "std-backend",
       "threadId": "01a12e2d-836d-7423-aabe-7b1cb0bcd41a",
       "hostId": "local",
       "title": "Bhasa standard library and backend services",
-      "cursor": "da040e31-e681-479b-965b-3198152313d5:3",
-      "status": "notLoaded"
+      "cursor": "da040e31-e681-479b-965b-3198152313d5:4",
+      "status": "active"
     },
     {
       "lane": "packages-ffi",
       "threadId": "01a12e2d-91de-7360-8243-c2c2033140a9",
       "hostId": "local",
       "title": "Bhasa packages and interoperability",
-      "cursor": "fed7b53e-b458-4c00-a741-ba21c7cb6121:3",
+      "cursor": "fed7b53e-b458-4c00-a741-ba21c7cb6121:4",
       "status": "idle"
     },
     {
@@ -56,7 +56,7 @@
       "threadId": "01a12e2e-0f34-7b10-a5a7-412ddaeadefe",
       "hostId": "local",
       "title": "Bhasa editor tools and production acceptance",
-      "cursor": "9cac160f-207a-40e6-bd1c-d04cc59329ee:3",
+      "cursor": "9cac160f-207a-40e6-bd1c-d04cc59329ee:6",
       "status": "idle"
     },
     {
@@ -64,7 +64,7 @@
       "threadId": "01a12e2e-1eb8-7680-8b70-e57c410dd92b",
       "hostId": "local",
       "title": "Bhasa GPU and portable targets",
-      "cursor": "0bd7f91d-8deb-427c-8e95-c8453e73e49f:2",
+      "cursor": "0bd7f91d-8deb-427c-8e95-c8453e73e49f:8",
       "status": "active"
     }
   ],

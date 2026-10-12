@@ -1,5 +1,59 @@
 # Current compiler integration
 
+## October 12 owned/files/TCP acceptance complete; delivery checkpoint
+
+Owned buffer/ints transfer, FileHandle host/native support, regular-file runtime,
+typed stream wrappers, driver/cache markers and atomic TCP shared-owner copies
+are integrated and verified. Integration.md records delivered scope and limits;
+integration-aliases.md preserves the previous baseline. Root is committing and
+pushing this reviewed increment before applying channels or borrows.
+
+Complete reference649 and hybrid681 pass. Clippy's subsequent two structural
+changes reconstruct the exact old source when reversed, independently reviewed;
+20 reference/22 hybrid focused groups pass afterward. All270 final input hashes
+match,98 LSP groups per configuration/94 Node pass, both Clippy/fmt pass, both
+refreshed releases execute16 examples/five package tests. A/B/C passes at
+run.lWdKWpz3.38 scheduled native hits,four unchanged Rust adapter runs and two
+unchanged hybrid builds have zero Compiling lines. Final matching archive is
+cdd251ae2afa392702ef70570587f3500c3723875c4c6de2f8ed59419f096a8a;
+the broad suite used preceding equivalent-source d825a66628aafcdcb8c8154449e667abac80bc35a52ccda02fcb3fccfe7a6459.
+Exact source/artifact identities are in build/verify-owned-artifact-identity.json.
+
+Independent review corrected public-emitter worker extern/pool edges and the
+128-byte resolved runtime target preflight. Old backend/typed-IO manual fixtures
+now link file.c; the stale deadline socket mirror uses the production accessor
+and POLLIN. The example directory run command now uses main.bh. Original failing
+evidence is preserved. Guest allocation hooks catch deliberately omitted enum
+frees; marked guest LLVM catches invalid heap accesses. Instrumentation claims
+remain ASan guest/C and UBSan C, with no internal-libc allocation claim.
+
+Channel traversal-local height memo and range-before-add family/schema guards
+now pass independent source and EXISTING-binary replay:24 malformed guards,
+seven authenticated DAGs,20 authority refusals,nine other source refusals and
+nine byte-identical handoffs. DAG100 work is202 visits/101 expansions. Reports
+are under build/native-channel-independent-review. Shared source remains unwired;
+raw synchronous manifests establish consistency, not cryptographic issuer proof.
+Native chat is preparing explicit-borrow source parity atop this corrected seed;
+context40+ and exact mode1 cleanup preserve channel37..39/ownership31..36 fields.
+
+Borrow host/FileHandle/channel effects and corrected imported editor hints are
+reviewed isolated handoffs. Result parameters, workspace/API renderer and S036
+actions remain later composition work; custom code-action client offers no edit.
+The current typed-network/process/TLS/HTTP rebase applies contextually with18
+independent emissions and no new transport/error contract finding. Independent
+HTTP review reproduced tail/body copying before bounds and exact16KiB empty-reason
+header rejection; a separate std correction is assigned. Root owns classifier
+selection before the no-core driver return and C/header cache identity, without
+OpenSSL/net for scalar-only classifiers.
+
+Toolchain public-parser corrections close both findings under original probes:
+1.4MB duplicate metadata allocates0 and control-bearing descriptions reject;
+all16 contract/regression/boundary groups pass. A bounded production process
+adapter is assigned in a separate GPU draft, with synthetic-child probes only.
+Actual CLI/configured-tool/SDK/target execution remain root gates. Existing chats
+are reused, no new user chat is created, and caches/unfinished lane files remain
+protected. Active cursors and accepted source evidence are in backlog-state.json.
+
 ## October 12 transparent aliases integration
 
 Package/editor/private storage is committed and pushed as 621a977. Corrected
@@ -45,6 +99,44 @@ parameter diagnostics. GPU/platforms owns bounded configured toolchain capabilit
 inspection. Typed network/process/TLS drafts are packaged; actual listener gates
 wait for shared TCP copy integration. Sources remain isolated until their combined
 acceptance. Existing worker files are protected; no new chats were created.
+
+## Next integration handoffs reviewed
+
+Alias source is frozen-clean at `591d1a7`; delivery records are pushed as `60d7424`.
+The next actual edit is the five reviewed contextual patches under
+build/owned-transfer-current-composition: host, tooling, tests, editor tests and
+grammar, in that order. They replay without fuzz to 17 files; 61 focused Rust
+groups and eight grammar tests pass. report.md and handoff-identities.json pin
+baseline, source and patch bytes. Keep grouped Move operand spans, alias nominal
+RHS identity and both Borrowed/Owned inspector modes. This does not expose the
+separate explicit borrow modes yet.
+
+Compose build/backlog/std-backend/file-host.patch with those APIs. Every new
+signature/parameter must retain explicit Borrowed defaults, FileHandle tag 11
+and Owned eligibility restricted to buffer/ints. Root owns file.c/file.h embed,
+link/cache markers, target policy, inspector/editor primitive types and exhaustive
+consumers. Use only the frozen corrected native owned/file seed; the assigned
+channel seed is unfinished. Reviewed shared TCP-owner copies then require real
+TCP/TLS/task/sanitizer/counter acceptance and prepared typed network/process/TLS
+listener fixtures. Focused checks precede broad frozen-source reference/hybrid,
+release/archive, A/B/C and unchanged reuse. No corresponding box is complete yet.
+
+Explicit borrow host independent review is clean at
+build/borrow-independent-review/report.md: 153 source cases, 15 emitter corruptions,
+ten current alias/privacy cases, complete audited effect vectors and O0/O2 tracked
+sanitizers. The owner prepares a separate FileHandle/channel effect composition;
+native borrow implementation is later, preserving exact Owned predicates and BH225.
+
+Workspace corrections pass final independent review. API docs required two narrow
+corrections: CR literal reindentation and a schema-valid additive variant panic.
+Both original inputs now succeed; root independently passes 17 renderer groups,
+retains both real fixtures byte-for-byte and preserves output preconstruction
+bounds. Final source hash a97a254712c29854023a6e8edec02d91b20bdd8c63d1ccf84d2f3e3407298eac.
+Review: build/api-docs-independent-review/variant-correction-root-review/review.md.
+The earlier reviewer reached model capacity after clean CR review; root completed
+the remaining replay. These are accepted isolated handoffs, not CLI integration.
+S036 protocol/client corrections are also accepted isolated handoffs. The existing
+eight app chats and heartbeat remain active; no empty monitoring loop is needed.
 
 ## October 12 package, editor and private-storage integration
 

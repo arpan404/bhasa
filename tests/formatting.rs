@@ -32,3 +32,20 @@ fn invalid_format_input_never_overwrites_the_file() {
     assert_eq!(fs::read_to_string(&source).unwrap(), original);
     assert_eq!(fs::read_dir(workspace.path()).unwrap().count(), 1);
 }
+
+#[test]
+fn owned_transfer_formatting_preserves_contextual_modes_words_and_move_identity() {
+    let source="# keep owned and move\r\ntype Bytes=buffer\r\ndef take(owned value:Bytes)->Bytes{return move value}\r\ndef ordinary(owned:int,move:int)->int{return owned+move}\r\ndef move(value:int)->int{return value}\r\ndef main(){let owned=buffer(\"owned move\");let next=take(move owned);print(ordinary(1,move(2)))}\r\n";
+    let formatted = bhasa::format::format_source(source).unwrap();
+    assert!(formatted.contains("owned value: Bytes") && formatted.contains("return move value"));
+    assert!(
+        formatted.contains("def ordinary(owned: int, move: int)")
+            && formatted.contains("def move(value: int)")
+    );
+    assert!(formatted.contains("take(move owned)") && formatted.contains("# keep owned and move"));
+    assert_eq!(formatted, bhasa::format::format_source(&formatted).unwrap());
+    assert_eq!(
+        bhasa::compile_to_llvm(source, "x86_64-unknown-linux-gnu").unwrap(),
+        bhasa::compile_to_llvm(&formatted, "x86_64-unknown-linux-gnu").unwrap()
+    );
+}

@@ -20,9 +20,11 @@
 #include <time.h>
 #include <unistd.h>
 
-/* White-box views let the tests check permanent descriptor flags. */
-struct bhasa_tcp_socket { int fd; int status; };
-struct bhasa_tcp_listener { int fd; int status; int64_t port; };
+/* The listener has no native descriptor accessor. This white-box view mirrors
+ * its private shared state solely to check permanent descriptor flags. Socket
+ * checks use the existing runtime seam and do not assume an owner layout. */
+typedef struct tcp_shared { atomic_uint references; int fd; } tcp_shared;
+struct bhasa_tcp_listener { tcp_shared *shared; int status; int64_t port; };
 static atomic_int live_allocations;
 void *bhasa_deadline_test_malloc(size_t size) {
     void *result = malloc(size); if (result != NULL) atomic_fetch_add(&live_allocations, 1); return result;
@@ -89,7 +91,7 @@ static bhasa_tcp_listener *listener(void) {
     bhasa_tcp_listener *value = bhasa_rt_tcp_listen(0);
     if (bhasa_rt_tcp_listener_status(value)) fprintf(stderr, "loopback permission required: %lld\n", (long long)bhasa_rt_tcp_listener_status(value));
     assert(bhasa_rt_tcp_listener_status(value) == 0);
-    nonblocking(value->fd);
+    nonblocking(value->shared->fd);
     return value;
 }
 static void pair(bhasa_tcp_socket **client, bhasa_tcp_socket **server) {
@@ -98,7 +100,7 @@ static void pair(bhasa_tcp_socket **client, bhasa_tcp_socket **server) {
     assert(bhasa_rt_tcp_socket_status(*client) == 0);
     *server = bhasa_rt_tcp_accept_timeout(value, 500);
     assert(bhasa_rt_tcp_socket_status(*server) == 0);
-    nonblocking((*client)->fd); nonblocking((*server)->fd);
+    nonblocking(bhasa_rt_tcp_socket_fd(*client)); nonblocking(bhasa_rt_tcp_socket_fd(*server));
     bhasa_rt_tcp_listener_free(value);
 }
 static void timely(int64_t started) {
@@ -157,8 +159,8 @@ static void timeout_and_progress(void) {
     assert(poll_interrupts > 0 && poll_interrupts < 100); poll_interrupts = 0;
     bhasa_buffer *data = bhasa_rt_buffer_from_str("ready");
     assert(bhasa_rt_tcp_write_timeout(client, data, 0) == 0);
-    struct pollfd ready = {server->fd, POLLIN, 0};
-    assert(poll(&ready, 1, 1000) == 1);
+    struct pollfd ready = {bhasa_rt_tcp_socket_fd(server), POLLIN, 0};
+    assert(poll(&ready, 1, 1000) == 1 && (ready.revents & POLLIN));
     assert(bhasa_rt_tcp_read_timeout(server, read, 8, 0) == 0 && bhasa_rt_buffer_same_str(read, "ready"));
     assert(bhasa_rt_tcp_read_timeout(server, read, 0, 0) == 0 && read->len == 0);
     bhasa_rt_buffer_free(data);
@@ -169,14 +171,14 @@ static void timeout_and_progress(void) {
     send_limit = 0; send_delay = 0;
     assert(bhasa_rt_tcp_read_timeout(server, read, 128, 100) == 0 && read->len > 0 && read->len < 128);
     /* Backpressure is bounded even when send cannot accept any more bytes. */
-    int size = 4096; assert(setsockopt(client->fd, SOL_SOCKET, SO_SNDBUF, &size, sizeof(size)) == 0);
+    int size = 4096; assert(setsockopt(bhasa_rt_tcp_socket_fd(client), SOL_SOCKET, SO_SNDBUF, &size, sizeof(size)) == 0);
     bhasa_rt_buffer_free(data); data = bhasa_rt_buffer_new();
     data->len = data->cap = 8 * 1024 * 1024;
     data->data = bhasa_deadline_test_malloc((size_t)data->len); assert(data->data);
     memset(data->data, 42, (size_t)data->len);
     started = bhasa_rt_monotonic_millis();
     assert(bhasa_rt_tcp_write_timeout(client, data, 20) == ETIMEDOUT); timely(started);
-    nonblocking(client->fd); nonblocking(server->fd);
+    nonblocking(bhasa_rt_tcp_socket_fd(client)); nonblocking(bhasa_rt_tcp_socket_fd(server));
     bhasa_rt_buffer_free(data); bhasa_rt_buffer_free(read);
     bhasa_rt_tcp_socket_free(client); bhasa_rt_tcp_socket_free(server);
 }
@@ -224,7 +226,7 @@ static void clone_races(void) {
         assert(bhasa_rt_tcp_write(client, data) == 0);
         struct racing left = {.socket = server}, right = {.socket = copy};
         run_race(&left, &right);
-        nonblocking(server->fd); nonblocking(copy->fd);
+        nonblocking(bhasa_rt_tcp_socket_fd(server)); nonblocking(bhasa_rt_tcp_socket_fd(copy));
         bhasa_rt_buffer_free(data); bhasa_rt_tcp_socket_free(client);
         bhasa_rt_tcp_socket_free(server); bhasa_rt_tcp_socket_free(copy);
         bhasa_tcp_listener *value = listener(), *other = bhasa_rt_tcp_listener_clone(value);
@@ -232,7 +234,7 @@ static void clone_races(void) {
         assert(bhasa_rt_tcp_socket_status(client) == 0);
         left = (struct racing){.listener = value}; right = (struct racing){.listener = other};
         run_race(&left, &right);
-        nonblocking(value->fd); nonblocking(other->fd);
+        nonblocking(value->shared->fd); nonblocking(other->shared->fd);
         bhasa_rt_tcp_listener_free(value); bhasa_rt_tcp_listener_free(other); bhasa_rt_tcp_socket_free(client);
     }
 }

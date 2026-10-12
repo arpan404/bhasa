@@ -53,3 +53,54 @@ def file_write(path: buffer, contents: buffer) -> IoResult[int] {
 def file_write_str(path: str, contents: buffer) -> IoResult[int] {
     return file_write(buffer(path), contents)
 }
+
+# Streaming wrappers depend on the new owned file_handle builtin type.
+# Copies retain the shared descriptor and cursor; explicit close invalidates aliases.
+def file_stream_open(path: buffer, mode: int) -> IoResult[file_handle] {
+    var handle = file_open(path, mode)
+    var status = file_status(handle)
+    if status != 0 { return IoResult[file_handle].error(file_error(status, "file_open", "file open failed")) }
+    return IoResult[file_handle].ok(handle)
+}
+
+def file_stream_open_str(path: str, mode: int) -> IoResult[file_handle] {
+    return file_stream_open(buffer(path), mode)
+}
+
+def file_stream_read(handle: file_handle, limit: int) -> IoResult[buffer] {
+    var bytes = buffer()
+    var status = file_read_chunk(handle, bytes, limit)
+    if status != 0 { return IoResult[buffer].error(file_error(status, "file_read_chunk", "file read failed")) }
+    return IoResult[buffer].ok(bytes)
+}
+
+def file_stream_write(handle: file_handle, bytes: buffer) -> IoResult[int] {
+    var status = file_write_chunk(handle, bytes)
+    if status != 0 { return IoResult[int].error(file_error(status, "file_write_chunk", "file write failed")) }
+    return IoResult[int].ok(len(bytes))
+}
+
+def file_stream_seek(handle: file_handle, offset: int) -> IoResult[int] {
+    var status = file_seek(handle, offset)
+    if status != 0 { return IoResult[int].error(file_error(status, "file_seek", "file seek failed")) }
+    return IoResult[int].ok(offset)
+}
+
+def file_stream_position(handle: file_handle) -> IoResult[int] {
+    var offset = file_position(handle)
+    if offset < 0 { return IoResult[int].error(file_error(0 - offset, "file_position", "file position failed")) }
+    return IoResult[int].ok(offset)
+}
+
+def file_stream_flush(handle: file_handle) -> IoResult[int] {
+    var status = file_flush(handle)
+    if status != 0 { return IoResult[int].error(file_error(status, "file_flush", "file flush failed")) }
+    return IoResult[int].ok(0)
+}
+
+# Close invalidates the shared resource, including the caller and other copies.
+def file_stream_close(handle: file_handle) -> IoResult[int] {
+    var status = file_close(handle)
+    if status != 0 { return IoResult[int].error(file_error(status, "file_close", "file close failed")) }
+    return IoResult[int].ok(0)
+}

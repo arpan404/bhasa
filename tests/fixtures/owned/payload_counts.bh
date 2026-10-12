@@ -1,0 +1,8 @@
+enum BufBox {some(value:buffer)}
+enum IntBox {some(value:ints)}
+def sink(owned x:buffer){print(x)}
+def eat(owned x:ints){print(len(x))}
+def main(){
+ match BufBox.some(buffer("payload")){case BufBox.some(value){sink(move value)}}
+ match IntBox.some(ints()){case IntBox.some(value){eat(move value)}}
+}

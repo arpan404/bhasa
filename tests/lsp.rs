@@ -2345,6 +2345,7 @@ fn rename_rejects_collisions_capture_reserved_names_and_unchecked_sources() {
         "List",
         "task",
         "tcp_socket",
+        "file_handle",
         "__bhg_1",
         "__bhm_2",
         "bhasa_rt_value",
@@ -4692,4 +4693,334 @@ fn checked_alias_rhs_generic_named_type_shadow_keeps_conservative_rename_refusal
     assert_eq!(semantic_site(result(&output, 3), source, rhs), Some((1, 0)));
     assert_eq!(result(&output, 4), &Value::Null);
     assert_eq!(result(&output, 5), &Value::Null);
+}
+
+#[test]
+fn checked_owned_tooling_signature_and_parameter_hints_keep_ordinary_names() {
+    let source="def take(owned value:buffer)->buffer{return move value}\ndef owned(owned:int)->int{return owned}\ndef move(value:int)->int{return value}\ndef main(){let input=buffer(\"x\");let output=take(move input);print(owned(move(1)))}\n";
+    let mut messages = start();
+    messages.push(open(URI, source, 4));
+    messages.push(signature_at(
+        2,
+        URI,
+        source,
+        source.find("take(move input)").unwrap() + 5,
+    ));
+    messages.push(signature_at(
+        3,
+        URI,
+        source,
+        source.find("owned(move(1))").unwrap() + 6,
+    ));
+    messages.push(editor_request(
+        4,
+        "textDocument/hover",
+        URI,
+        source,
+        source.find("return move value").unwrap() + 12,
+    ));
+    messages.push(editor_request(
+        5,
+        "textDocument/completion",
+        URI,
+        source,
+        source.find("return move value").unwrap() + 12,
+    ));
+    let output = exchange(messages);
+    assert_eq!(
+        signature_label(result(&output, 2)),
+        Some("def take(owned value: buffer) -> buffer")
+    );
+    assert_eq!(
+        result(&output, 2)
+            .get("signatures")
+            .unwrap()
+            .as_array()
+            .unwrap()[0]
+            .get("parameters")
+            .unwrap()
+            .as_array()
+            .unwrap()[0]
+            .get("label")
+            .and_then(Value::as_str),
+        Some("owned value: buffer")
+    );
+    assert_eq!(
+        signature_label(result(&output, 3)),
+        Some("def owned(owned: int) -> int")
+    );
+    assert_eq!(
+        result(&output, 4)
+            .get("contents")
+            .unwrap()
+            .get("value")
+            .and_then(Value::as_str),
+        Some("owned value: buffer")
+    );
+    assert!(result(&output, 5)
+        .get("items")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v.get("label").and_then(Value::as_str) == Some("value")
+            && v.get("detail").and_then(Value::as_str) == Some("owned value: buffer")));
+}
+#[test]
+fn checked_owned_tooling_marks_only_checked_mode_and_move_tokens() {
+    let source="# 🌍\r\ndef owned(owned:int)->int{return owned}\r\ndef move(value:int)->int{return value}\r\ndef take(owned owned:buffer)->buffer{return move owned}\r\ndef main(){let move=buffer(\"x\");let output=take(move move);print(owned(1))}\r\n";
+    let mode = source.find("owned owned:buffer").unwrap();
+    let binder = mode + 6;
+    let transfer = source.find("return move owned").unwrap() + 7;
+    let read = transfer + 5;
+    let mut messages = start();
+    messages.push(open(URI, source, 7));
+    messages.push(semantic_request(2, URI));
+    for (id, at) in [(3, mode), (5, transfer)] {
+        messages.push(editor_request(id, "textDocument/hover", URI, source, at));
+        messages.push(editor_request(
+            id + 1,
+            "textDocument/completion",
+            URI,
+            source,
+            at,
+        ));
+    }
+    messages.push(editor_request(7, "textDocument/hover", URI, source, binder));
+    let output = exchange(messages);
+    let semantic = result(&output, 2);
+    assert_eq!(semantic_site(semantic, source, mode), Some((9, 0)));
+    assert_eq!(semantic_site(semantic, source, transfer), Some((9, 0)));
+    assert_eq!(semantic_site(semantic, source, binder), Some((7, 1)));
+    assert_eq!(semantic_site(semantic, source, read), Some((7, 0)));
+    assert_eq!(
+        semantic_site(semantic, source, source.find("def owned").unwrap() + 4),
+        Some((4, 1))
+    );
+    assert_eq!(
+        semantic_site(semantic, source, source.find("def move").unwrap() + 4),
+        Some((4, 1))
+    );
+    assert_eq!(
+        semantic_site(semantic, source, source.find("let move=").unwrap() + 4),
+        Some((8, 3))
+    );
+    for id in [3, 5] {
+        assert_eq!(result(&output, id), &Value::Null);
+    }
+    for id in [4, 6] {
+        assert!(result(&output, id)
+            .get("items")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .is_empty());
+    }
+    assert_eq!(
+        result(&output, 7)
+            .get("contents")
+            .unwrap()
+            .get("value")
+            .and_then(Value::as_str),
+        Some("owned owned: buffer")
+    );
+}
+#[test]
+fn checked_owned_tooling_move_identity_and_rename_preserve_contextual_markers() {
+    let source="def take(owned owned:buffer)->buffer{return move owned}\ndef move()->int{return 1}\ndef main(){let source=buffer(\"x\");let target=take(move source);print(move())}\n";
+    let operand = source.find("move source").unwrap() + 5;
+    let mut messages = start();
+    messages.push(open(URI, source, 3));
+    messages.push(editor_request(
+        2,
+        "textDocument/definition",
+        URI,
+        source,
+        operand,
+    ));
+    messages.push(refactor_at(
+        3,
+        "textDocument/references",
+        URI,
+        source,
+        "source);",
+        None,
+    ));
+    messages.push(refactor_at(
+        4,
+        "textDocument/rename",
+        URI,
+        source,
+        "source);",
+        Some("payload"),
+    ));
+    messages.push(refactor_at(
+        5,
+        "textDocument/rename",
+        URI,
+        source,
+        "move()->int",
+        Some("ordinary"),
+    ));
+    messages.push(refactor_at(
+        6,
+        "textDocument/rename",
+        URI,
+        source,
+        "owned:buffer",
+        Some("value"),
+    ));
+    let output = exchange(messages);
+    assert_eq!(
+        result(&output, 2).get("range").unwrap().get("start"),
+        Some(&source_position(
+            source,
+            source.find("let source").unwrap() + 4
+        ))
+    );
+    assert_eq!(result(&output, 3).as_array().unwrap().len(), 2);
+    for (id, expected) in [
+        (4, "take(move payload)"),
+        (5, "print(ordinary())"),
+        (6, "owned value:buffer"),
+    ] {
+        let changes = result(&output, id)
+            .get("documentChanges")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(
+            changes[0].get("textDocument").unwrap().get("version"),
+            Some(&3_i64.into())
+        );
+        let repaired = apply_rename(source, &changes[0]);
+        assert!(repaired.contains(expected), "{repaired}");
+        assert!(bhasa::check(&repaired).is_ok(), "{repaired}");
+        if id == 5 {
+            assert!(
+                repaired.contains("return move owned") && repaired.contains("take(move source)")
+            );
+        }
+    }
+}
+#[test]
+fn checked_owned_tooling_imported_alias_modes_preserve_nested_nominal_metadata() {
+    let workspace = Workspace::new("owned-editor-aliases");
+    let library="struct Point{value:int}\nstruct Box[T]{value:T}\ntype Item=Box[Point]\ntype Bytes=buffer\ndef take(owned value:Bytes)->Bytes{return move value}\n";
+    let lib = workspace.write("lib.bh", library);
+    let lib_uri = file_uri(&lib);
+    let source="import \"lib.bh\" as lib\ndef main(){let input=buffer(\"x\");let output=lib.take(move input)}\n";
+    let main = workspace.write("main.bh", source);
+    let uri = file_uri(&main);
+    let mut messages = start();
+    messages.push(open(&uri, source, 1));
+    messages.push(open(&lib_uri, library, 2));
+    messages.push(signature_at(
+        2,
+        &uri,
+        source,
+        source.find("take(move input)").unwrap() + 5,
+    ));
+    messages.push(editor_request(
+        3,
+        "textDocument/definition",
+        &lib_uri,
+        library,
+        library.find("Box[Point]").unwrap() + 4,
+    ));
+    messages.push(semantic_request(4, &lib_uri));
+    messages.push(editor_request(
+        5,
+        "textDocument/definition",
+        &uri,
+        source,
+        source.find("move input").unwrap() + 5,
+    ));
+    let output = exchange(messages);
+    assert_eq!(
+        signature_label(result(&output, 2)),
+        Some("def take(owned value: buffer) -> buffer")
+    );
+    assert_eq!(
+        result(&output, 3).get("uri").and_then(Value::as_str),
+        Some(lib_uri.as_str())
+    );
+    assert_eq!(
+        result(&output, 3).get("range").unwrap().get("start"),
+        Some(&source_position(library, 7))
+    );
+    assert_eq!(
+        semantic_site(
+            result(&output, 4),
+            library,
+            library.find("Box[Point]").unwrap() + 4
+        ),
+        Some((1, 0))
+    );
+    assert_eq!(
+        result(&output, 5).get("range").unwrap().get("start"),
+        Some(&source_position(
+            source,
+            source.find("let input").unwrap() + 4
+        ))
+    );
+}
+
+#[test]
+fn checked_owned_tooling_grouped_moves_keep_exact_keyword_and_operand_identity() {
+    let source="def take(owned value:buffer)->buffer{return ((move value))}\ndef move()->int{return 1}\ndef main(){let source=buffer();let result=take((move source));print(move())}\n";
+    let keyword = source.find("move source").unwrap();
+    let mut messages = start();
+    messages.push(open(URI, source, 9));
+    messages.push(semantic_request(2, URI));
+    messages.push(editor_request(
+        3,
+        "textDocument/hover",
+        URI,
+        source,
+        keyword,
+    ));
+    messages.push(editor_request(
+        4,
+        "textDocument/definition",
+        URI,
+        source,
+        keyword + 5,
+    ));
+    messages.push(refactor_at(
+        5,
+        "textDocument/rename",
+        URI,
+        source,
+        "move()->int",
+        Some("ordinary"),
+    ));
+    let output = exchange(messages);
+    assert_eq!(
+        semantic_site(result(&output, 2), source, keyword),
+        Some((9, 0))
+    );
+    assert_eq!(
+        semantic_site(
+            result(&output, 2),
+            source,
+            source.find("move value").unwrap()
+        ),
+        Some((9, 0))
+    );
+    assert_eq!(result(&output, 3), &Value::Null);
+    assert_selection(result(&output, 4), URI, source, "let source", "source");
+    let changes = result(&output, 5)
+        .get("documentChanges")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    let renamed = apply_rename(source, &changes[0]);
+    assert!(
+        renamed.contains("print(ordinary())")
+            && renamed.contains("move source")
+            && renamed.contains("move value")
+    );
+    assert!(bhasa::check(&renamed).is_ok(), "{renamed}");
 }

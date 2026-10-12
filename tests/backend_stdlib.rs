@@ -567,7 +567,7 @@ void *tracked_realloc(void *p,size_t n){int empty=p==NULL;void *q=realloc(p,n);i
 void tracked_free(void *p){if(p)--live;free(p);}
 "#);
         let mut runtime = vec![tracker];
-        for name in ["core", "net", "text"] {
+        for name in ["core", "file", "net", "text"] {
             let contents = format!(
                 r#"
 #define _GNU_SOURCE

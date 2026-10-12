@@ -1,0 +1,12 @@
+
+def relay(owned x:buffer)->buffer {return move x}
+def sink(owned x:buffer) {}
+def consume(owned x:ints) {}
+def main() {
+ var src=buffer("transfer");var dst=relay(move src);src=buffer("reset");src=relay(move src)
+ var values=ints();consume(move values)
+ if true {var local=buffer();sink(move local)}
+ sink(buffer())
+ var i=0;while i<2 {var local=ints();consume(move local);i=i+1}
+ print(dst);print(src)
+}

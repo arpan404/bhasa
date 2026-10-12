@@ -42,8 +42,9 @@ The bootstrap limits syntax nesting and combined block/expression tree depth to 
 | `ints` | Owned mutable vector of signed 64-bit integers |
 | A declared record name | Owned value containing the named record's fields |
 | A declared enum name | Owned tagged value containing one variant's payload |
-| `tcp_listener`, `tcp_socket` | Owned native TCP handles; a copied handle owns a duplicated descriptor for the same endpoint |
+| `tcp_listener`, `tcp_socket` | Owned native TCP handles; a copied handle retains shared descriptor state for the same endpoint |
 | `tls_socket` | Owned native TLS handle; copies retain the same refcounted session with serialized I/O |
+| `file_handle` | Owned regular-file handle; copies share descriptor/cursor/close state; synchronous single-thread use |
 | `task` | Inferred linear typed task handle; no explicit annotation; consume once with `join` or `await` in its lexical block |
 | `void` | No returned value; valid only as a function return type |
 
@@ -90,6 +91,14 @@ its allocation. Function parameters borrow their containers synchronously and
 may modify their contents. A borrowed parameter cannot be rebound. Returning a
 borrowed container copies it so the result survives the call. See the
 [runtime reference](runtime.md) for operations and examples.
+
+Monomorphic free functions can use `owned value: buffer` or `owned value: ints`
+to receive cleanup responsibility. Transfer a named owner with `move value`, as
+a whole initializer, owned argument or whole return; a freshly produced value
+can be passed directly. Transfers make no copy. Moved bindings cannot be read
+until a mutable binding is reinitialized. File/collection/record/task resources
+and outer-scope conditional or loop moves remain excluded. See
+[buffer and integer-vector ownership](ownership.md) for the complete rules.
 
 ## Type aliases
 
@@ -138,8 +147,10 @@ types, owned containers, TCP/TLS handles, other records or enums. `void`, task
 handles and recursive aggregate layouts are rejected.
 
 Existing records copy on construction, binding, assignment and borrowed return.
-Nested buffers and records are independent copies. TCP fields copy their
-descriptor ownership while retaining the same underlying connection. TLS fields
+Nested buffers and records are independent copies. TCP fields atomically retain
+shared descriptor state with independent owner lifetimes; final release closes
+the underlying connection once. Copies preserve constructor status and create
+no new descriptor. TLS fields
 retain one shared, serialized TLS session; they do not duplicate its stream.
 Parameters borrow records and can mutate their fields, but cannot rebind the parameter.
 The checker rejects overlapping record/descendant borrows and later argument

@@ -392,4 +392,5 @@ static int fault_fclose(FILE *stream) {
 #define fclose fault_fclose
 #include "core.c"
 #include "text.c"
+#include "file.c"
 "#;

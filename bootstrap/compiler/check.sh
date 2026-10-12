@@ -81,6 +81,37 @@ for name in hello arithmetic loops ranges bits stepped_ranges bindings recursion
     cmp "$build_dir/B-$name.txt" "$build_dir/C-$name.txt"
 done
 
+# Independently execute owned transfers and shared regular-file handles in B/C.
+printf '%s\n' 'hello!' 1 0 > "$build_dir/ownership.expected"
+cat > "$build_dir/files.bh" <<'BHASA'
+def main() {
+    var file=file_open(arg(1),1)
+    var written=file_write_chunk(file,buffer("selfhost"))
+    print(written==0)
+    var copied=file
+    var closed=file_close(copied)
+    print(closed==0 and file_status(file)>0)
+    var reader=file_open(arg(1),0)
+    var bytes=buffer()
+    var read=file_read_chunk(reader,bytes,16)
+    print(read==0)
+    print(bytes)
+    var status=file_close(reader)
+    print(status==0)
+}
+BHASA
+printf '%s\n' true true true selfhost true > "$build_dir/files.expected"
+for stage in B C; do
+    "$build_dir/$stage" emit-llvm "$repo_dir/examples/ownership/main.bh" --target "$target" > "$build_dir/$stage-ownership.ll"
+    "$clang" -target "$target" -O2 -pthread -x ir "$build_dir/$stage-ownership.ll" -x c "$repo_dir/runtime/core.c" -o "$build_dir/$stage-ownership"
+    "$build_dir/$stage-ownership" > "$build_dir/$stage-ownership.txt"
+    cmp "$build_dir/ownership.expected" "$build_dir/$stage-ownership.txt"
+    "$build_dir/$stage" emit-llvm "$build_dir/files.bh" --target "$target" > "$build_dir/$stage-files.ll"
+    "$clang" -target "$target" -O2 -pthread -x ir "$build_dir/$stage-files.ll" -x c "$repo_dir/runtime/core.c" "$repo_dir/runtime/file.c" -o "$build_dir/$stage-files"
+    "$build_dir/$stage-files" "$build_dir/$stage-stream" > "$build_dir/$stage-files.txt"
+    cmp "$build_dir/files.expected" "$build_dir/$stage-files.txt"
+done
+
 # Exercise features that the frontend source itself does not need. Force an
 # absent CUDA driver so this check is deterministic on hosts with or without GPUs.
 cat > "$build_dir/native.bh" <<'BHASA'

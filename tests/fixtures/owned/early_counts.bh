@@ -1,0 +1,6 @@
+
+def early(owned x:buffer,flag:bool)->buffer {
+ if flag {var local=buffer("branch");return move local}
+ return move x
+}
+def main(){var a=early(buffer("unused"),true);var b=early(buffer("fallthrough"),false);print(a);print(b)}

@@ -106,8 +106,9 @@ environment overrides and asynchronous process handles are not yet provided.
 
 ## Network resources and tasks
 
-TCP handle copies duplicate owned descriptors for the same kernel endpoint;
-they do not open new connections or copy the stream. TLS handle copies retain
+TCP handle copies atomically retain shared descriptor state for the same kernel
+endpoint. They preserve constructor status without fallible OS duplication.
+Final release closes once; copies do not open new connections or copy the stream. TLS handle copies retain
 one refcounted session with serialized I/O. The last TLS release closes and
 frees that session without network waits. Explicit `tls_shutdown` is needed
 when authenticated end-of-stream matters. See [TCP](network.md) and

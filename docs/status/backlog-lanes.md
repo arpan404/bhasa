@@ -24,6 +24,19 @@ target correction is independently approved for native manifest implementation.
 Explicit borrow host review and late-stage Result-parameter implementation are
 active. Workspace/public-host and S036 action corrections remain separate gates.
 
+Owned buffer/ints transfer, streaming regular files and atomic TCP shared-owner
+copies now pass649 complete reference/681 hybrid,98 LSP per configuration/94 Node,
+both Clippy/fmt, matching releases with16 examples/five package tests each,
+A/B/C run.lWdKWpz3 and unchanged native/Cargo/archive reuse. Structural lint
+corrections independently preserve semantics and pass20 reference/22 hybrid
+focused groups. Final archive is
+cdd251ae2afa392702ef70570587f3500c3723875c4c6de2f8ed59419f096a8a.
+Integration.md is current; integration-aliases.md preserves591d1a7.
+Next actual composition is reviewed channel authority/target/height/family bounds,
+then explicit-borrow host/native/editor support. Native source parity is assigned
+atop corrected channels; std HTTP public bounds/header-budget corrections and a
+bounded toolchain process adapter are assigned separately. All remain isolated.
+
 ## Shared workflow
 
 Read todo.md, docs/status/orchestration.md, docs/status/integration.md and the

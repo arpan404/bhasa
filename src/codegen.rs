@@ -14,6 +14,11 @@ pub fn emit_llvm(
     program: &CheckedProgram,
     target_triple: &str,
 ) -> std::result::Result<String, Vec<Diagnostic>> {
+    let errors = crate::ownership::check_checked(program);
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+
     let failures = crate::failure_use::check(&program.program);
     if !failures.is_empty() {
         return Err(failures);
@@ -38,7 +43,8 @@ fn llvm_type(ty: Type) -> &'static str {
         | Type::Enum(_)
         | Type::TcpListener
         | Type::TcpSocket
-        | Type::TlsSocket => "ptr",
+        | Type::TlsSocket
+        | Type::FileHandle => "ptr",
         Type::Void => "void",
     }
 }
@@ -180,6 +186,7 @@ fn validate_declarations(program: &CheckedProgram) -> Result<()> {
         let external = function.body.is_none();
         validate_record_type(&program.program, function.return_type, function.span)?;
         let expected = FunctionSig {
+            modes: function.params.iter().map(|param| param.mode).collect(),
             params: function.params.iter().map(|param| param.ty).collect(),
             return_type: function.return_type,
             external,
@@ -330,6 +337,7 @@ fn emit_module(program: &CheckedProgram, target: &str) -> Result<String> {
         threads: false,
         metal: false,
         net: false,
+        file: false,
         text: false,
         tls: false,
         collections: false,
@@ -428,6 +436,9 @@ fn emit_module(program: &CheckedProgram, target: &str) -> Result<String> {
     if module.net {
         output.push_str("; bhasa runtime: net\n");
     }
+    if module.file {
+        output.push_str("; bhasa runtime: file\n");
+    }
     if module.tls {
         output.push_str("; bhasa runtime: tls\n");
     }
@@ -516,6 +527,7 @@ struct Module<'a> {
     threads: bool,
     metal: bool,
     net: bool,
+    file: bool,
     text: bool,
     tls: bool,
     collections: bool,
@@ -909,10 +921,12 @@ impl Module<'_> {
             Type::TcpListener => "tcp_listener",
             Type::TcpSocket => "tcp_socket",
             Type::TlsSocket => "tls_socket",
+            Type::FileHandle => "file",
             _ => return None,
         };
         self.net |= matches!(ty, Type::TcpListener | Type::TcpSocket);
         self.tls |= ty == Type::TlsSocket;
+        self.file |= ty == Type::FileHandle;
         let name = format!(
             "@bhasa_rt_{kind}_{}",
             if cloning { "clone" } else { "free" }
@@ -945,6 +959,7 @@ struct TaskInfo {
 
 #[derive(Clone)]
 struct Local {
+    initialized: bool,
     ty: Type,
     reassignable: bool,
     pointer: String,
@@ -1031,7 +1046,7 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
                 &param.name,
                 &Value::new(param.ty, format!("%arg{index}")),
                 param.span,
-                false,
+                param.mode == ParamMode::Owned,
                 true,
             )?;
         }
@@ -1126,6 +1141,7 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
         scope.insert(
             name.to_owned(),
             Local {
+                initialized: true,
                 ty: value.ty,
                 reassignable,
                 pointer,
@@ -1175,6 +1191,7 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
             || name.starts_with("bhasa_rt_task_");
         self.module.metal |= name.contains("gpu_");
         self.module.net |= name.starts_with("bhasa_rt_tcp_") || name == "bhasa_rt_monotonic_millis";
+        self.module.file |= name.starts_with("bhasa_rt_file_");
         self.module.text |= name.starts_with("bhasa_rt_utf8_");
         self.module.tls |= name.starts_with("bhasa_rt_tls_");
         if result == Type::Void {
@@ -1238,7 +1255,12 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
             .iter()
             .skip(first)
             .rev()
-            .flat_map(|scope| scope.values().filter(|local| local.owned).cloned())
+            .flat_map(|scope| {
+                scope
+                    .values()
+                    .filter(|local| local.owned && local.initialized)
+                    .cloned()
+            })
             .collect();
         for local in locals {
             let pointer = self.fresh();
@@ -1316,7 +1338,9 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
                 let value = self.expression(value)?;
                 value.require(local.ty, statement.span)?;
                 let value = self.acquire(value);
-                if local.owned {
+                // Evaluating an owned call on the RHS may have moved this target.
+                let local = self.local(name, statement.span)?;
+                if local.owned && local.initialized {
                     let old = self.fresh();
                     self.instruction(format!("{old} = load ptr, ptr {}", local.pointer));
                     self.release(&Value::new(local.ty, old).owned());
@@ -1327,6 +1351,12 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
                     value.operand,
                     local.pointer
                 ));
+                for scope in self.scopes.iter_mut().rev() {
+                    if let Some(binding) = scope.get_mut(name) {
+                        binding.initialized = true;
+                        break;
+                    }
+                }
             }
             StmtKind::FieldAssign { target, value } => {
                 // A call on the RHS can replace any enclosing field. Resolve
@@ -1927,8 +1957,37 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
                 }
                 Value::new(Type::Str, self.module.string(value))
             }
+            ExprKind::Move { name, .. } => {
+                let local = self.local(name, expression.span)?;
+                if !local.owned
+                    || !local.initialized
+                    || !matches!(local.ty, Type::Buffer | Type::Ints)
+                {
+                    return Err(Diagnostic::new(
+                        "S038",
+                        "invalid owned move in checked AST",
+                        expression.span,
+                    ));
+                }
+                let result = self.fresh();
+                self.instruction(format!("{result} = load ptr, ptr {}", local.pointer));
+                self.scopes
+                    .iter_mut()
+                    .rev()
+                    .find_map(|scope| scope.get_mut(name))
+                    .unwrap()
+                    .initialized = false;
+                Value::new(local.ty, result).owned()
+            }
             ExprKind::Name(name) => {
                 let local = self.local(name, expression.span)?;
+                if !local.initialized {
+                    return Err(Diagnostic::new(
+                        "S038",
+                        "read of moved binding in checked AST",
+                        expression.span,
+                    ));
+                }
                 let result = self.fresh();
                 self.instruction(format!(
                     "{result} = load {}, ptr {}",
@@ -2386,6 +2445,47 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
                     span,
                 ));
             }
+            let graph = crate::sema::call_graph(self.module.program);
+            if let Some(operation) = crate::sema::file_worker_violation(
+                self.module.program,
+                self.module.signatures,
+                &graph,
+                worker,
+            ) {
+                return Err(error(
+                    format!("worker reaches single-thread file resource '{operation}'"),
+                    span,
+                ));
+            }
+            // Repeat source-worker call-graph restrictions at the public
+            // checked-AST boundary. Argument evaluation remains in the caller.
+            let mut pending = vec![worker.as_str()];
+            let mut visited = BTreeSet::new();
+            while let Some(name) = pending.pop() {
+                if !visited.insert(name) {
+                    continue;
+                }
+                if self
+                    .module
+                    .signatures
+                    .get(name)
+                    .is_some_and(|sig| sig.external)
+                {
+                    return Err(error(
+                        format!("worker reaches extern function '{name}', whose thread safety is unknown"),
+                        span,
+                    ));
+                }
+                if matches!(name, "async_spawn" | "await") {
+                    return Err(error(
+                        format!("worker reaches '{name}'; pooled scheduling or awaiting from workers could deadlock"),
+                        span,
+                    ));
+                }
+                if let Some(calls) = graph.get(name) {
+                    pending.extend(calls.iter().map(String::as_str));
+                }
+            }
             let [argument] = worker_args.as_slice() else {
                 return Err(error("worker requires one argument", span));
             };
@@ -2633,8 +2733,10 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
             self.instruction(format!("{result} = {call}"));
             Value::new(signature.return_type, result).owned()
         };
-        for value in &values {
-            self.release(value);
+        for (value, mode) in values.iter().zip(&signature.modes) {
+            if *mode != ParamMode::Owned {
+                self.release(value);
+            }
         }
         Ok(result)
     }
@@ -2722,6 +2824,7 @@ mod tests {
             params: params
                 .iter()
                 .map(|(name, ty)| Param {
+                    mode: crate::ast::ParamMode::Borrowed,
                     name: (*name).into(),
                     ty: *ty,
                     span: Span::default(),
@@ -2739,6 +2842,7 @@ mod tests {
                 (
                     function.name.clone(),
                     FunctionSig {
+                        modes: function.params.iter().map(|param| param.mode).collect(),
                         params: function.params.iter().map(|param| param.ty).collect(),
                         return_type: function.return_type,
                         external: function.body.is_none(),

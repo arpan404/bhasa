@@ -258,7 +258,14 @@ impl Expansion {
                     }
                 }
             }
-            _ => {}
+            ast::ExprKind::Int(_)
+            | ast::ExprKind::Float(_)
+            | ast::ExprKind::Bool(_)
+            | ast::ExprKind::Str(_)
+            | ast::ExprKind::Name(_)
+            | ast::ExprKind::Move { .. }
+            | ast::ExprKind::Unary { .. }
+            | ast::ExprKind::Binary { .. } => {}
         });
         visit_program_statements(program, &mut |statement| {
             if let ast::StmtKind::TryVar {
@@ -333,7 +340,14 @@ fn reserved(name: &str) -> bool {
         || name.starts_with("bhasa_rt_")
         || matches!(
             name,
-            "tcp_socket" | "tcp_listener" | "tls_socket" | "task" | "List" | "Map" | "range"
+            "tcp_socket"
+                | "tcp_listener"
+                | "tls_socket"
+                | "file_handle"
+                | "task"
+                | "List"
+                | "Map"
+                | "range"
         )
 }
 fn next(tokens: &[Token], mut index: usize) -> usize {
@@ -965,6 +979,7 @@ fn canonical_aliases(modules: &[Module]) -> Result<BTreeMap<String, String>> {
                             | "tcp_listener"
                             | "tcp_socket"
                             | "tls_socket"
+                            | "file_handle"
                             | "task"
                             | "List"
                             | "Map"
@@ -1393,6 +1408,11 @@ fn collect(module: &mut Module, owner: usize) -> Result<()> {
     // Field/parameter labels, receiver member names and local binding names are
     // not module declarations. Mark type syntax separately from value scopes.
     for index in 0..module.tokens.len() {
+        if ident(&module.tokens[index]) == Some("move")
+            && module.tokens.get(index + 1).and_then(ident).is_some()
+        {
+            module.protected.insert(index);
+        }
         if module.tokens[index].kind == K::Colon || module.tokens[index].kind == K::Arrow {
             if module.tokens[index].kind == K::Colon
                 && index > 0
@@ -1458,7 +1478,13 @@ fn collect_parameters(module: &mut Module, open: usize, body: Option<usize>, end
     while index < close {
         if let Some(name) = ident(&module.tokens[index]) {
             if index == open + 1 || module.tokens[index - 1].kind == K::Comma {
-                module.protected.insert(index);
+                let mut parameter_index = index;
+                if name == "owned" && module.tokens.get(index + 1).and_then(ident).is_some() {
+                    module.protected.insert(index);
+                    parameter_index += 1;
+                }
+                let name = ident(&module.tokens[parameter_index]).unwrap();
+                module.protected.insert(parameter_index);
                 module.bindings.push(Binding {
                     name: name.to_owned(),
                     start,
@@ -1837,6 +1863,7 @@ pub(crate) fn visit_program_spans(program: &mut ast::Program, map: &impl Fn(Span
     fn expr(value: &mut ast::Expr, map: &impl Fn(Span) -> Span) {
         value.span = map(value.span);
         match &mut value.kind {
+            ast::ExprKind::Move { name_span, .. } => *name_span = map(*name_span),
             ast::ExprKind::Call { args, .. } => {
                 for arg in args {
                     expr(arg, map);
@@ -1855,7 +1882,11 @@ pub(crate) fn visit_program_spans(program: &mut ast::Program, map: &impl Fn(Span
                 expr(left, map);
                 expr(right, map);
             }
-            _ => {}
+            ast::ExprKind::Int(_)
+            | ast::ExprKind::Float(_)
+            | ast::ExprKind::Bool(_)
+            | ast::ExprKind::Str(_)
+            | ast::ExprKind::Name(_) => {}
         }
     }
     fn block(body: &mut ast::Block, map: &impl Fn(Span) -> Span) {
@@ -1985,7 +2016,12 @@ fn visit_program_expressions(program: &ast::Program, visit: &mut impl FnMut(&ast
                 expr(left, visit);
                 expr(right, visit);
             }
-            _ => {}
+            ast::ExprKind::Int(_)
+            | ast::ExprKind::Float(_)
+            | ast::ExprKind::Bool(_)
+            | ast::ExprKind::Str(_)
+            | ast::ExprKind::Name(_)
+            | ast::ExprKind::Move { .. } => {}
         }
     }
     fn block(body: &ast::Block, visit: &mut impl FnMut(&ast::Expr)) {

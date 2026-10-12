@@ -1,0 +1,20 @@
+def decorate(owned bytes: buffer) -> buffer {
+    append(bytes, "!")
+    return move bytes
+}
+
+def consume(owned values: ints) {
+    print(len(values))
+}
+
+def main() {
+    let input = buffer("hello")
+    let output = decorate(move input)
+    print(output)
+
+    var values = ints()
+    push(values, 42)
+    consume(move values)
+    values = ints()
+    print(len(values))
+}

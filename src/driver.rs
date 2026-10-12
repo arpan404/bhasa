@@ -793,6 +793,9 @@ fn build_with_toolchain(
     if !options.object && options.frontend == Frontend::Bhasa && !ir.contains("define i32 @main(") {
         return Err("cannot link an executable without a main function; add def main() or use --emit object".into());
     }
+    if !options.object {
+        validate_file_runtime_target(&ir, &triple)?;
+    }
     let output = options
         .output
         .clone()
@@ -941,6 +944,17 @@ fn build_with_toolchain(
     }
 }
 
+/// Validate the resolved target before any Rust-adapter build or runtime write.
+/// Objects keep their existing unlinked-runtime policy.
+fn validate_file_runtime_target(ir: &str, triple: &str) -> Result<(), String> {
+    if ir.contains("; bhasa runtime: file") {
+        target::require_native_posix64(triple).map_err(|message| {
+            format!("streaming file runtime cannot link this target: {message}; use --emit object for an unlinked object")
+        })?;
+    }
+    Ok(())
+}
+
 fn add_native_runtime(
     command: &mut Command,
     directory: &Path,
@@ -948,9 +962,11 @@ fn add_native_runtime(
     triple: &str,
     gpu: Option<&str>,
 ) -> Result<(), String> {
+    validate_file_runtime_target(ir, triple)?;
     if !ir.contains("; bhasa runtime: core") {
         return Ok(());
     }
+    let uses_file = ir.contains("; bhasa runtime: file");
     if !triple.contains("linux") && !triple.contains("apple") {
         return Err("the owned-buffer and I/O runtime currently supports macOS and Linux executables; other targets can emit unlinked objects".into());
     }
@@ -962,6 +978,10 @@ fn add_native_runtime(
     let uses_net = ir.contains("; bhasa runtime: net") || uses_tls;
     let uses_text = ir.contains("; bhasa runtime: text");
     let uses_collections = ir.contains("; bhasa runtime: collections");
+    if uses_file {
+        files.push(("file.h", include_str!("../runtime/file.h")));
+        files.push(("file.c", include_str!("../runtime/file.c")));
+    }
     if uses_collections {
         files.push(("collections.h", include_str!("../runtime/collections.h")));
         files.push(("collections.c", include_str!("../runtime/collections.c")));
@@ -1036,6 +1056,9 @@ fn add_native_runtime(
     }
     if uses_net {
         command.arg(directory.join("net.c"));
+    }
+    if uses_file {
+        command.arg(directory.join("file.c"));
     }
     if uses_text {
         command.arg(directory.join("text.c"));
@@ -1719,6 +1742,314 @@ impl Drop for TemporaryDirectory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn streaming_file_test_toolchain() -> Option<Toolchain> {
+        let toolchain = Toolchain::discover().unwrap();
+        match Command::new(&toolchain.executable)
+            .arg("--version")
+            .output()
+        {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                eprintln!("SKIP streaming file native test: configured Clang was not found");
+                None
+            }
+            Ok(output) => {
+                assert!(output.status.success(), "{}", tool_output(&output));
+                Some(toolchain)
+            }
+            Err(error) => panic!("cannot execute configured Clang: {error}"),
+        }
+    }
+
+    #[test]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn streaming_file_driver_links_and_executes_the_native_file_abi() {
+        let Some(toolchain) = streaming_file_test_toolchain() else {
+            return;
+        };
+        let triple = toolchain.resolved_triple(&Target::Native).unwrap();
+        let directory = TemporaryDirectory::new(&std::env::temp_dir()).unwrap();
+        let path = directory.path.join("file-abi-probe");
+        let filename = path.as_os_str().as_encoded_bytes();
+        let escaped: String = filename
+            .iter()
+            .map(|byte| format!("\\{byte:02X}"))
+            .collect();
+        let ir = format!(
+            r#"; bhasa runtime: core
+; bhasa runtime: file
+target triple = "{triple}"
+@path = private constant [{length} x i8] c"{escaped}\00"
+@contents = private constant [4 x i8] c"abc\00"
+declare ptr @bhasa_rt_file_open_str(ptr, i64)
+declare ptr @bhasa_rt_file_clone(ptr)
+declare void @bhasa_rt_file_free(ptr)
+declare i64 @bhasa_rt_file_status(ptr)
+declare i64 @bhasa_rt_file_read_chunk(ptr, ptr, i64)
+declare i64 @bhasa_rt_file_write_chunk(ptr, ptr)
+declare i64 @bhasa_rt_file_seek(ptr, i64)
+declare i64 @bhasa_rt_file_position(ptr)
+declare i64 @bhasa_rt_file_flush(ptr)
+declare i64 @bhasa_rt_file_close(ptr)
+declare ptr @bhasa_rt_buffer_from_str(ptr)
+declare ptr @bhasa_rt_buffer_new()
+declare void @bhasa_rt_buffer_free(ptr)
+declare i64 @bhasa_rt_buffer_len(ptr)
+declare i64 @bhasa_rt_buffer_get(ptr, i64)
+define i32 @main() sanitize_address {{
+  %f = call ptr @bhasa_rt_file_open_str(ptr @path, i64 1)
+  %open = call i64 @bhasa_rt_file_status(ptr %f)
+  %bytes = call ptr @bhasa_rt_buffer_from_str(ptr @contents)
+  %write = call i64 @bhasa_rt_file_write_chunk(ptr %f, ptr %bytes)
+  %copy = call ptr @bhasa_rt_file_clone(ptr %f)
+  %flush = call i64 @bhasa_rt_file_flush(ptr %copy)
+  %seek = call i64 @bhasa_rt_file_seek(ptr %copy, i64 0)
+  %position = call i64 @bhasa_rt_file_position(ptr %f)
+  %close = call i64 @bhasa_rt_file_close(ptr %f)
+  %closed = call i64 @bhasa_rt_file_status(ptr %copy)
+  call void @bhasa_rt_file_free(ptr %f)
+  call void @bhasa_rt_file_free(ptr %copy)
+  %reader = call ptr @bhasa_rt_file_open_str(ptr @path, i64 0)
+  %ropen = call i64 @bhasa_rt_file_status(ptr %reader)
+  %out = call ptr @bhasa_rt_buffer_new()
+  %read = call i64 @bhasa_rt_file_read_chunk(ptr %reader, ptr %out, i64 3)
+  %len = call i64 @bhasa_rt_buffer_len(ptr %out)
+  %byte = call i64 @bhasa_rt_buffer_get(ptr %out, i64 2)
+  call void @bhasa_rt_file_free(ptr %reader)
+  call void @bhasa_rt_buffer_free(ptr %bytes)
+  call void @bhasa_rt_buffer_free(ptr %out)
+  %s1 = or i64 %open, %write
+  %s2 = or i64 %s1, %flush
+  %s3 = or i64 %s2, %seek
+  %s4 = or i64 %s3, %position
+  %s5 = or i64 %s4, %close
+  %s6 = or i64 %s5, %ropen
+  %s7 = or i64 %s6, %read
+  %statusbad = icmp ne i64 %s7, 0
+  %closebad = icmp eq i64 %closed, 0
+  %lenbad = icmp ne i64 %len, 3
+  %bytebad = icmp ne i64 %byte, 99
+  %b1 = or i1 %statusbad, %closebad
+  %b2 = or i1 %b1, %lenbad
+  %b3 = or i1 %b2, %bytebad
+  %code = zext i1 %b3 to i32
+  ret i32 %code
+}}
+"#,
+            length = filename.len() + 1
+        );
+        let source = directory.path.join("program.ll");
+        fs::write(&source, &ir).unwrap();
+        for release in [false, true] {
+            let mut opts = options(&["build", "unused.bh"]);
+            opts.release = release;
+            let artifact = directory
+                .path
+                .join(if release { "probe-o2" } else { "probe-o0" });
+            let mut command = clang_command(&toolchain, &opts, &triple, &source, &artifact, &[]);
+            add_native_runtime(&mut command, &directory.path, &ir, &triple, None).unwrap();
+            command.args([
+                "-fsanitize=address,undefined",
+                "-fno-sanitize-recover=all",
+                "-fno-omit-frame-pointer",
+            ]);
+            let output = toolchain.invoke(&mut command).unwrap();
+            assert!(output.status.success(), "{}", tool_output(&output));
+            let output = Command::new(&artifact)
+                .env("ASAN_OPTIONS", "detect_leaks=0")
+                .env("UBSAN_OPTIONS", "halt_on_error=1")
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{}", tool_output(&output));
+            assert!(output.stdout.is_empty());
+            assert!(output.stderr.is_empty());
+            assert_eq!(fs::read(&path).unwrap(), b"abc");
+        }
+    }
+
+    #[test]
+    fn streaming_file_runtime_marker_embeds_only_used_sources() {
+        for file in [false, true] {
+            let directory = TemporaryDirectory::new(&std::env::temp_dir()).unwrap();
+            let mut command = Command::new("unused-clang-test-path");
+            let mut ir = "; bhasa runtime: core\n".to_owned();
+            // Declarations alone must not request runtime linkage.
+            ir.push_str("declare ptr @bhasa_rt_file_open_str(ptr, i64)\n");
+            if file {
+                ir.push_str("; bhasa runtime: file\n");
+            }
+            add_native_runtime(
+                &mut command,
+                &directory.path,
+                &ir,
+                "arm64-apple-macosx26.0.0",
+                None,
+            )
+            .unwrap();
+            let args: Vec<_> = command.get_args().map(Path::new).collect();
+            for name in ["file.c", "file.h"] {
+                assert_eq!(directory.path.join(name).exists(), file, "{name}");
+            }
+            assert_eq!(
+                args.iter()
+                    .any(|p| p.file_name().is_some_and(|p| p == "file.c")),
+                file
+            );
+            for name in ["net.c", "tls.c", "text.c", "concurrency.c"] {
+                assert!(!directory.path.join(name).exists(), "{name}");
+            }
+        }
+    }
+
+    #[test]
+    fn streaming_file_target_guard_precedes_runtime_writes() {
+        let ir = "; bhasa runtime: core\n; bhasa runtime: file\n";
+        assert!(validate_file_runtime_target(
+            "; bhasa runtime: core\ndeclare ptr @bhasa_rt_file_open_str(ptr, i64)\n",
+            "i686-unknown-linux-gnu"
+        )
+        .is_ok());
+        for triple in [
+            "arm64-apple-macosx26.0.0",
+            "aarch64-apple-darwin",
+            "x86_64-apple-macosx",
+            "aarch64-unknown-linux-musl",
+            "x86_64-pc-linux-gnu",
+        ] {
+            let directory = TemporaryDirectory::new(&std::env::temp_dir()).unwrap();
+            let mut command = Command::new("unavailable-clang-test-path");
+            command.args(["-target", triple]);
+            add_native_runtime(&mut command, &directory.path, ir, triple, None).unwrap();
+            let args: Vec<_> = command.get_args().collect();
+            assert_eq!(args[1], triple);
+            assert!(directory.path.join("file.c").exists());
+        }
+        for triple in [
+            "i686-unknown-linux-gnu",
+            "x86_64-unknown-linux-gnux32",
+            "aarch64-unknown-linux-gnu_ilp32",
+            "x86_64-unknown-linux-android",
+            "arm64-apple-ios18.0",
+            "arm64-apple-macosx26..0",
+            "arm64-apple-macosx26.0.0.0",
+            "arm64-apple-macosx4294967296",
+            "x86_64-pc-windows-msvc",
+            "wasm32-unknown-unknown",
+            "x86_64-random-linux-gnu",
+            "x86_64-unknown-linux-gnu-extra",
+        ] {
+            let directory = TemporaryDirectory::new(&std::env::temp_dir()).unwrap();
+            let mut command = Command::new("unavailable-clang-test-path");
+            let error =
+                add_native_runtime(&mut command, &directory.path, ir, triple, None).unwrap_err();
+            assert!(
+                error.contains("streaming file runtime"),
+                "{triple}: {error}"
+            );
+            assert!(error.contains("--emit object"), "{triple}: {error}");
+            assert_eq!(fs::read_dir(&directory.path).unwrap().count(), 0);
+            assert_eq!(command.get_args().count(), 0);
+        }
+    }
+
+    #[test]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn streaming_file_native_cache_tracks_promoted_runtime_sources_and_headers() {
+        let Some(toolchain) = streaming_file_test_toolchain() else {
+            return;
+        };
+        let triple = toolchain.resolved_triple(&Target::Native).unwrap();
+        let root = TemporaryDirectory::new(&std::env::temp_dir()).unwrap();
+        let directory = TemporaryDirectory::new(&root.path).unwrap();
+        let source = directory.path.join("program.ll");
+        let placeholder = directory.path.join("placeholder");
+        fs::write(
+            &source,
+            format!("target triple = \"{triple}\"\ndefine i32 @main() {{ ret i32 0 }}\n"),
+        )
+        .unwrap();
+        let opts = options(&["build", "unused.bh"]);
+        let mut initial = clang_command(&toolchain, &opts, &triple, &source, &placeholder, &[]);
+        add_native_runtime(
+            &mut initial,
+            &directory.path,
+            "; bhasa runtime: core\n; bhasa runtime: file\n; bhasa runtime: net\n",
+            &triple,
+            None,
+        )
+        .unwrap();
+        let program = initial.get_program().to_owned();
+        let arguments: Vec<_> = initial.get_args().map(|arg| arg.to_owned()).collect();
+        let make_command = |artifact: &Path| {
+            let mut command = Command::new(&program);
+            command.args(arguments.iter().map(|arg| {
+                if arg == placeholder.as_os_str() {
+                    artifact.as_os_str().to_owned()
+                } else {
+                    arg.clone()
+                }
+            }));
+            command
+        };
+        let first = directory.path.join("first");
+        let mut command = make_command(&first);
+        let cache = crate::build_cache::prepare(
+            &command,
+            &first,
+            &directory.path,
+            &root.path.join("build"),
+        )
+        .unwrap()
+        .expect("host native cache should admit the promoted runtime plan");
+        assert!(!cache.restore(&first).unwrap());
+        let result = toolchain.invoke(&mut command).unwrap();
+        assert!(result.status.success(), "{}", tool_output(&result));
+        cache.store(&first).unwrap();
+        let mut ordinal = 0;
+        let mut check_hit = |expected: bool| {
+            ordinal += 1;
+            let artifact = directory.path.join(format!("artifact-{ordinal}"));
+            let command = make_command(&artifact);
+            let entry = crate::build_cache::prepare(
+                &command,
+                &artifact,
+                &directory.path,
+                &root.path.join("build"),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(
+                entry.restore(&artifact).unwrap(),
+                expected,
+                "step {ordinal}"
+            );
+            if expected {
+                assert_eq!(fs::read(&artifact).unwrap(), fs::read(&first).unwrap());
+            }
+        };
+        check_hit(true);
+        for name in ["file.c", "net.c"] {
+            let path = directory.path.join(name);
+            let original = fs::read(&path).unwrap();
+            let mut changed = original.clone();
+            changed.extend_from_slice(b"\n/* runtime revision for cache probe */\n");
+            fs::write(&path, &changed).unwrap();
+            check_hit(false);
+            fs::write(&path, &original).unwrap();
+            check_hit(true);
+        }
+        for name in ["file.h", "net.h", "core.h"] {
+            let path = directory.path.join(name);
+            let original = fs::read(&path).unwrap();
+            let mut changed = original.clone();
+            changed.extend_from_slice(b"\nenum { BHASA_RUNTIME_CACHE_HEADER_REVISION = 1 };\n");
+            fs::write(&path, &changed).unwrap();
+            check_hit(false);
+            fs::write(&path, &original).unwrap();
+            check_hit(true);
+        }
+    }
 
     #[test]
     fn runtime_linkage_uses_calls_rather_than_unused_builtin_declarations() {

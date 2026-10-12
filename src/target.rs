@@ -174,6 +174,50 @@ fn versioned_os(value: &str, os: &str) -> bool {
     })
 }
 
+/// Native runtime admission for a resolved LLVM target, not a CLI alias.
+/// Normalize architecture/OS spellings only after validating complete triple
+/// components. Keep the emitted triple and its deployment version unchanged.
+pub(crate) fn require_native_posix64(triple: &str) -> Result<(), String> {
+    // Bound work and diagnostic allocation before splitting or formatting.
+    // Resolved target consumers share this byte limit; preserve admitted bytes.
+    if triple.len() > 128 {
+        return Err(
+            "unsupported native 64-bit POSIX target: resolved target exceeds 128 bytes".into(),
+        );
+    }
+    let parts: Vec<_> = triple.split('-').collect();
+    let admitted = match parts.as_slice() {
+        ["arm64" | "aarch64" | "x86_64", "apple", os] => ["darwin", "macosx", "macos"]
+            .iter()
+            .any(|name| strict_versioned_os(os, name)),
+        ["aarch64" | "x86_64", "unknown" | "pc", "linux", "gnu" | "musl"] => true,
+        _ => false,
+    };
+    if admitted {
+        Ok(())
+    } else {
+        Err(format!(
+            "unsupported native 64-bit POSIX target: {triple:?}"
+        ))
+    }
+}
+
+fn strict_versioned_os(value: &str, os: &str) -> bool {
+    let Some(suffix) = value.strip_prefix(os) else {
+        return false;
+    };
+    if suffix.is_empty() {
+        return true;
+    }
+    let components: Vec<_> = suffix.split('.').collect();
+    components.len() <= 3
+        && components.iter().all(|component| {
+            !component.is_empty()
+                && component.bytes().all(|byte| byte.is_ascii_digit())
+                && component.parse::<u32>().is_ok()
+        })
+}
+
 pub fn listing() -> String {
     "Target aliases and LLVM triples:\n\
      native         Rust host target for IR; Clang target probe for builds\n\
@@ -196,6 +240,38 @@ pub fn listing() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn channel_admission_uses_resolved_posix64_components() {
+        for triple in [
+            "arm64-apple-macosx26.0.0",
+            "arm64-apple-macosx",
+            "x86_64-apple-macosx",
+            "aarch64-apple-darwin",
+            "x86_64-pc-linux-gnu",
+            "aarch64-unknown-linux-musl",
+        ] {
+            assert!(require_native_posix64(triple).is_ok(), "{triple}");
+        }
+        for triple in [
+            "arm64-apple-macosx26..0",
+            "arm64-apple-macosx26-gnu",
+            "arm64-apple-macosx26.0.0.0",
+            "arm64-apple-macosx4294967296",
+            "arm64-apple-ios18.0",
+            "x86_64-pc-windows-msvc",
+            "wasm32-unknown-unknown",
+            "i686-unknown-linux-gnu",
+            "x86_64-unknown-linux-gnux32",
+            "aarch64-unknown-linux-gnu_ilp32",
+            "x86_64-unknown-linux-android",
+            "x86_64-random-linux-gnu",
+        ] {
+            assert!(require_native_posix64(triple).is_err(), "{triple}");
+        }
+        // CLI selection stays restricted to documented aliases/exact triples.
+        assert!(Target::parse("arm64-apple-macosx26.0.0").is_err());
+    }
 
     const EXPLICIT_TARGETS: &[(&str, &str)] = &[
         ("linux-x64", "x86_64-unknown-linux-gnu"),

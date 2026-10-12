@@ -36,6 +36,7 @@ test("grammar recognizes privacy, alias imports, numeric and collection types", 
   const number = grammar.patterns.find((pattern) => pattern.name === "constant.numeric.float.bhasa");
   assert.deepEqual("private def test() { } import \"math.bh\" as math".match(new RegExp(control.match, "g")), ["private", "import", "as"]);
   assert.deepEqual("float List Map floaty ListExtra Mapper".match(new RegExp(type.match, "g")), ["float", "List", "Map"]);
+  assert.deepEqual("file_handle file_handler file_handles".match(new RegExp(type.match, "g")), ["file_handle"]);
   assert.deepEqual("1.25 2e3 3.0E-2 4 1.member".match(new RegExp(number.match, "g")), ["1.25", "2e3", "3.0E-2"]);
 });
 
@@ -65,4 +66,24 @@ test("grammar highlights statement let bindings while preserving ordinary let na
   for (const source of ["def let(value:int){}", "let(1)", "let[int](1)", "let.field", "let=2", "let\nvalue=1", "var value=let and flag", "let # comment\nvalue=1"]) {
     assert.equal(expression.test(source), false, source);
   }
+});
+
+
+test("grammar keeps owned and move contextual rather than globally reserved", () => {
+  const owned = grammar.patterns.find((p) => p.captures?.[1]?.name === "storage.modifier.ownership.bhasa");
+  const move = grammar.patterns.find((p) => p.captures?.[1]?.name === "keyword.operator.transfer.bhasa");
+  for (const source of ["def take(owned value: buffer)", "def take(x:int, owned owned:ints)"]) {
+    assert.equal(source.match(new RegExp(owned.match))[1], "owned", source);
+  }
+  for (const source of ["def owned(value: buffer)", "def ordinary(owned:buffer)", "owned(x)", "var owned=buffer()", "item.owned()"]) {
+    assert.equal(new RegExp(owned.match).test(source), false, source);
+  }
+  for (const source of ["return move value", "take(move move)", "let next=move value"]) {
+    assert.equal(source.match(new RegExp(move.match))[1], "move", source);
+  }
+  for (const source of ["def move(value:buffer)", "move(value)", "move[buffer](value)", "var move=buffer()", "move and flag", "move or flag", "move not flag", "move true", "move false", "move\nvalue"]) {
+    assert.equal(new RegExp(move.match).test(source), false, source);
+  }
+  const control = grammar.patterns.find((p) => p.name === "keyword.control.bhasa");
+  assert.equal(new RegExp(control.match).test("owned move"), false);
 });

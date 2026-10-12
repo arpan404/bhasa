@@ -39,10 +39,12 @@ implementation. See [self-hosting](self-hosting.md) for build and rebuild checks
 
 Records have named fields, methods, nominal types and positional constructors. The
 compiler emits allocation, clone and cleanup helpers for nested records and
-owned fields. Existing buffers, integer vectors and records copy when bound or
-assigned; parameters borrow for a synchronous call. Returning borrowed owned
-values produces a copy. Cleanup covers scope exit, early return, reassignment
-and temporary expressions.
+owned fields. Ordinary buffer, integer-vector and record bindings/returns copy;
+unqualified parameters borrow for a synchronous call. Contextual `owned` buffer/
+ints parameters and whole-value `move` transfer cleanup without cloning in the
+bounded synchronous free-function slice. Cleanup covers scope exit, early return,
+reassignment and temporary expressions. See [ownership](ownership.md) for limits.
+Regular-file handles retain shared cursor/close state and remain single-threaded.
 
 Methods are declared inside records with an inferred `self` parameter. The
 checker resolves each call from its receiver's nominal type and lowers it to an
@@ -65,7 +67,7 @@ absolute deadlines. Runtime-use markers link only the required adapters;
 unused builtin declarations do not request extra C compilation. The
 [backend guide](backend.md) lists library contracts and limits.
 
-TCP copies duplicate descriptor ownership for the same operating-system
+TCP copies atomically retain shared descriptor state for the same operating-system
 endpoint. TLS copies instead retain a refcounted session with serialized I/O;
 its last release closes and frees it without a network wait. Neither copy
 creates an independent connection. Buffers and aggregate structure still copy

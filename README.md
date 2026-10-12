@@ -107,6 +107,7 @@ the current protocol and data limits.
 | --- | --- |
 | `int`, `float`, `bool`, `str`, `void` | Signed 64-bit integers with radix literals/bitwise/shifts, binary64 floats, static UTF-8 strings; no narrow integers or f32 |
 | `buffer`, `ints`, `List[T]`, `Map[K,V]` | Owned vectors and specialized typed collections; maps use int/str keys |
+| `owned` parameters and `move` | Buffer/ints transfer in synchronous monomorphic free functions; [rules](docs/ownership.md) |
 | Named `struct` records, methods and nested fields | Borrowed `self` receivers and positional constructors; no inheritance or recursive layouts |
 | Explicit generic functions, records and enums | Compile-time specialization; no inferred type arguments, traits or method-specific parameters |
 | Transparent `type Name = Target` aliases | Concrete targets share identity and ownership; no alias type parameters |
@@ -116,6 +117,7 @@ the current protocol and data limits.
 | Typed functions, forward calls and recursion | No overloads, closures or function values |
 | `var`, assignment, branches, `while`, `for`, `break`/`continue` | Half-open int ranges with signed steps and owned List/buffer/ints/Map-key snapshots; see [iteration](docs/iteration.md) |
 | File/console I/O, arguments and subprocesses | Native macOS/Linux; explicit status values |
+| Streaming regular-file handles and typed `IoResult[T]` | Shared cursor/close state, seek/flush, synchronous single-thread use; [guide](docs/io.md) |
 | `spawn(worker(value))`, `join(task)` | One typed input, typed result (including void), independently acquired owned data and mandatory lexical joins |
 | `async_spawn(worker(value))`, `await(task)` | Four fixed workers, 64 queued jobs and blocking backpressure; no coroutines or I/O reactor |
 | Owned TCP listeners and sockets | Synchronous with optional deadlines; numeric-address timed connect |

@@ -11,7 +11,7 @@ typedef struct bhasa_tcp_listener bhasa_tcp_listener;
 typedef struct bhasa_tcp_socket bhasa_tcp_socket;
 
 /* All constructors return owned handles, including on OS/argument failure.
- * Allocation of the handle itself is fatal on failure, as in core.h.
+ * Allocation of the handle or shared descriptor state is fatal on failure.
  * Listen binds IPv4 loopback. Port zero requests an ephemeral port. */
 bhasa_tcp_listener *bhasa_rt_tcp_listen(int64_t port);
 /* Explicit numeric IPv4/IPv6 bind address, including 0.0.0.0 and ::.
@@ -35,7 +35,7 @@ int64_t bhasa_rt_tcp_read_timeout(const bhasa_tcp_socket *socket, bhasa_buffer *
 int64_t bhasa_rt_tcp_write_timeout(const bhasa_tcp_socket *socket, const bhasa_buffer *contents, int64_t milliseconds);
 int64_t bhasa_rt_monotonic_millis(void);
 
-/* Fixed constructor/clone status: zero on success, positive errno on failure.
+/* Fixed constructor status, preserved exactly by clone: zero on success, positive errno on failure.
  * Resolver errors map to ENOMEM/EAGAIN/EADDRNOTAVAIL/EINVAL or EAI_SYSTEM errno.
  * Local port is zero for an invalid listener. */
 int64_t bhasa_rt_tcp_listener_status(const bhasa_tcp_listener *listener);
@@ -55,8 +55,13 @@ int64_t bhasa_rt_tcp_read(const bhasa_tcp_socket *socket,
 int64_t bhasa_rt_tcp_write(const bhasa_tcp_socket *socket,
                            const bhasa_buffer *contents);
 
-/* Duplicate descriptor ownership, sharing the same kernel endpoint/stream.
- * Free closes only this handle's descriptor; it never calls shutdown. */
+/* Each copy allocates an independent owner and atomically retains shared fd
+ * state. No OS descriptor duplication or recoverable copy failure occurs.
+ * Allocation or reference-count overflow is fatal. Endpoint/stream semantics
+ * remain shared. Final owner free closes once; free never calls shutdown.
+ * Distinct retained owners may be used/retained/freed across threads. An owner
+ * must remain live during use/clone, and must not race its own free. No IO
+ * ordering is implied. Borrowed fd numbers are identical across copies. */
 bhasa_tcp_listener *bhasa_rt_tcp_listener_clone(const bhasa_tcp_listener *listener);
 bhasa_tcp_socket *bhasa_rt_tcp_socket_clone(const bhasa_tcp_socket *socket);
 void bhasa_rt_tcp_listener_free(bhasa_tcp_listener *listener);
