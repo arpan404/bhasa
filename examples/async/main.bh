@@ -1,0 +1,9 @@
+# Jobs execute on a fixed worker pool. Each handle is consumed once.
+def square(value: int) -> int { return value * value }
+def main() {
+    var first = async_spawn(square(6))
+    var second = async_spawn(square(8))
+    var x = await(first)
+    var y = await(second)
+    print(x + y)
+}

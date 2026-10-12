@@ -1,0 +1,7 @@
+[package]
+name = "package-demo"
+version = "0.1.0"
+entry = "src/main.bh"
+
+[dependencies]
+math = "../math"

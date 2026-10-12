@@ -1,0 +1,50 @@
+{
+  "name": "bhasa",
+  "displayName": "Bhasa",
+  "description": "Bhasa syntax highlighting and language tools through bhasa lsp.",
+  "version": "0.1.0",
+  "publisher": "bhasa-local",
+  "private": true,
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Programming Languages", "Formatters"],
+  "main": "./extension.js",
+  "extensionKind": ["workspace"],
+  "activationEvents": ["onLanguage:bhasa", "onCommand:bhasa.restartServer"],
+  "capabilities": {
+    "virtualWorkspaces": { "supported": false },
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Syntax highlighting works everywhere. Running the Bhasa language server requires workspace trust.",
+      "restrictedConfigurations": ["bhasa.serverPath"]
+    }
+  },
+  "contributes": {
+    "languages": [{
+      "id": "bhasa",
+      "aliases": ["Bhasa", "bhasa"],
+      "extensions": [".bh"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "bhasa",
+      "scopeName": "source.bhasa",
+      "path": "./syntaxes/bhasa.tmLanguage.json"
+    }],
+    "commands": [{ "command": "bhasa.restartServer", "title": "Bhasa: Restart language server" }],
+    "configuration": {
+      "title": "Bhasa",
+      "properties": {
+        "bhasa.serverPath": {
+          "type": "string",
+          "default": "bhasa",
+          "scope": "machine",
+          "description": "Bhasa executable path or command on PATH. The extension runs it with the lsp argument, without a shell."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "check": "node --check extension.js && node --check transport.js",
+    "test": "node --test tests/*.test.js"
+  }
+}

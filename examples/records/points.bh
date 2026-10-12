@@ -1,0 +1,26 @@
+struct Point {
+    x: int
+    y: int
+}
+
+struct Line {
+    start: Point
+    end: Point
+}
+
+def shift(point: Point, dx: int, dy: int) -> Point {
+    point.x = point.x + dx
+    point.y = point.y + dy
+    return point
+}
+
+def main() {
+    var point = Point(2, 3)
+    var line = Line(point, Point(10, 20))
+    var moved = shift(point, 5, 7)
+    moved.x = 100
+    print(point.x)       # 7: shift borrows and mutates point
+    print(point.y)       # 10
+    print(moved.x)       # 100: the returned record is an independent copy
+    print(line.start.x)  # 2: the constructor copied point
+}

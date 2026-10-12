@@ -1,0 +1,11 @@
+# bhasa run examples/io/copy.bh -- input.txt output.txt
+def main() -> int {
+    if arg_count() != 3 {
+        print("usage: copy INPUT OUTPUT")
+        return 2
+    }
+    var contents = buffer()
+    var status = read_file(arg(1), contents)
+    if status != 0 { return status }
+    return write_file(arg(2), contents)
+}

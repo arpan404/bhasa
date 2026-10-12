@@ -1,0 +1,21 @@
+# Concrete specializations share the ordinary ownership and cleanup rules.
+struct Box[T] {
+    value: T
+    def copy(self) -> T { return self.value }
+}
+
+enum Option[T] {
+    none
+    some(value: T)
+}
+
+def identity[T](value: T) -> T { return value }
+
+def main() {
+    var message = identity[Box[buffer]](Box[buffer](buffer("hello generics")))
+    var result = Option[Box[buffer]].some(message)
+    match result {
+        case Option[Box[buffer]].none { print("empty") }
+        case Option[Box[buffer]].some(value) { print(value.copy()) }
+    }
+}

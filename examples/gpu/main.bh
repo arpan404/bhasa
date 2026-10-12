@@ -1,0 +1,38 @@
+# Run from the repository root. Metal source is trusted foreign code.
+def main() -> int {
+    if not gpu_available() {
+        print("SKIP: no Metal device is available")
+        return 77
+    }
+    var source = buffer()
+    var status = read_file("examples/gpu/transform.metal", source)
+    if status != 0 {
+        print("Could not read the Metal kernel")
+        print(status)
+        return 1
+    }
+    var data = buffer()
+    var index = 0
+    while index < 513 {
+        push(data, index % 256)
+        index = index + 1
+    }
+    status = gpu_dispatch(source, "transform", data)
+    if status != 0 {
+        print("Metal dispatch failed")
+        print(status)
+        return 1
+    }
+    index = 0
+    while index < len(data) {
+        var expected = ((index % 256) * 3 + 7) % 256
+        if get(data, index) != expected {
+            print("GPU result mismatch")
+            print(index)
+            return 1
+        }
+        index = index + 1
+    }
+    print("Metal GPU verified 513 bytes")
+    return 0
+}

@@ -1,0 +1,20 @@
+# Text wraps UTF-8 bytes. Its public bytes field can be mutated; validate again
+# after raw byte edits. count/codepoint return -1 on invalid data. part traps on
+# malformed data or invalid scalar ranges. Indices count scalars, not graphemes.
+struct Text {
+    bytes: buffer
+
+    def valid(self) -> bool { return utf8_valid(self.bytes) }
+    def count(self) -> int { return utf8_count(self.bytes) }
+    def codepoint(self, index: int) -> int { return utf8_get(self.bytes, index) }
+    def part(self, start: int, count: int) -> Text {
+        return Text(utf8_slice(self.bytes, start, count))
+    }
+    def equals(self, other: Text) -> bool { return same(self.bytes, other.bytes) }
+    def append(self, other: Text) { append(self.bytes, other.bytes) }
+    def append_codepoint(self, scalar: int) -> int {
+        return utf8_append(self.bytes, scalar)
+    }
+}
+
+def text(value: str) -> Text { return Text(buffer(value)) }

@@ -1,0 +1,64 @@
+# One binary request and response. Each side reads an exact byte count because
+# TCP can split a write across multiple reads.
+def read_exact(socket: tcp_socket, destination: buffer, count: int) -> int {
+    var chunk = buffer()
+    while len(destination) < count {
+        var status = tcp_read(socket, chunk, count - len(destination))
+        if status != 0 { return status }
+        if len(chunk) == 0 { return 1 }
+        append(destination, chunk)
+    }
+    return 0
+}
+
+def client(port: int) -> int {
+    var socket = tcp_connect("127.0.0.1", port)
+    var status = tcp_socket_status(socket)
+    if status != 0 { return status }
+    var request = buffer("ping")
+    push(request, 0)
+    push(request, 255)
+    status = tcp_write(socket, request)
+    if status != 0 { return status }
+
+    var response = buffer()
+    status = read_exact(socket, response, 6)
+    if status != 0 { return status }
+    var expected = buffer("pong")
+    push(expected, 0)
+    push(expected, 255)
+    if !same(response, expected) { return 1 }
+    return 0
+}
+
+def serve_once(listener: tcp_listener) -> int {
+    var socket = tcp_accept(listener)
+    var status = tcp_socket_status(socket)
+    if status != 0 { return status }
+    var request = buffer()
+    status = read_exact(socket, request, 6)
+    if status != 0 { return status }
+    var expected = buffer("ping")
+    push(expected, 0)
+    push(expected, 255)
+    if !same(request, expected) { return 1 }
+
+    var response = buffer("pong")
+    push(response, 0)
+    push(response, 255)
+    return tcp_write(socket, response)
+}
+
+def main() -> int {
+    var listener = tcp_listen(0)
+    var status = tcp_listener_status(listener)
+    if status != 0 { return status }
+    var port = tcp_local_port(listener)
+    var job = spawn(client(port))
+    status = serve_once(listener)
+    var client_status = join(job)
+    if status != 0 { return status }
+    if client_status != 0 { return client_status }
+    print("TCP loopback OK")
+    return 0
+}

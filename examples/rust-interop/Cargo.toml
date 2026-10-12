@@ -1,0 +1,17 @@
+[package]
+name = "bhasa_rust_adapter"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "adapter.rs"
+crate-type = ["staticlib"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+
+[workspace]

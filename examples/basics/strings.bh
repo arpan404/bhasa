@@ -1,0 +1,19 @@
+def greeting() -> str {
+    return "नमस्ते"
+}
+
+def echo(value: str) -> str {
+    return value
+}
+
+def main() {
+    var message: str = greeting()
+    print(echo(message))
+    message = "你好 🌍"
+    print(message)
+    print("line one\nline two")
+    print("tab\tquote\"slash\\end")
+    print("carriage\rreturn")
+    print("100% literal %s %d")
+    print("")
+}

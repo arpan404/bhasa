@@ -1,0 +1,29 @@
+{
+  "milestone": "iteration-editor",
+  "status": "complete",
+  "agents": {
+    "frontend_parity": "Bhasa iteration",
+    "packages": "LSP completion/hover",
+    "rust_cache": "iteration acceptance/review"
+  },
+  "root": "Rust iteration/integration/verification",
+  "heartbeat": "PAUSED",
+  "source_freeze": true,
+  "pending": [],
+  "focused": {
+    "lib": 142,
+    "iteration": 5,
+    "native_iteration": 1,
+    "lsp": 47,
+    "format": 2,
+    "editors": 38
+  },
+  "reference_tests": 398,
+  "hybrid_tests": 408,
+  "archive_key": "b2ae9f5fb380dcf392025873346826116006fdc7e0a2ceddcabbd314e0f812d1",
+  "editor_tests": 38,
+  "selfhost": "build/selfhost/run.0i9MfkYr",
+  "release_native_hits": 20,
+  "rust_adapter_runs_without_compilation": 4,
+  "unchanged_hybrid_rebuilds": 2
+}

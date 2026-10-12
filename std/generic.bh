@@ -1,0 +1,24 @@
+import "text.bh"
+
+# Explicit compile-time instantiations: Option[int], Result[Text], Box[buffer].
+enum Option[T] {
+    none
+    some(value: T)
+}
+
+enum Result[T] {
+    ok(value: T)
+    error(message: Text)
+}
+
+struct Box[T] {
+    value: T
+    def get(self) -> T { return self.value }
+}
+
+def option_or[T](option: Option[T], fallback: T) -> T {
+    match option {
+        case Option[T].none { return fallback }
+        case Option[T].some(value) { return value }
+    }
+}

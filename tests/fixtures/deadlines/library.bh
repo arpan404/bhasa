@@ -1,0 +1,30 @@
+def main() -> int {
+    var started = monotonic_millis()
+    var listener = tcp_listen(0)
+    if tcp_listener_status(listener) != 0 { return 1 }
+    var empty = tcp_accept_timeout(listener, 0)
+    if tcp_socket_status(empty) == 0 { return 2 }
+    var client = tcp_connect_timeout(buffer("127.0.0.1"), tcp_local_port(listener), 1000)
+    if tcp_socket_status(client) != 0 { return 3 }
+    var server = tcp_accept_timeout(listener, 1000)
+    if tcp_socket_status(server) != 0 { return 4 }
+    var bytes = buffer("preserve")
+    var status = tcp_read_timeout(server, bytes, 8, 10)
+    if status == 0 or !same(bytes, "preserve") { return 5 }
+    status = tcp_write_timeout(client, buffer("hello"), 1000)
+    if status != 0 { return 6 }
+    var response = buffer()
+    while len(response) < 5 {
+        status = tcp_read_timeout(server, bytes, 5 - len(response), 1000)
+        if status != 0 or len(bytes) == 0 { return 7 }
+        append(response, bytes)
+    }
+    if !same(response, "hello") { return 8 }
+    var invalid = tcp_connect_timeout("localhost", tcp_local_port(listener), 1)
+    if tcp_socket_status(invalid) == 0 { return 9 }
+    status = tcp_write_timeout(client, buffer(), -1)
+    if status == 0 { return 10 }
+    if monotonic_millis() < started { return 11 }
+    print("Bhasa TCP deadlines passed")
+    return 0
+}

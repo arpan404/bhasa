@@ -1,0 +1,7 @@
+import "@math"
+import "message.bh"
+
+def main() {
+    greeting()
+    print(double(21))
+}

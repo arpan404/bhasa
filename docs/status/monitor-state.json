@@ -1,0 +1,103 @@
+{
+  "automationId": "orchestrate-bhasa-compiler-chats",
+  "milestone": "methods-and-backend-usability",
+  "checkedClientDate": "2026-10-11",
+  "polls": [
+    {
+      "threadId": "01a12c23-f9e1-7962-9cec-2fb33614489e",
+      "hostId": "local",
+      "cursor": "1769a14a-9926-4987-94de-bb62f61e9f34:8",
+      "status": {
+        "type": "notLoaded"
+      },
+      "latestTurn": "01a12c47-2982-71e1-b082-747e4aed223d"
+    },
+    {
+      "threadId": "01a12c24-1180-7fb1-b9e2-d46ee47952d0",
+      "hostId": "local",
+      "cursor": "a2945567-7d0b-48cc-9783-968162ce732f:6",
+      "status": {
+        "type": "idle"
+      },
+      "latestTurn": "01a12c4d-f4fe-7312-baef-0129900fb587"
+    },
+    {
+      "threadId": "01a12c24-3bab-7430-ad85-8ac6bac3cc2a",
+      "hostId": "local",
+      "cursor": "c454e364-c132-40cd-8eda-888b4d6ccb3c:7",
+      "status": {
+        "type": "idle"
+      },
+      "latestTurn": "01a12c47-3b1c-7522-8f28-fdad111bfaa0"
+    },
+    {
+      "threadId": "01a12c24-508e-74d3-a4ee-13958338f887",
+      "hostId": "local",
+      "cursor": "66ee722c-fb1c-455c-838f-2ebeff17a809:15",
+      "status": {
+        "type": "idle"
+      },
+      "latestTurn": "01a12c53-ced4-7ed3-b74c-77368fdb83bb"
+    },
+    {
+      "threadId": "01a12c28-ce31-73b0-8722-f446c803d4e2",
+      "hostId": "local",
+      "cursor": "adc56fd4-0fc9-421c-8e3f-d4abb9a1c66a:16",
+      "status": {
+        "type": "idle"
+      },
+      "latestTurn": "01a12c47-4b70-72f2-84a5-3be21ca9b725"
+    },
+    {
+      "threadId": "01a12c2c-918e-78c2-93b4-3a67719ccd36",
+      "hostId": "local",
+      "cursor": "01b75afc-e3a3-4c2d-a8b2-b1f08cf73312:9",
+      "status": {
+        "type": "idle"
+      },
+      "latestTurn": "01a12c47-527d-7923-a120-71a819d51cc8"
+    }
+  ],
+  "lastHeartbeatUtc": "2026-10-11T18:49:44.238Z",
+  "verification": {
+    "reference": {
+      "passed": 300,
+      "log": "build/verify-methods-reference.log"
+    },
+    "hybrid": {
+      "passed": 307,
+      "log": "build/verify-methods-hybrid-frontend.log"
+    },
+    "editor": {
+      "passed": 31,
+      "syntax": "passed"
+    },
+    "format": "passed",
+    "clippy": {
+      "reference": "passed",
+      "hybrid": "passed"
+    },
+    "selfRebuild": {
+      "status": "passed",
+      "artifacts": "build/selfhost/run.ORZKBDfu",
+      "log": "build/verify-methods-selfhost.log"
+    },
+    "unchangedCache": {
+      "status": "reused",
+      "cargoSeconds": [
+        0.03,
+        0.05
+      ],
+      "log": "build/verify-methods-unchanged-build.log"
+    },
+    "releaseSmoke": {
+      "status": "passed",
+      "rustAdapterCompilations": 0,
+      "log": "build/verify-methods-release-smoke.log"
+    }
+  },
+  "completedUtc": "2026-10-11T19:05:58Z",
+  "milestoneStatus": "complete",
+  "automationStatus": "PAUSED",
+  "outstandingAcceptanceCriteria": []
+}

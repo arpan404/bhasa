@@ -1,0 +1,22 @@
+struct Message {
+    text: buffer
+
+    def append(self, suffix: str) { append(self.text, suffix) }
+
+    def bytes(self) -> buffer { return self.text }
+
+    def copy(self) -> Message { return self }
+}
+
+def main() {
+    var original = Message(buffer("hello"))
+    original.append("!")
+    var returned = original.bytes()
+    set(returned, 0, 72)
+    var copied = original.copy()
+    copied.append("?")
+    print(original.text)
+    print(returned)
+    print(copied.text)
+    print(Message(buffer("temporary")).bytes())
+}

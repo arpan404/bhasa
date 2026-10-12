@@ -1,0 +1,16 @@
+struct Measurement {
+    value: float
+    def scaled(self, factor: float) -> float { return self.value * factor }
+}
+
+def average(total: float, count: int) -> float {
+    return total / float(count)
+}
+
+def main() {
+    var sample = Measurement(1.25)
+    print(sample.scaled(2.0))
+    print(average(10.5, 3))
+    print(int(-2.9))
+    print(6.022e23)
+}

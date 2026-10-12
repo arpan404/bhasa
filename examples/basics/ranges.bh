@@ -1,0 +1,26 @@
+def main() {
+    var total = 0
+    for number in range(1, 6) {
+        if number == 3 { continue }
+        total = total + number
+        number = 99
+    }
+    print(total)
+    var count = 0
+    for outer in range(3) {
+        for inner in range(5) {
+            if inner == 1 { continue }
+            if inner == 3 { break }
+            count = count + 1
+        }
+    }
+    print(count)
+    count = 0
+    while true {
+        var owned = buffer("one iteration")
+        count = count + 1
+        if count < 3 { continue }
+        break
+    }
+    print(count)
+}

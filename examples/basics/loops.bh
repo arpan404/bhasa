@@ -1,0 +1,21 @@
+def main() {
+    var row = 0
+    var total = 0
+    while row < 4 {
+        var column = 0
+        while column < row {
+            total = total + row
+            column = column + 1
+        }
+        row = row + 1
+    }
+    print(total)
+    while false {
+        print("unreachable loop body")
+    }
+    if total == 14 {
+        print(true)
+    } else {
+        print(false)
+    }
+}

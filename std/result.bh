@@ -1,0 +1,31 @@
+import "text.bh"
+
+enum OptionInt {
+    none
+    some(value: int)
+}
+
+enum OptionText {
+    none
+    some(value: Text)
+}
+
+enum ResultInt {
+    ok(value: int)
+    error(message: Text)
+}
+
+enum ResultText {
+    ok(value: Text)
+    error(message: Text)
+}
+
+enum ResultBuffer {
+    ok(value: buffer)
+    error(message: Text)
+}
+
+def text_decode(bytes: buffer) -> ResultText {
+    if !utf8_valid(bytes) { return ResultText.error(text("invalid UTF-8")) }
+    return ResultText.ok(Text(bytes))
+}

@@ -1,0 +1,88 @@
+# Experimental frontend runner. Rust remains the supported compiler driver.
+# The seed verification script supplies controlled source and output paths.
+
+def bh_driver_error(message: str) -> int {
+    var text = buffer("error: ")
+    append(text, message)
+    append(text, "\n")
+    var status = write_stderr(text)
+    if status != 0 { return 2 }
+    return 1
+}
+
+def bh_report_errors(errors: ints) -> int {
+    var index = 0
+    while index < len(errors) {
+        var text = buffer("error BH")
+        append(text, to_buffer(get(errors, index)))
+        append(text, " at byte ")
+        append(text, to_buffer(get(errors, index + 1)))
+        append(text, "..")
+        append(text, to_buffer(get(errors, index + 2)))
+        append(text, "\n")
+        var status = write_stderr(text)
+        if status != 0 { return 2 }
+        index = index + 3
+    }
+    return 1
+}
+
+def bh_valid_target(target: buffer) -> bool {
+    if len(target) == 0 { return false }
+    var index = 0
+    while index < len(target) {
+        var byte = get(target, index)
+        if not bh_ident_byte(byte) and byte != 45 and byte != 46 { return false }
+        index = index + 1
+    }
+    return true
+}
+
+def bh_driver_help() {
+    print("Bhasa frontend seed\n  bhasa-seed check FILE\n  bhasa-seed emit-llvm FILE --target TRIPLE\n\nExperimental frontend for controlled bootstrap tests. LLVM is written to stdout. Use the Rust compiler driver for normal builds.")
+}
+
+def main() -> int {
+    if arg_count() < 2 { bh_driver_help(); return 2 }
+    var command = arg(1)
+    if same(command, "--help") or same(command, "help") { bh_driver_help(); return 0 }
+    if same(command, "--version") { print("Bhasa frontend seed 0.6"); return 0 }
+    if not same(command, "check") and not same(command, "emit-llvm") {
+        return bh_driver_error("unknown command; use --help")
+    }
+    if arg_count() < 3 { return bh_driver_error("expected a source file") }
+    var source_path = arg(2)
+    var target = buffer()
+    var index = 3
+    while index < arg_count() {
+        var option = arg(index)
+        if index + 1 >= arg_count() { return bh_driver_error("option requires a value") }
+        var value = arg(index + 1)
+        if len(value) == 0 { return bh_driver_error("option value cannot be empty") }
+        if same(option, "--target") {
+            if len(target) != 0 { return bh_driver_error("duplicate --target option") }
+            target = value
+        } else { return bh_driver_error("unknown option") }
+        index = index + 2
+    }
+    if same(command, "check") {
+        if len(target) != 0 {
+            return bh_driver_error("check accepts only a source file")
+        }
+        target = buffer("x86_64-unknown-linux-gnu")
+    } else {
+        if not bh_valid_target(target) { return bh_driver_error("--target requires an explicit LLVM target triple") }
+    }
+    var source = buffer()
+    var status = read_file(source_path, source)
+    if status != 0 { return bh_driver_error("cannot read source file") }
+    var errors = ints()
+    var tokens = bh_lex(source, errors)
+    if len(errors) != 0 { return bh_report_errors(errors) }
+    var llvm = bh_compile(source, tokens, errors, target)
+    if len(errors) != 0 { return bh_report_errors(errors) }
+    if same(command, "check") { return 0 }
+    status = write_stdout(llvm)
+    if status != 0 { return bh_driver_error("cannot write LLVM output") }
+    return 0
+}

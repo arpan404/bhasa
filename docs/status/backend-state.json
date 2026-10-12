@@ -1,0 +1,46 @@
+{
+  "milestone": "backend-development",
+  "status": "complete",
+  "verifiedDate": "2026-10-11",
+  "reference": {
+    "passed": 328,
+    "log": "build/verify-backend-reference.log"
+  },
+  "hybrid": {
+    "passed": 335,
+    "log": "build/verify-backend-hybrid-frontend.log"
+  },
+  "editor": {
+    "passed": 32,
+    "guiHost": "unverified"
+  },
+  "format": "passed",
+  "clippy": {
+    "reference": "passed",
+    "hybrid": "passed"
+  },
+  "selfRebuild": {
+    "status": "passed",
+    "artifacts": "build/selfhost/run.jVP6qZgH",
+    "log": "build/verify-backend-selfhost.log"
+  },
+  "nativeArchiveKey": "afcb397123732b9a7557395d4405bf3f26e053b0301940058aa56c74104d7c6f",
+  "cacheReuse": {
+    "native": "reused",
+    "rustAdapterCompilations": 0,
+    "nativeCargoSeconds": [
+      0.19,
+      0.57
+    ],
+    "rustAdapterCargoSeconds": [
+      0.06,
+      0.05
+    ]
+  },
+  "releaseSmoke": {
+    "status": "passed",
+    "log": "build/verify-backend-release-smoke.log"
+  },
+  "historicalHeartbeatStatus": "PAUSED",
+  "outstandingAcceptanceCriteria": []
+}

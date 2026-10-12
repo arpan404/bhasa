@@ -1,0 +1,57 @@
+{
+  "milestone": "generics-tls-bounded-executor",
+  "status": "complete",
+  "verifiedDate": "2026-10-11",
+  "reference": {
+    "passed": 350,
+    "log": "build/verify-next-reference.log"
+  },
+  "hybrid": {
+    "passed": 358,
+    "log": "build/verify-next-hybrid-frontend.log"
+  },
+  "finalGenericChecks": {
+    "reference": 14,
+    "hybrid": 15,
+    "reason": "Clippy byte-slicing repair after broad suites"
+  },
+  "editor": {
+    "passed": 32,
+    "guiHost": "unverified"
+  },
+  "format": "passed",
+  "clippy": {
+    "reference": "passed",
+    "hybrid": "passed"
+  },
+  "selfRebuild": {
+    "status": "passed",
+    "artifacts": "build/selfhost/run.NDPkrnQd",
+    "log": "build/verify-next-selfhost.log"
+  },
+  "fullSuiteNativeArchiveKey": "fe9458e20a9be6e2ab547b9cfc6a353cad9ab49e0b3cadc78bbd5d158c23c69f",
+  "nativeArchiveKey": "7e4882e9e616cb37cd4b421955fc2636fd648b5f0a93fbd55a91d8e4ece56b2c",
+  "finalNativeObjectMatchesFullSuite": true,
+  "cacheReuse": {
+    "native": "reused twice",
+    "rustAdapterCompilations": 0,
+    "nativeCargoSeconds": [
+      0.02,
+      0.01,
+      0.0,
+      0.0
+    ],
+    "rustAdapterCargoSeconds": [
+      0.03,
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "releaseSmoke": {
+    "status": "passed",
+    "log": "build/verify-next-release-smoke.log"
+  },
+  "historicalHeartbeatStatus": "PAUSED",
+  "outstandingAcceptanceCriteria": []
+}

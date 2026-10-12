@@ -1,0 +1,23 @@
+def mark(value: int) -> bool {
+    print(value)
+    return true
+}
+
+def fail() -> bool {
+    var zero = 0
+    return 1 / zero == 0
+}
+
+def main() {
+    print(false and fail())
+    print(true or fail())
+    print(false && fail())
+    print(true || fail())
+    print(true and mark(10))
+    print(false or mark(20))
+    print(true && mark(30))
+    print(false || mark(40))
+    print(false or true and false)
+    print(true or false and fail())
+    print((false or true) and (false or mark(50)))
+}

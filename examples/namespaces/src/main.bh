@@ -1,0 +1,6 @@
+import "math.bh" as math
+
+def main() {
+    var counter: math.Counter = math.counter(21)
+    print(math.identity[int](counter.read()))
+}

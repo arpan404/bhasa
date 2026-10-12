@@ -1,0 +1,19 @@
+struct Entry {
+    title: buffer
+    score: float
+}
+
+def main() {
+    var entries = List[Entry]()
+    entries.push(Entry(buffer("first"), 2.5))
+    entries.push(Entry(buffer("second"), 4.0))
+
+    var by_name = Map[str, Entry]()
+    by_name.put("best", entries.get(1))
+    var saved = by_name.get("best")
+    entries.clear()
+    by_name.clear()
+
+    print(saved.title)
+    print(saved.score)
+}

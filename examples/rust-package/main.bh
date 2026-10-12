@@ -1,0 +1,5 @@
+extern def adapter_double(value: int) -> int
+
+def main() {
+    print(adapter_double(21))
+}

@@ -1,0 +1,19 @@
+[package]
+name = "bhasa"
+version = "0.1.0"
+edition = "2021"
+description = "The Bhasa bootstrap compiler"
+
+[dependencies]
+
+[features]
+default = []
+bhasa-lexer = []
+bhasa-frontend = ["bhasa-lexer"]
+
+[[bin]]
+name = "bhasa"
+path = "src/main.rs"
+
+[profile.release]
+lto = "thin"

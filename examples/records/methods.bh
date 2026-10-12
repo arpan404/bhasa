@@ -1,0 +1,21 @@
+struct Point {
+    x: int
+    y: int
+
+    def total(self) -> int { return self.x + self.y }
+
+    def shift(self, amount: int) { self.x = self.x + amount }
+
+    def copy(self) -> Point { return self }
+}
+
+def main() {
+    var point = Point(20, 22)
+    print(point.total())
+    point.shift(1)
+    var copied = point.copy()
+    copied.shift(9)
+    print(point.total())
+    print(copied.total())
+    print(Point(1, 2).total())
+}

@@ -1,0 +1,41 @@
+# Build with the desired --gpu backend, then pass kernel-file and entry-name.
+def main() -> int {
+    if arg_count() != 3 {
+        print("Usage: gpu-example KERNEL_FILE ENTRY_NAME")
+        return 1
+    }
+    if not gpu_available() {
+        print("SKIP: selected GPU backend is unavailable")
+        return 77
+    }
+    var source = buffer()
+    var status = read_file(arg(1), source)
+    if status != 0 {
+        print("Could not read the GPU kernel")
+        print(status)
+        return 1
+    }
+    var data = buffer()
+    var index = 0
+    while index < 513 {
+        push(data, index % 256)
+        index = index + 1
+    }
+    status = gpu_dispatch(source, arg(2), data)
+    if status != 0 {
+        print("GPU dispatch failed")
+        print(status)
+        return 1
+    }
+    index = 0
+    while index < len(data) {
+        if get(data, index) != ((index % 256) * 3 + 7) % 256 {
+            print("GPU result mismatch")
+            print(index)
+            return 1
+        }
+        index = index + 1
+    }
+    print("GPU verified 513 bytes")
+    return 0
+}

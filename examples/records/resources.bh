@@ -1,0 +1,33 @@
+struct Entry {
+    name: buffer
+    scores: ints
+}
+
+struct Archive {
+    entry: Entry
+    label: buffer
+}
+
+def add_score(archive: Archive, score: int) -> Archive {
+    push(archive.entry.scores, score)
+    append(archive.entry.name, "!")
+    return archive
+}
+
+def main() {
+    var scores = ints()
+    push(scores, 10)
+    var original = Archive(Entry(buffer("Ada"), scores), buffer("class"))
+    var copy = original
+    copy.entry.name = buffer("Grace")
+    set(copy.entry.scores, 0, 20)
+
+    var returned = add_score(original, 30)
+    returned.entry.name = buffer("returned")
+    print(original.entry.name)        # Ada!
+    print(copy.entry.name)            # Grace
+    print(get(original.entry.scores, 0))  # 10
+    print(get(copy.entry.scores, 0))   # 20
+    print(len(original.entry.scores)) # 2
+    print(returned.entry.name)        # returned
+}

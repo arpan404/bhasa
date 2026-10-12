@@ -1,0 +1,12 @@
+# Run from the repository root: sh examples/rust-interop/run.sh
+# This declaration needs the compiled adapter.rs archive supplied with --link.
+# The declaration must match adapter.rs exactly.
+extern def bhasa_rust_double(value: int) -> int
+
+def main() {
+    print(bhasa_rust_double(21))
+    print(bhasa_rust_double(-21))
+    print(bhasa_rust_double(0))
+    print(bhasa_rust_double(9223372036854775807))
+    print(bhasa_rust_double(-9223372036854775807 - 1))
+}

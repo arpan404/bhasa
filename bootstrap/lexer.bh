@@ -1,0 +1,145 @@
+# Compiler seed for milestone 0.1. This file has no entry point.
+# Inputs are integer byte values. -1 is the caller's end-of-input sentinel.
+# These functions do not index strings, allocate, read files, or scan a stream.
+
+def ascii_is_digit(byte: int) -> bool {
+    return byte >= 48 and byte <= 57
+}
+
+def ascii_is_alpha(byte: int) -> bool {
+    return (byte >= 65 and byte <= 90) or (byte >= 97 and byte <= 122)
+}
+
+def ascii_is_identifier_start(byte: int) -> bool {
+    return ascii_is_alpha(byte) or byte == 95
+}
+
+def ascii_is_identifier_continue(byte: int) -> bool {
+    return ascii_is_identifier_start(byte) or ascii_is_digit(byte)
+}
+
+# Only space and tab. Newlines and carriage returns belong to the future
+# scanner's line-ending handling, because newlines can terminate statements.
+def ascii_is_horizontal_space(byte: int) -> bool {
+    return byte == 32 or byte == 9
+}
+
+def decimal_digit_value(byte: int) -> int {
+    if ascii_is_digit(byte) {
+        return byte - 48
+    }
+    return -1
+}
+
+def starts_line_comment(first: int, second: int) -> bool {
+    return first == 35 or (first == 47 and second == 47)
+}
+
+# One-byte punctuation uses its ASCII value as its kind. Multi-byte symbols
+# use the local codes below. These are not Rust lexer enum discriminants.
+# Functions stand in for constants, which milestone 0.1 does not support.
+def kind_equal() -> int { return 256 }
+def kind_not_equal() -> int { return 257 }
+def kind_less_equal() -> int { return 258 }
+def kind_greater_equal() -> int { return 259 }
+def kind_and() -> int { return 260 }
+def kind_or() -> int { return 261 }
+def kind_arrow() -> int { return 262 }
+
+# Reserved keyword codes shared with the complete compiler scanner.
+def kind_for() -> int { return 319 }
+def kind_in() -> int { return 320 }
+def kind_break() -> int { return 321 }
+def kind_continue() -> int { return 322 }
+
+# Recognize punctuation from at most two bytes, preferring a two-byte symbol.
+# Zero means no punctuation token. Check comments before calling this in a
+# scanner. Comment prefixes also return zero here, so // cannot become / /.
+# Identifier, number, string and keyword scanning are still unimplemented.
+def symbol_kind(first: int, second: int) -> int {
+    if starts_line_comment(first, second) {
+        return 0
+    }
+    if first == 61 {
+        if second == 61 { return kind_equal() }
+        return 61
+    }
+    if first == 33 {
+        if second == 61 { return kind_not_equal() }
+        return 33
+    }
+    if first == 60 {
+        if second == 61 { return kind_less_equal() }
+        return 60
+    }
+    if first == 62 {
+        if second == 61 { return kind_greater_equal() }
+        return 62
+    }
+    if first == 38 {
+        if second == 38 { return kind_and() }
+        return 0
+    }
+    if first == 124 {
+        if second == 124 { return kind_or() }
+        return 0
+    }
+    if first == 45 {
+        if second == 62 { return kind_arrow() }
+        return 45
+    }
+    if first == 40 or first == 41 or first == 123 or first == 125 {
+        return first
+    }
+    if first == 44 or first == 58 or first == 59 {
+        return first
+    }
+    if first == 43 or first == 42 or first == 47 or first == 37 {
+        return first
+    }
+    return 0
+}
+
+# The spelling width of a punctuation token from symbol_kind. Word aliases
+# and/or/not will need their actual source spans when keyword scanning exists.
+def symbol_width(kind: int) -> int {
+    if kind >= kind_equal() and kind <= kind_arrow() {
+        return 2
+    }
+    if kind == 61 or kind == 33 or kind == 60 or kind == 62 or kind == 45 {
+        return 1
+    }
+    if kind == 40 or kind == 41 or kind == 123 or kind == 125 {
+        return 1
+    }
+    if kind == 44 or kind == 58 or kind == 59 {
+        return 1
+    }
+    if kind == 43 or kind == 42 or kind == 47 or kind == 37 {
+        return 1
+    }
+    return 0
+}
+
+# Larger numbers bind more tightly. Zero means not a binary operator.
+# All current binary operators associate to the left. The future parser
+# must handle unary minus/not separately, above multiplicative precedence.
+def binary_precedence(kind: int) -> int {
+    if kind == kind_or() { return 1 }
+    if kind == kind_and() { return 2 }
+    if kind == kind_equal() or kind == kind_not_equal() { return 3 }
+    if kind == 60 or kind == 62 or kind == kind_less_equal() or kind == kind_greater_equal() {
+        return 4
+    }
+    if kind == 43 or kind == 45 { return 5 }
+    if kind == 42 or kind == 47 or kind == 37 { return 6 }
+    return 0
+}
+
+def is_binary_operator(kind: int) -> bool {
+    return binary_precedence(kind) > 0
+}
+
+def is_unary_operator(kind: int) -> bool {
+    return kind == 45 or kind == 33
+}

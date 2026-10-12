@@ -1,0 +1,17 @@
+enum ReadResult {
+    ok(contents: buffer)
+    err(message: str)
+}
+
+def greeting(available: bool) -> ReadResult {
+    if available { return ReadResult.ok(buffer("hello from Bhasa")) }
+    return ReadResult.err("greeting unavailable")
+}
+
+def main() {
+    var result = greeting(true)
+    match result {
+        case ReadResult.ok(contents) { print(contents) }
+        case ReadResult.err(message) { print(message) }
+    }
+}

@@ -1,0 +1,7 @@
+[package]
+name = "https-service"
+version = "0.1.0"
+entry = "main.bh"
+
+[dependencies]
+tls = "../../packages/tls"

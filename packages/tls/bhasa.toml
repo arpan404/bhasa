@@ -1,0 +1,7 @@
+[package]
+name = "tls"
+version = "0.1.0"
+entry = "lib.bh"
+
+[dependencies]
+std = "../../std"

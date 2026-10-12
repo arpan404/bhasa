@@ -1,0 +1,275 @@
+# Bhasa-written scanner. Token and error tables contain triples.
+# Tokens: kind, byte start, byte end. Errors: L-code number, start, end.
+# Kinds: 0 EOF, 1 identifier, 2 integer, 3 string, 4 float; ASCII punctuation.
+# Compound kinds: 256 ==, 257 !=, 258 <=, 259 >=, 260 and, 261 or, 262 ->.
+# Keywords: 300 def, 301 extern, 302 var, 303 if, 304 else, 305 while,
+# 306 return, 307 true, 308 false, 309 int, 310 bool, 311 str, 312 void, 313 struct.
+# 314 is a host-inserted file boundary, 315 enum, 316 match, 317 case, 318 float.
+# 319 for, 320 in, 321 break, 322 continue.
+# Diagnostic 7 is invalid UTF8; 8 is a malformed decimal float.
+# buffer and ints remain identifiers so their constructor calls still parse.
+
+def bh_token_kind(tokens: ints, index: int) -> int { return get(tokens, index * 3) }
+def bh_token_start(tokens: ints, index: int) -> int { return get(tokens, index * 3 + 1) }
+def bh_token_end(tokens: ints, index: int) -> int { return get(tokens, index * 3 + 2) }
+
+def bh_token_text(source: buffer, tokens: ints, index: int) -> buffer {
+    var start = bh_token_start(tokens, index)
+    return slice(source, start, bh_token_end(tokens, index) - start)
+}
+
+def bh_triple(values: ints, first: int, second: int, third: int) {
+    push(values, first)
+    push(values, second)
+    push(values, third)
+}
+
+def bh_digit(byte: int) -> bool { return byte >= 48 and byte <= 57 }
+def bh_alpha(byte: int) -> bool {
+    return (byte >= 65 and byte <= 90) or (byte >= 97 and byte <= 122) or byte == 95
+}
+def bh_ident_byte(byte: int) -> bool { return bh_alpha(byte) or bh_digit(byte) }
+
+def bh_peek(source: buffer, index: int) -> int {
+    if index >= len(source) { return -1 }
+    return get(source, index)
+}
+
+def bh_continuation(byte: int) -> bool { return byte >= 128 and byte <= 191 }
+
+# Zero rejects overlong sequences, surrogate codepoints and values above U+10FFFF.
+def bh_utf8_width(source: buffer, index: int) -> int {
+    var first = bh_peek(source, index)
+    if first < 0 { return 0 }
+    if first <= 127 { return 1 }
+    var second = bh_peek(source, index + 1)
+    if first >= 194 and first <= 223 and bh_continuation(second) { return 2 }
+    var third = bh_peek(source, index + 2)
+    if first >= 224 and first <= 239 and bh_continuation(second) and bh_continuation(third) {
+        if first == 224 and second < 160 { return 0 }
+        if first == 237 and second >= 160 { return 0 }
+        return 3
+    }
+    var fourth = bh_peek(source, index + 3)
+    if first >= 240 and first <= 244 and bh_continuation(second) and bh_continuation(third) and bh_continuation(fourth) {
+        if first == 240 and second < 144 { return 0 }
+        if first == 244 and second >= 144 { return 0 }
+        return 4
+    }
+    return 0
+}
+
+def bh_keyword(word: buffer) -> int {
+    if same(word, "def") { return 300 }
+    if same(word, "extern") { return 301 }
+    if same(word, "var") { return 302 }
+    if same(word, "if") { return 303 }
+    if same(word, "else") { return 304 }
+    if same(word, "while") { return 305 }
+    if same(word, "return") { return 306 }
+    if same(word, "true") { return 307 }
+    if same(word, "false") { return 308 }
+    if same(word, "int") { return 309 }
+    if same(word, "float") { return 318 }
+    if same(word, "for") { return 319 }
+    if same(word, "in") { return 320 }
+    if same(word, "break") { return 321 }
+    if same(word, "continue") { return 322 }
+    if same(word, "bool") { return 310 }
+    if same(word, "str") { return 311 }
+    if same(word, "void") { return 312 }
+    if same(word, "struct") { return 313 }
+    if same(word, "enum") { return 315 }
+    if same(word, "match") { return 316 }
+    if same(word, "case") { return 317 }
+    if same(word, "and") { return 260 }
+    if same(word, "or") { return 261 }
+    if same(word, "not") { return 33 }
+    return 1
+}
+
+def bh_line_end(source: buffer, index: int) -> int {
+    if get(source, index) == 13 and bh_peek(source, index + 1) == 10 { return index + 2 }
+    return index + 1
+}
+
+def bh_symbol(first: int, second: int) -> int {
+    if first == 61 and second == 61 { return 256 }
+    if first == 33 and second == 61 { return 257 }
+    if first == 60 and second == 61 { return 258 }
+    if first == 62 and second == 61 { return 259 }
+    if first == 38 and second == 38 { return 260 }
+    if first == 124 and second == 124 { return 261 }
+    if first == 45 and second == 62 { return 262 }
+    if first == 33 or first == 40 or first == 41 or first == 42 or first == 43 or first == 44 or first == 45 { return first }
+    if first == 46 or first == 47 or first == 37 or first == 58 or first == 59 or first == 60 or first == 61 or first == 62 { return first }
+    if first == 91 or first == 93 or first == 123 or first == 125 { return first }
+    return 0
+}
+
+# Validate an entire quoted string and return the byte after its closing quote.
+# A missing quote reaches EOF and records L003. Other errors continue scanning.
+def bh_scan_string(source: buffer, errors: ints, start: int) -> int {
+    var cursor = start + 1
+    var closed = false
+    while cursor < len(source) and not closed {
+        var at = cursor
+        var byte = get(source, cursor)
+        cursor = cursor + bh_utf8_width(source, cursor)
+        if byte == 34 {
+            closed = true
+        } else {
+            if byte == 92 {
+                if cursor < len(source) {
+                    var escaped = get(source, cursor)
+                    cursor = cursor + bh_utf8_width(source, cursor)
+                    if escaped == 0 {
+                        bh_triple(errors, 6, at, cursor)
+                    } else {
+                        if escaped == 13 or escaped == 10 {
+                            if escaped == 13 and bh_peek(source, cursor) == 10 { cursor = cursor + 1 }
+                            bh_triple(errors, 5, at, cursor)
+                        } else {
+                            if escaped != 110 and escaped != 114 and escaped != 116 and escaped != 92 and escaped != 34 {
+                                bh_triple(errors, 4, at, cursor)
+                            }
+                        }
+                    }
+                }
+            } else {
+                if byte == 0 {
+                    bh_triple(errors, 6, at, cursor)
+                } else {
+                    if byte == 13 or byte == 10 {
+                        if byte == 13 and bh_peek(source, cursor) == 10 { cursor = cursor + 1 }
+                        bh_triple(errors, 5, at, cursor)
+                    }
+                }
+            }
+        }
+    }
+    if not closed { bh_triple(errors, 3, start, cursor) }
+    return cursor
+}
+
+# Call only after bh_lex succeeds. The decoded text contains no NUL bytes.
+def bh_string_value(source: buffer, tokens: ints, index: int) -> buffer {
+    var value = buffer()
+    var cursor = bh_token_start(tokens, index) + 1
+    var end = bh_token_end(tokens, index) - 1
+    while cursor < end {
+        var byte = get(source, cursor)
+        cursor = cursor + 1
+        if byte == 92 {
+            byte = get(source, cursor)
+            cursor = cursor + 1
+            if byte == 110 { byte = 10 }
+            if byte == 114 { byte = 13 }
+            if byte == 116 { byte = 9 }
+        }
+        push(value, byte)
+    }
+    return value
+}
+
+def bh_lex(source: buffer, errors: ints) -> ints {
+    var tokens = ints()
+    var cursor = 0
+    while cursor < len(source) {
+        var width = bh_utf8_width(source, cursor)
+        if width == 0 {
+            bh_triple(errors, 7, cursor, cursor + 1)
+            cursor = cursor + 1
+        } else {
+            cursor = cursor + width
+        }
+    }
+    if len(errors) != 0 {
+        bh_triple(tokens, 0, len(source), len(source))
+        return tokens
+    }
+    cursor = 0
+    var depth = 0
+    while cursor < len(source) {
+        var start = cursor
+        var byte = get(source, cursor)
+        var next = bh_peek(source, cursor + 1)
+        var kind = -1
+        if byte == 32 or byte == 9 or byte == 11 or byte == 12 {
+            cursor = cursor + 1
+        } else {
+            if byte == 13 or byte == 10 {
+                cursor = bh_line_end(source, cursor)
+                if depth == 0 { kind = 10 }
+            } else {
+                if byte == 35 or (byte == 47 and next == 47) {
+                    while cursor < len(source) and bh_peek(source, cursor) != 13 and bh_peek(source, cursor) != 10 {
+                        if get(source, cursor) == 0 { bh_triple(errors, 6, cursor, cursor + 1) }
+                        cursor = cursor + bh_utf8_width(source, cursor)
+                    }
+                } else {
+                    if bh_alpha(byte) {
+                        cursor = cursor + 1
+                        while bh_ident_byte(bh_peek(source, cursor)) { cursor = cursor + 1 }
+                        kind = bh_keyword(slice(source, start, cursor - start))
+                    } else {
+                        if bh_digit(byte) {
+                            cursor = cursor + 1
+                            while bh_digit(bh_peek(source, cursor)) { cursor = cursor + 1 }
+                            kind = 2
+                            if bh_peek(source, cursor) == 46 and bh_digit(bh_peek(source, cursor + 1)) {
+                                kind = 4
+                                cursor = cursor + 1
+                                while bh_digit(bh_peek(source, cursor)) { cursor = cursor + 1 }
+                            }
+                            var invalid = false
+                            if bh_peek(source, cursor) == 69 or bh_peek(source, cursor) == 101 {
+                                kind = 4
+                                cursor = cursor + 1
+                                if bh_peek(source, cursor) == 43 or bh_peek(source, cursor) == 45 { cursor = cursor + 1 }
+                                var exponent = cursor
+                                while bh_digit(bh_peek(source, cursor)) { cursor = cursor + 1 }
+                                if cursor == exponent { invalid = true }
+                            }
+                            if bh_alpha(bh_peek(source, cursor)) {
+                                invalid = true
+                                while bh_ident_byte(bh_peek(source, cursor)) { cursor = cursor + 1 }
+                            }
+                            if invalid {
+                                var code = 2
+                                if kind == 4 { code = 8 }
+                                bh_triple(errors, code, start, cursor)
+                                kind = -1
+                            }
+                        } else {
+                            if byte == 34 {
+                                cursor = bh_scan_string(source, errors, start)
+                                kind = 3
+                            } else {
+                                if byte == 0 {
+                                    cursor = cursor + 1
+                                    bh_triple(errors, 6, start, cursor)
+                                } else {
+                                    kind = bh_symbol(byte, next)
+                                    if kind == 0 {
+                                        cursor = cursor + bh_utf8_width(source, cursor)
+                                        bh_triple(errors, 1, start, cursor)
+                                        kind = -1
+                                    } else {
+                                        cursor = cursor + 1
+                                        if kind >= 256 { cursor = cursor + 1 }
+                                        if kind == 40 or kind == 91 { depth = depth + 1 }
+                                        if (kind == 41 or kind == 93) and depth > 0 { depth = depth - 1 }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if kind >= 0 { bh_triple(tokens, kind, start, cursor) }
+    }
+    bh_triple(tokens, 0, len(source), len(source))
+    return tokens
+}

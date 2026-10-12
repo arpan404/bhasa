@@ -1,0 +1,27 @@
+{
+  "milestone": "namespaces-types-tests-native-cache",
+  "status": "complete",
+  "agents": {
+    "frontend_parity": "float/collections",
+    "packages": "modules/privacy/LSP",
+    "rust_cache": "native cache/collection runtime"
+  },
+  "root": "integration/test runner/verification",
+  "heartbeat": "PAUSED",
+  "pending": [],
+  "reference_tests": 384,
+  "source_freeze": true,
+  "focused_review_tests": {
+    "modules": 10,
+    "lsp": 39,
+    "native_runner": 8,
+    "collections": 3
+  },
+  "hybrid_tests": 393,
+  "editor_tests": 33,
+  "archive_key": "2d994114af47078895ebe44fe861ccc4912b40d3c582716019a91f2955ffb938",
+  "selfhost": "build/selfhost/run.75IuC7IS",
+  "release_native_hits": 14,
+  "rust_adapter_runs_without_compilation": 4,
+  "unchanged_hybrid_rebuilds": 2
+}

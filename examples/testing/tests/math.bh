@@ -1,0 +1,4 @@
+import "../math.bh" as math
+
+def test_double() -> bool { return math.double(21) == 42 }
+def test_float() -> bool { return 2.5 * 2.0 == 5.0 }

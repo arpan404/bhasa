@@ -1,0 +1,17 @@
+import "@std"
+
+# Opt-in TLS package: installed OpenSSL 3 is needed only for TLS applications.
+def https_read(socket: tls_socket, timeout_ms: int) -> HttpResult {
+    return http_read_stream[tls_socket](socket, timeout_ms)
+}
+
+def https_write(socket: tls_socket, status: int, body: Text, timeout_ms: int) -> ResultInt {
+    return http_write_stream[tls_socket](socket, status, body, timeout_ms)
+}
+
+# Verified TLS constructor wrapped in a generic result.
+def tls_open(address: Text, port: int, server_name: Text, ca_file: Text, timeout_ms: int) -> Result[tls_socket] {
+    var socket = tls_connect(address.bytes, port, server_name.bytes, ca_file.bytes, timeout_ms)
+    if tls_status(socket) != 0 { return Result[tls_socket].error(text("TLS connect, trust verification or handshake failed")) }
+    return Result[tls_socket].ok(socket)
+}

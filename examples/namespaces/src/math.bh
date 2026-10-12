@@ -1,0 +1,19 @@
+struct Counter {
+    private value: int
+
+    def read(self) -> int {
+        return self.value
+    }
+}
+
+private def double(value: int) -> int {
+    return value * 2
+}
+
+def counter(value: int) -> Counter {
+    return Counter(double(value))
+}
+
+def identity[T](value: T) -> T {
+    return value
+}

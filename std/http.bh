@@ -1,0 +1,384 @@
+import "collections.bh"
+import "result.bh"
+
+# A bounded HTTP/1.0 and HTTP/1.1 request. One request per connection.
+# Transfer-Encoding and ambiguous lengths are rejected. Extra buffered bytes
+# after a request are rejected; the caller closes after one request.
+# Targets use ASCII URI path/query characters and %HH escapes; encode UTF-8
+# bytes as escapes. Host accepts DNS labels, dotted IPv4, or bracketed IPv6,
+# with an optional decimal port 0..65535 and at most 260 authority bytes.
+# DNS names allow a terminal dot; IPv6 allows compression and an IPv4 tail.
+# Userinfo, zone IDs, IPvFuture, raw Unicode targets and fragments are rejected.
+struct HttpRequest {
+    method: Text
+    path: Text
+    headers: StringMap
+    body: buffer
+}
+
+enum HttpResult {
+    ok(value: HttpRequest)
+    error(message: Text)
+}
+
+def http_separator(bytes: buffer) -> int {
+    var index = 0
+    while index + 3 < len(bytes) {
+        if get(bytes, index) == 13 and get(bytes, index + 1) == 10 and get(bytes, index + 2) == 13 and get(bytes, index + 3) == 10 { return index + 4 }
+        index = index + 1
+    }
+    return -1
+}
+
+def http_line_end(bytes: buffer, start: int, stop: int) -> int {
+    var index = start
+    while index + 1 < stop {
+        if get(bytes, index) == 13 and get(bytes, index + 1) == 10 { return index }
+        if get(bytes, index) == 10 or get(bytes, index) == 13 { return -1 }
+        index = index + 1
+    }
+    return -1
+}
+
+def http_token(byte: int) -> bool {
+    return (byte >= 48 and byte <= 57) or (byte >= 65 and byte <= 90) or (byte >= 97 and byte <= 122) or byte == 33 or byte == 35 or byte == 36 or byte == 37 or byte == 38 or byte == 39 or byte == 42 or byte == 43 or byte == 45 or byte == 46 or byte == 94 or byte == 95 or byte == 96 or byte == 124 or byte == 126
+}
+
+def http_lower(bytes: buffer) -> buffer {
+    var result = buffer()
+    var index = 0
+    while index < len(bytes) {
+        var byte = get(bytes, index)
+        if byte >= 65 and byte <= 90 { byte = byte + 32 }
+        push(result, byte)
+        index = index + 1
+    }
+    return result
+}
+
+def http_length(bytes: buffer) -> int {
+    if len(bytes) == 0 { return -1 }
+    var result = 0
+    var index = 0
+    while index < len(bytes) {
+        var byte = get(bytes, index)
+        if byte < 48 or byte > 57 { return -1 }
+        var digit = byte - 48
+        if result > (1048576 - digit) / 10 { return -1 }
+        result = result * 10 + digit
+        index = index + 1
+    }
+    return result
+}
+
+def http_hex(byte: int) -> bool {
+    return (byte >= 48 and byte <= 57) or (byte >= 65 and byte <= 70) or (byte >= 97 and byte <= 102)
+}
+
+def http_target_valid(bytes: buffer) -> bool {
+    if len(bytes) == 0 or get(bytes, 0) != 47 { return false }
+    var index = 0
+    while index < len(bytes) {
+        var byte = get(bytes, index)
+        if byte == 37 {
+            if len(bytes) - index < 3 { return false }
+            if !http_hex(get(bytes, index + 1)) or !http_hex(get(bytes, index + 2)) { return false }
+            index = index + 3
+        } else {
+            # unreserved / sub-delims / ':' / '@', plus path '/' and query '?'.
+            if !((byte >= 48 and byte <= 57) or (byte >= 65 and byte <= 90) or (byte >= 97 and byte <= 122) or byte == 45 or byte == 46 or byte == 95 or byte == 126 or byte == 33 or byte == 36 or byte == 38 or byte == 39 or byte == 40 or byte == 41 or byte == 42 or byte == 43 or byte == 44 or byte == 59 or byte == 61 or byte == 58 or byte == 64 or byte == 47 or byte == 63) { return false }
+            index = index + 1
+        }
+    }
+    return true
+}
+
+def http_ipv4_valid(bytes: buffer, start: int, stop: int) -> bool {
+    if start < 0 or start >= stop or stop > len(bytes) { return false }
+    var index = start
+    var parts = 0
+    while index < stop {
+        var first = index
+        var number = 0
+        while index < stop and get(bytes, index) != 46 {
+            var byte = get(bytes, index)
+            if byte < 48 or byte > 57 or index - first >= 3 { return false }
+            number = number * 10 + byte - 48
+            index = index + 1
+        }
+        if index == first or number > 255 { return false }
+        if index - first > 1 and get(bytes, first) == 48 { return false }
+        parts = parts + 1
+        if parts > 4 { return false }
+        if index < stop {
+            index = index + 1
+            if index == stop { return false }
+        }
+    }
+    return parts == 4
+}
+
+def http_ipv6_valid(bytes: buffer, start: int, stop: int) -> bool {
+    if start < 0 or start >= stop or stop > len(bytes) or stop - start > 45 { return false }
+    var index = start
+    var compressed = false
+    var groups = 0
+    if get(bytes, index) == 58 {
+        if index + 1 >= stop or get(bytes, index + 1) != 58 { return false }
+        compressed = true
+        index = index + 2
+        if index == stop { return true }
+    }
+    while index < stop {
+        var first = index
+        var dotted = false
+        while index < stop and get(bytes, index) != 58 {
+            if get(bytes, index) == 46 { dotted = true }
+            index = index + 1
+        }
+        if dotted {
+            if index != stop or !http_ipv4_valid(bytes, first, stop) { return false }
+            groups = groups + 2
+        } else {
+            if index == first or index - first > 4 { return false }
+            var digit = first
+            while digit < index {
+                if !http_hex(get(bytes, digit)) { return false }
+                digit = digit + 1
+            }
+            groups = groups + 1
+        }
+        if groups > 8 { return false }
+        if index < stop {
+            index = index + 1
+            if index == stop { return false }
+            if get(bytes, index) == 58 {
+                if compressed { return false }
+                compressed = true
+                index = index + 1
+                if index == stop { return groups < 8 }
+            }
+        }
+    }
+    if compressed { return groups < 8 }
+    return groups == 8
+}
+
+def http_dns_valid(bytes: buffer, stop: int) -> bool {
+    if stop <= 0 or stop > len(bytes) { return false }
+    var end = stop
+    if get(bytes, end - 1) == 46 { end = end - 1 }
+    if end == 0 or end > 253 { return false }
+    var index = 0
+    var label = 0
+    var numeric = true
+    var dotted = false
+    while index < end {
+        var byte = get(bytes, index)
+        if byte == 46 {
+            if label == 0 or get(bytes, index - 1) == 45 { return false }
+            label = 0
+            dotted = true
+        } else {
+            if !((byte >= 48 and byte <= 57) or (byte >= 65 and byte <= 90) or (byte >= 97 and byte <= 122) or byte == 45) { return false }
+            if label == 0 and byte == 45 { return false }
+            if byte < 48 or byte > 57 { numeric = false }
+            label = label + 1
+            if label > 63 { return false }
+        }
+        index = index + 1
+    }
+    if label == 0 or get(bytes, end - 1) == 45 { return false }
+    if numeric and dotted { return http_ipv4_valid(bytes, 0, end) }
+    return true
+}
+
+def http_port_valid(bytes: buffer, start: int) -> bool {
+    if start < 0 or start >= len(bytes) { return false }
+    var index = start
+    var port = 0
+    while index < len(bytes) {
+        var digit = get(bytes, index) - 48
+        if digit < 0 or digit > 9 { return false }
+        if port > (65535 - digit) / 10 { return false }
+        port = port * 10 + digit
+        index = index + 1
+    }
+    return true
+}
+
+def http_host_valid(bytes: buffer) -> bool {
+    if len(bytes) == 0 or len(bytes) > 260 { return false }
+    if get(bytes, 0) == 91 {
+        var close = 1
+        while close < len(bytes) and get(bytes, close) != 93 { close = close + 1 }
+        if close == len(bytes) or !http_ipv6_valid(bytes, 1, close) { return false }
+        if close + 1 == len(bytes) { return true }
+        if get(bytes, close + 1) != 58 { return false }
+        return http_port_valid(bytes, close + 2)
+    }
+    var end = 0
+    while end < len(bytes) and get(bytes, end) != 58 { end = end + 1 }
+    if !http_dns_valid(bytes, end) { return false }
+    if end == len(bytes) { return true }
+    return http_port_valid(bytes, end + 1)
+}
+
+# Header parser is independent of sockets for fuzzing and offline validation.
+# The returned body is the prefix already received, up to Content-Length.
+def http_parse_head(bytes: buffer) -> HttpResult {
+    var end = http_separator(bytes)
+    if end < 0 or end > 16384 { return HttpResult.error(text("invalid or oversized HTTP headers")) }
+    var line = http_line_end(bytes, 0, end)
+    if line < 0 { return HttpResult.error(text("invalid HTTP request line")) }
+    var first = -1
+    var second = -1
+    var index = 0
+    while index < line {
+        var byte = get(bytes, index)
+        if byte == 32 {
+            if first < 0 { first = index } else {
+                if second >= 0 { return HttpResult.error(text("invalid HTTP request line")) }
+                second = index
+            }
+        } else {
+            if byte < 33 or byte == 127 { return HttpResult.error(text("invalid HTTP request line")) }
+        }
+        index = index + 1
+    }
+    if first <= 0 or second <= first + 1 or second + 1 >= line { return HttpResult.error(text("invalid HTTP request line")) }
+    index = 0
+    while index < first {
+        if !http_token(get(bytes, index)) { return HttpResult.error(text("invalid HTTP method")) }
+        index = index + 1
+    }
+    var version = slice(bytes, second + 1, line - second - 1)
+    if !same(version, "HTTP/1.1") and !same(version, "HTTP/1.0") { return HttpResult.error(text("unsupported HTTP version")) }
+    var path = slice(bytes, first + 1, second - first - 1)
+    if !http_target_valid(path) { return HttpResult.error(text("invalid HTTP origin-form target")) }
+    var headers = string_map()
+    var content_length = 0
+    var saw_length = false
+    var saw_host = false
+    var fields = 0
+    index = line + 2
+    while index < end - 2 {
+        var stop = http_line_end(bytes, index, end)
+        if stop <= index { return HttpResult.error(text("invalid HTTP header line")) }
+        var colon = index
+        while colon < stop and get(bytes, colon) != 58 {
+            if !http_token(get(bytes, colon)) { return HttpResult.error(text("invalid HTTP header name")) }
+            colon = colon + 1
+        }
+        if colon == index or colon == stop { return HttpResult.error(text("invalid HTTP header name")) }
+        var name = Text(http_lower(slice(bytes, index, colon - index)))
+        var start = colon + 1
+        var finish = stop
+        while start < finish and (get(bytes, start) == 32 or get(bytes, start) == 9) { start = start + 1 }
+        while finish > start and (get(bytes, finish - 1) == 32 or get(bytes, finish - 1) == 9) { finish = finish - 1 }
+        var cursor = start
+        while cursor < finish {
+            var byte = get(bytes, cursor)
+            if (byte < 32 and byte != 9) or byte > 126 { return HttpResult.error(text("invalid HTTP header value")) }
+            cursor = cursor + 1
+        }
+        var value = Text(slice(bytes, start, finish - start))
+        if same(name.bytes, "transfer-encoding") { return HttpResult.error(text("Transfer-Encoding is unsupported")) }
+        if same(name.bytes, "content-length") {
+            if saw_length { return HttpResult.error(text("duplicate Content-Length")) }
+            saw_length = true
+            content_length = http_length(value.bytes)
+            if content_length < 0 { return HttpResult.error(text("invalid or oversized Content-Length")) }
+        }
+        if same(name.bytes, "host") {
+            if saw_host or !http_host_valid(value.bytes) { return HttpResult.error(text("invalid or duplicate Host")) }
+            saw_host = true
+        }
+        if headers.has(name) { return HttpResult.error(text("duplicate HTTP header")) }
+        headers.put(name, value)
+        fields = fields + 1
+        if fields > 100 { return HttpResult.error(text("too many HTTP headers")) }
+        index = stop + 2
+    }
+    if same(version, "HTTP/1.1") and !saw_host { return HttpResult.error(text("HTTP/1.1 requires Host")) }
+    var body = slice(bytes, end, len(bytes) - end)
+    if len(body) > content_length { return HttpResult.error(text("unexpected bytes after HTTP request")) }
+    return HttpResult.ok(HttpRequest(Text(slice(bytes, 0, first)), Text(path), headers, body))
+}
+
+def http_read(socket: tcp_socket, timeout_ms: int) -> HttpResult {
+    return http_read_stream[tcp_socket](socket, timeout_ms)
+}
+
+def http_read_stream[T](socket: T, timeout_ms: int) -> HttpResult {
+    if timeout_ms < 0 or timeout_ms > 2147483647 { return HttpResult.error(text("invalid HTTP timeout")) }
+    var deadline = monotonic_millis() + timeout_ms
+    var wire = buffer()
+    var chunk = buffer()
+    while http_separator(wire) < 0 {
+        if len(wire) >= 16384 { return HttpResult.error(text("HTTP headers exceed 16 KiB")) }
+        var remaining = deadline - monotonic_millis()
+        if remaining < 0 { return HttpResult.error(text("HTTP request deadline exceeded")) }
+        var status = stream_read(socket, chunk, 4096, remaining)
+        if status != 0 { return HttpResult.error(text("HTTP header read failed or timed out")) }
+        if len(chunk) == 0 { return HttpResult.error(text("EOF in HTTP headers")) }
+        append(wire, chunk)
+    }
+    match http_parse_head(wire) {
+        case HttpResult.error(message) { return HttpResult.error(message) }
+        case HttpResult.ok(request) {
+            var wanted = 0
+            match request.headers.get(text("content-length")) {
+                case OptionText.none { wanted = 0 }
+                case OptionText.some(length) { wanted = http_length(length.bytes) }
+            }
+            while len(request.body) < wanted {
+                var remaining = deadline - monotonic_millis()
+                if remaining < 0 { return HttpResult.error(text("HTTP request deadline exceeded")) }
+                var status = stream_read(socket, chunk, wanted - len(request.body), remaining)
+                if status != 0 { return HttpResult.error(text("HTTP body read failed or timed out")) }
+                if len(chunk) == 0 { return HttpResult.error(text("EOF in HTTP body")) }
+                append(request.body, chunk)
+            }
+            return HttpResult.ok(request)
+        }
+    }
+}
+
+def http_reason(status: int) -> str {
+    if status == 200 { return "OK" }
+    if status == 400 { return "Bad Request" }
+    if status == 404 { return "Not Found" }
+    if status == 408 { return "Request Timeout" }
+    if status == 413 { return "Content Too Large" }
+    if status == 431 { return "Request Header Fields Too Large" }
+    return "Internal Server Error"
+}
+
+def http_response(status: int, body: Text) -> ResultBuffer {
+    if !body.valid() or len(body.bytes) > 1048576 { return ResultBuffer.error(text("invalid or oversized HTTP response")) }
+    var code = status
+    if code != 200 and code != 400 and code != 404 and code != 408 and code != 413 and code != 431 { code = 500 }
+    var result = buffer("HTTP/1.1 ")
+    append(result, to_buffer(code)); append(result, " "); append(result, http_reason(code))
+    append(result, "\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: ")
+    append(result, to_buffer(len(body.bytes)))
+    append(result, "\r\nConnection: close\r\n\r\n")
+    append(result, body.bytes)
+    return ResultBuffer.ok(result)
+}
+
+def http_write(socket: tcp_socket, status: int, body: Text, timeout_ms: int) -> ResultInt {
+    return http_write_stream[tcp_socket](socket, status, body, timeout_ms)
+}
+
+def http_write_stream[T](socket: T, status: int, body: Text, timeout_ms: int) -> ResultInt {
+    match http_response(status, body) {
+        case ResultBuffer.error(message) { return ResultInt.error(message) }
+        case ResultBuffer.ok(response) {
+            var error = stream_write(socket, response, timeout_ms)
+            if error != 0 { return ResultInt.error(text("HTTP write failed or timed out")) }
+            return ResultInt.ok(len(response))
+        }
+    }
+}

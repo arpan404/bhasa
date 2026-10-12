@@ -1,0 +1,61 @@
+def receive_three(socket: tcp_socket, destination: buffer) -> int {
+    var chunk = buffer()
+    while len(destination) < 3 {
+        var status = tcp_read(socket, chunk, 3 - len(destination))
+        if status != 0 { return status }
+        if len(chunk) == 0 { return 1 }
+        append(destination, chunk)
+    }
+    return 0
+}
+
+def exchange(listener: tcp_listener) -> int {
+    var status = tcp_listener_status(listener)
+    if status != 0 { return status }
+    var port = tcp_local_port(listener)
+    if port <= 0 { return 1 }
+    var client = tcp_connect("127.0.0.1", port)
+    status = tcp_socket_status(client)
+    if status != 0 { return status }
+    var server = tcp_accept(listener)
+    status = tcp_socket_status(server)
+    if status != 0 { return status }
+
+    var payload = buffer("x")
+    push(payload, 0)
+    push(payload, 255)
+    status = tcp_write(client, payload)
+    if status != 0 { return status }
+    var request = buffer()
+    status = receive_three(server, request)
+    if status != 0 { return status }
+    if !same(request, payload) { return 1 }
+    status = tcp_write(server, request)
+    if status != 0 { return status }
+    var response = buffer()
+    status = receive_three(client, response)
+    if status != 0 { return status }
+    if !same(response, payload) { return 1 }
+    return 0
+}
+
+def main() -> int {
+    var text_listener = tcp_listen_on("127.0.0.1", 0)
+    var status = exchange(text_listener)
+    if status != 0 { return status }
+
+    var host = buffer("127.0.0.1")
+    var bytes_listener = tcp_listen_on(host, 0)
+    set(host, 0, 255)
+    status = exchange(bytes_listener)
+    if status != 0 { return status }
+
+    var failed = tcp_listen_on("localhost", 0)
+    if tcp_listener_status(failed) == 0 { return 1 }
+    failed = tcp_listen_on(buffer("::1%lo0"), 0)
+    if tcp_listener_status(failed) == 0 { return 1 }
+    failed = tcp_listen_on("127.0.0.1", 65536)
+    if tcp_listener_status(failed) == 0 { return 1 }
+    print("TCP explicit bind OK")
+    return 0
+}

@@ -1,0 +1,20 @@
+def main() {
+    var value: int = 10
+    if true {
+        var value = 20
+        print(value)
+        if true {
+            var value = 30
+            print(value)
+        }
+        print(value)
+    } else {
+        var value = 99
+        print(value)
+    }
+    print(value)
+    if true {
+        value = value + 1
+    }
+    print(value)
+}

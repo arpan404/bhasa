@@ -1,0 +1,204 @@
+# Concatenate after lexer.bh with check.sh. A failure prints the failing
+# category and input value, then main returns a nonzero process exit status.
+
+def expect_bool(label: str, input: int, actual: bool, expected: bool) -> int {
+    if actual == expected { return 0 }
+    print(label)
+    print(input)
+    print(actual)
+    print(expected)
+    return 1
+}
+
+def expect_int(label: str, input: int, actual: int, expected: int) -> int {
+    if actual == expected { return 0 }
+    print(label)
+    print(input)
+    print(actual)
+    print(expected)
+    return 1
+}
+
+def check_symbol(first: int, second: int, expected_kind: int, expected_width: int) -> int {
+    var kind = symbol_kind(first, second)
+    var failures = expect_int("symbol kind: first, actual, expected", first, kind, expected_kind)
+    failures = failures + expect_int("symbol width: first, actual, expected", first, symbol_width(kind), expected_width)
+    if failures > 0 {
+        print("symbol lookahead")
+        print(second)
+    }
+    return failures
+}
+
+def test_ascii() -> int {
+    var failures = 0
+    var byte = -1
+    var digits = 0
+    var letters = 0
+    var starts = 0
+    var continues = 0
+    var spaces = 0
+    while byte <= 256 {
+        # Independent finite-domain expectations, including both sentinels
+        # and every high byte. Byte values are decimal ASCII, not characters.
+        var digit = byte >= 48 and byte < 58
+        var letter = (byte > 64 and byte < 91) or (byte > 96 and byte < 123)
+        var start = letter or byte == 95
+        failures = failures + expect_bool("digit", byte, ascii_is_digit(byte), digit)
+        failures = failures + expect_bool("letter", byte, ascii_is_alpha(byte), letter)
+        failures = failures + expect_bool("identifier start", byte, ascii_is_identifier_start(byte), start)
+        failures = failures + expect_bool("identifier continue", byte, ascii_is_identifier_continue(byte), start or digit)
+        failures = failures + expect_bool("horizontal space", byte, ascii_is_horizontal_space(byte), byte == 9 or byte == 32)
+        var value = -1
+        if digit { value = byte - 48 }
+        failures = failures + expect_int("decimal digit value", byte, decimal_digit_value(byte), value)
+        if ascii_is_digit(byte) { digits = digits + 1 }
+        if ascii_is_alpha(byte) { letters = letters + 1 }
+        if ascii_is_identifier_start(byte) { starts = starts + 1 }
+        if ascii_is_identifier_continue(byte) { continues = continues + 1 }
+        if ascii_is_horizontal_space(byte) { spaces = spaces + 1 }
+        byte = byte + 1
+    }
+    failures = failures + expect_int("digit count", 0, digits, 10)
+    failures = failures + expect_int("letter count", 0, letters, 52)
+    failures = failures + expect_int("identifier start count", 0, starts, 53)
+    failures = failures + expect_int("identifier continue count", 0, continues, 63)
+    failures = failures + expect_int("horizontal space count", 0, spaces, 2)
+    failures = failures + expect_bool("large negative byte", -1000, ascii_is_identifier_continue(-1000), false)
+    failures = failures + expect_bool("large positive byte", 1000, ascii_is_identifier_continue(1000), false)
+    return failures
+}
+
+def test_symbols() -> int {
+    var failures = 0
+    # Every two-byte spelling and each ambiguous one-byte fallback.
+    failures = failures + check_symbol(61, 61, 256, 2)
+    failures = failures + check_symbol(33, 61, 257, 2)
+    failures = failures + check_symbol(60, 61, 258, 2)
+    failures = failures + check_symbol(62, 61, 259, 2)
+    failures = failures + check_symbol(38, 38, 260, 2)
+    failures = failures + check_symbol(124, 124, 261, 2)
+    failures = failures + check_symbol(45, 62, 262, 2)
+    failures = failures + check_symbol(61, -1, 61, 1)
+    failures = failures + check_symbol(33, -1, 33, 1)
+    failures = failures + check_symbol(60, -1, 60, 1)
+    failures = failures + check_symbol(62, -1, 62, 1)
+    failures = failures + check_symbol(45, -1, 45, 1)
+    failures = failures + check_symbol(38, -1, 0, 0)
+    failures = failures + check_symbol(124, -1, 0, 0)
+    failures = failures + check_symbol(47, 47, 0, 0)
+    failures = failures + check_symbol(35, -1, 0, 0)
+    failures = failures + check_symbol(45, 45, 45, 1)
+    failures = failures + check_symbol(43, 43, 43, 1)
+    failures = failures + check_symbol(42, 42, 42, 1)
+    failures = failures + check_symbol(47, 42, 47, 1)
+
+    # Check all single-byte spellings and reject all other first bytes.
+    var byte = -1
+    while byte <= 256 {
+        var expected = 0
+        if byte == 33 or byte == 37 or byte == 40 or byte == 41 or byte == 42 {
+            expected = byte
+        }
+        if byte >= 43 and byte <= 45 { expected = byte }
+        if byte == 47 or byte == 58 or byte == 59 { expected = byte }
+        if byte >= 60 and byte <= 62 { expected = byte }
+        if byte == 123 or byte == 125 { expected = byte }
+        var width = 0
+        if expected > 0 { width = 1 }
+        failures = failures + check_symbol(byte, -1, expected, width)
+        byte = byte + 1
+    }
+
+    # Explore every byte pair. There are exactly seven two-byte symbols,
+    # and comment recognition must win over punctuation recognition.
+    var first = -1
+    var double_symbols = 0
+    var comments = 0
+    while first <= 256 {
+        var second = -1
+        while second <= 256 {
+            var comment = first == 35 or (first == 47 and second == 47)
+            failures = failures + expect_bool("comment start", first, starts_line_comment(first, second), comment)
+            var kind = symbol_kind(first, second)
+            # The preceding sweep verified every EOF fallback. Only these
+            # seven pairs and the two comment prefixes may change it.
+            var expected_kind = symbol_kind(first, -1)
+            if first == 61 and second == 61 { expected_kind = 256 }
+            if first == 33 and second == 61 { expected_kind = 257 }
+            if first == 60 and second == 61 { expected_kind = 258 }
+            if first == 62 and second == 61 { expected_kind = 259 }
+            if first == 38 and second == 38 { expected_kind = 260 }
+            if first == 124 and second == 124 { expected_kind = 261 }
+            if first == 45 and second == 62 { expected_kind = 262 }
+            if comment { expected_kind = 0 }
+            var pair_failures = expect_int("symbol pair: first, actual, expected", first, kind, expected_kind)
+            if pair_failures > 0 {
+                print("symbol pair lookahead")
+                print(second)
+            }
+            failures = failures + pair_failures
+            if starts_line_comment(first, second) {
+                comments = comments + 1
+                failures = failures + expect_int("comment cannot be punctuation", first, kind, 0)
+            }
+            if symbol_width(kind) == 2 { double_symbols = double_symbols + 1 }
+            second = second + 1
+        }
+        first = first + 1
+    }
+    failures = failures + expect_int("two-byte symbol count", 0, double_symbols, 7)
+    failures = failures + expect_int("comment prefix count", 0, comments, 259)
+    return failures
+}
+
+def test_token_helpers() -> int {
+    var failures = 0
+    var kind = -1
+    var binary_count = 0
+    var unary_count = 0
+    var single_count = 0
+    var double_count = 0
+    while kind <= 300 {
+        var precedence = 0
+        if kind == 261 { precedence = 1 }
+        if kind == 260 { precedence = 2 }
+        if kind == 256 or kind == 257 { precedence = 3 }
+        if kind == 60 or kind == 62 or kind == 258 or kind == 259 { precedence = 4 }
+        if kind == 43 or kind == 45 { precedence = 5 }
+        if kind == 42 or kind == 47 or kind == 37 { precedence = 6 }
+        failures = failures + expect_int("binary precedence", kind, binary_precedence(kind), precedence)
+        failures = failures + expect_bool("binary operator", kind, is_binary_operator(kind), precedence > 0)
+        failures = failures + expect_bool("unary operator", kind, is_unary_operator(kind), kind == 33 or kind == 45)
+        var width = 0
+        if kind == 33 or kind == 37 or kind == 40 or kind == 41 or kind == 42 { width = 1 }
+        if kind >= 43 and kind <= 45 { width = 1 }
+        if kind == 47 or kind == 58 or kind == 59 { width = 1 }
+        if kind >= 60 and kind <= 62 { width = 1 }
+        if kind == 123 or kind == 125 { width = 1 }
+        if kind >= 256 and kind <= 262 { width = 2 }
+        failures = failures + expect_int("symbol width", kind, symbol_width(kind), width)
+        if is_binary_operator(kind) { binary_count = binary_count + 1 }
+        if is_unary_operator(kind) { unary_count = unary_count + 1 }
+        if symbol_width(kind) == 1 { single_count = single_count + 1 }
+        if symbol_width(kind) == 2 { double_count = double_count + 1 }
+        kind = kind + 1
+    }
+    failures = failures + expect_int("binary operator count", 0, binary_count, 13)
+    failures = failures + expect_int("unary operator count", 0, unary_count, 2)
+    failures = failures + expect_int("one-byte symbol count", 0, single_count, 16)
+    failures = failures + expect_int("two-byte kind count", 0, double_count, 7)
+    failures = failures + expect_int("large invalid kind", 1000, symbol_width(1000), 0)
+    return failures
+}
+
+def main() -> int {
+    var failures = test_ascii() + test_symbols() + test_token_helpers()
+    if failures > 0 {
+        print("Bhasa compiler seed checks failed")
+        print(failures)
+        return 1
+    }
+    print("Bhasa compiler seed checks passed")
+    return 0
+}

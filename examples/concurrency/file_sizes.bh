@@ -1,0 +1,22 @@
+# Each worker owns its file contents; only the byte count crosses threads.
+def file_size(argument: int) -> int {
+    var contents = buffer()
+    var status = read_file(arg(argument), contents)
+    if status != 0 { return -status }
+    return len(contents)
+}
+
+def main() -> int {
+    if arg_count() != 3 {
+        print("usage: file_sizes FIRST SECOND")
+        return 2
+    }
+    var first = spawn(file_size(1))
+    var second = spawn(file_size(2))
+    var first_size = join(first)
+    var second_size = join(second)
+    if first_size < 0 or second_size < 0 { return 1 }
+    print(first_size)
+    print(second_size)
+    return 0
+}

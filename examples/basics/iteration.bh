@@ -1,0 +1,25 @@
+def main() {
+    var total = 0
+    for number in range(1, 6) {
+        if number == 3 { continue }
+        total = total + number
+    }
+    print(total)
+
+    var names = List[buffer]()
+    names.push(buffer("first"))
+    names.push(buffer("second"))
+    for name in names {
+        names.clear()
+        append(name, "!")
+        print(name)
+    }
+    print(names.count())
+
+    var count = 0
+    while true {
+        count = count + 1
+        if count == 3 { break }
+    }
+    print(count)
+}

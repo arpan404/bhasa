@@ -1,0 +1,118 @@
+import "result.bh"
+
+# Concrete typed collections. Use the factories to establish their packed
+# storage invariants. Fields are public because Bhasa has no visibility yet.
+# Changing them directly may invalidate the collection; valid() checks shape.
+struct StringList {
+    storage: buffer
+    offsets: ints
+
+    def count(self) -> int { return len(self.offsets) - 1 }
+    def valid(self) -> bool {
+        if len(self.offsets) == 0 { return false }
+        if get(self.offsets, 0) != 0 { return false }
+        var index = 1
+        while index < len(self.offsets) {
+            if get(self.offsets, index) < get(self.offsets, index - 1) { return false }
+            if get(self.offsets, index) > len(self.storage) { return false }
+            index = index + 1
+        }
+        return get(self.offsets, len(self.offsets) - 1) == len(self.storage)
+    }
+    def push(self, value: Text) {
+        append(self.storage, value.bytes)
+        push(self.offsets, len(self.storage))
+    }
+    def get(self, index: int) -> Text {
+        var start = get(self.offsets, index)
+        var end = get(self.offsets, index + 1)
+        return Text(slice(self.storage, start, end - start))
+    }
+    def set(self, index: int, value: Text) {
+        # Validate the index even for an empty list before replacing storage.
+        var start = get(self.offsets, index)
+        var end = get(self.offsets, index + 1)
+        var replacement = buffer()
+        append(replacement, slice(self.storage, 0, start))
+        append(replacement, value.bytes)
+        append(replacement, slice(self.storage, end, len(self.storage) - end))
+        var delta = len(value.bytes) - (end - start)
+        var offset = index + 1
+        while offset < len(self.offsets) {
+            set(self.offsets, offset, get(self.offsets, offset) + delta)
+            offset = offset + 1
+        }
+        self.storage = replacement
+    }
+    def find(self, value: Text) -> int {
+        var index = 0
+        while index < self.count() {
+            var item = self.get(index)
+            if item.equals(value) { return index }
+            index = index + 1
+        }
+        return -1
+    }
+}
+
+def string_list() -> StringList {
+    var offsets = ints()
+    push(offsets, 0)
+    return StringList(buffer(), offsets)
+}
+
+struct StringIntMap {
+    keys: StringList
+    values: ints
+
+    def count(self) -> int { return self.keys.count() }
+    def valid(self) -> bool { return self.keys.valid() and self.keys.count() == len(self.values) }
+    def find(self, key: Text) -> int { return self.keys.find(key) }
+    def has(self, key: Text) -> bool { return self.find(key) >= 0 }
+    def value_at(self, index: int) -> int { return get(self.values, index) }
+    def get(self, key: Text) -> OptionInt {
+        var index = self.find(key)
+        if index < 0 { return OptionInt.none() }
+        return OptionInt.some(get(self.values, index))
+    }
+    def put(self, key: Text, value: int) {
+        var index = self.find(key)
+        if index < 0 {
+            self.keys.push(key)
+            push(self.values, value)
+        } else {
+            set(self.values, index, value)
+        }
+    }
+}
+
+def string_int_map() -> StringIntMap { return StringIntMap(string_list(), ints()) }
+
+struct StringMap {
+    keys: StringList
+    values: StringList
+
+    def count(self) -> int { return self.keys.count() }
+    def valid(self) -> bool {
+        return self.keys.valid() and self.values.valid() and self.keys.count() == self.values.count()
+    }
+    def find(self, key: Text) -> int { return self.keys.find(key) }
+    def has(self, key: Text) -> bool { return self.find(key) >= 0 }
+    def value_at(self, index: int) -> Text { return self.values.get(index) }
+    def get(self, key: Text) -> OptionText {
+        var index = self.find(key)
+        if index < 0 { return OptionText.none() }
+        return OptionText.some(self.values.get(index))
+    }
+    def put(self, key: Text, value: Text) {
+        var index = self.find(key)
+        if index < 0 {
+            self.keys.push(key)
+            self.values.push(value)
+        } else {
+            self.values.set(index, value)
+        }
+    }
+}
+
+def string_map() -> StringMap { return StringMap(string_list(), string_list()) }

@@ -1,0 +1,32 @@
+def test_range_control() -> bool {
+    var total = 0
+    for value in range(1, 6) {
+        if value == 3 { continue }
+        total = total + value
+        value = 99
+    }
+    return total == 12
+}
+
+def test_list_snapshot() -> bool {
+    var values = List[float]()
+    values.push(0.25)
+    values.push(1.5)
+    var total = 0.0
+    for value in values {
+        values.clear()
+        total = total + value
+    }
+    return total == 1.75 and values.count() == 0
+}
+
+def test_nested_break() -> bool {
+    var count = 0
+    for outer in range(3) {
+        for inner in range(4) {
+            if inner == 1 { break }
+            count = count + 1
+        }
+    }
+    return count == 3
+}

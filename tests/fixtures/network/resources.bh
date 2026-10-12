@@ -1,0 +1,47 @@
+def listener_copy(value: tcp_listener) -> tcp_listener {
+    return value
+}
+
+def socket_copy(value: tcp_socket) -> tcp_socket {
+    return value
+}
+
+def connection(port: int) -> tcp_socket {
+    var result = tcp_connect("127.0.0.1", port)
+    return result
+}
+
+def main() -> int {
+    var listener = tcp_listen(0)
+    var status = tcp_listener_status(listener)
+    if status != 0 { return status }
+    var kept_listener = listener_copy(listener)
+    status = tcp_listener_status(kept_listener)
+    if status != 0 { return status }
+    var port = tcp_local_port(kept_listener)
+    listener = tcp_listen(-1)
+    if tcp_listener_status(listener) == 0 { return 1 }
+
+    var client = connection(port)
+    status = tcp_socket_status(client)
+    if status != 0 { return status }
+    var accepted = tcp_accept(kept_listener)
+    status = tcp_socket_status(accepted)
+    if status != 0 { return status }
+    var kept_socket = socket_copy(accepted)
+    status = tcp_socket_status(kept_socket)
+    if status != 0 { return status }
+    accepted = tcp_connect("", 1)
+    if tcp_socket_status(accepted) == 0 { return 1 }
+
+    var payload = buffer()
+    push(payload, 0)
+    status = tcp_write(kept_socket, payload)
+    if status != 0 { return status }
+    var received = buffer("replace")
+    status = tcp_read(client, received, 1)
+    if status != 0 { return status }
+    if !same(received, payload) { return 1 }
+    print("TCP resource copies OK")
+    return 0
+}
