@@ -57,7 +57,7 @@ printf '%s\n' 'B and C emit identical LLVM for their complete compiler source.'
 
 # These expected outputs are committed language examples, not compiler output
 # from stage 0. B and C compile and execute each program independently.
-for name in hello arithmetic loops ranges bits stepped_ranges recursion scopes short_circuit strings; do
+for name in hello arithmetic loops ranges bits stepped_ranges bindings recursion scopes short_circuit strings; do
     source="$repo_dir/examples/basics/$name.bh"
     case "$name" in
         hello) printf '%s\n' 'Hello, Bhasa!' 'नमस्ते • こんにちは • 🌍' ;;
@@ -66,6 +66,7 @@ for name in hello arithmetic loops ranges bits stepped_ranges recursion scopes s
         ranges) printf '%s\n' 12 6 3 ;;
         bits) printf '%s\n' 2 15 5 -11 8 -4 true -9223372036854775808 -9223372036854775808 ;;
         stepped_ranges) printf '%s\n' 12 8 2 ;;
+        bindings) printf '%s\n' 'hello world' 2 12 ;;
         recursion) printf '%s\n' 3628800 55 ;;
         scopes) printf '%s\n' 20 30 20 10 11 ;;
         short_circuit) printf '%s\n' false true false true 10 true 20 true 30 true 40 true false true 50 true ;;

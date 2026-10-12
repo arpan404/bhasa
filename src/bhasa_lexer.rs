@@ -465,6 +465,7 @@ fn compile_inner(
                     217 => "float literal cannot be represented as finite binary64",
                     218 => "try requires an enum with exactly ok(value) and error(value)",
                     219 => "try requires a compatible result return type with the same error payload",
+        220 => "immutable binding cannot be reassigned",
                     _ => return Err("frontend returned an unknown diagnostic code".to_owned()),
                 };
                 Ok(Diagnostic::new(

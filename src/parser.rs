@@ -47,6 +47,16 @@ pub fn starts_try_initializer(tokens: &[Token], index: usize) -> bool {
         )
 }
 
+/// Recognize contextual `let` at a statement start without reserving the name.
+/// The immediately following token must be an identifier; never skip newlines.
+pub fn starts_let_declaration(tokens: &[Token], index: usize) -> bool {
+    matches!(tokens.get(index).map(|token| &token.kind), Some(TokenKind::Ident(name)) if name == "let")
+        && matches!(
+            tokens.get(index + 1).map(|token| &token.kind),
+            Some(TokenKind::Ident(_))
+        )
+}
+
 struct Parser {
     tokens: Vec<Token>,
     cursor: usize,
@@ -338,8 +348,9 @@ impl Parser {
 
     fn statement_without_match(&mut self, depth: usize) -> ParseResult<Stmt> {
         let start = self.current().span;
+        let immutable = starts_let_declaration(&self.tokens, self.cursor);
         let (kind, end, simple) = match self.current().kind {
-            TokenKind::Var => {
+            TokenKind::Var | TokenKind::Ident(_) if self.at(&TokenKind::Var) || immutable => {
                 self.advance();
                 let (name, name_span) = self.identifier("a variable name after 'var'")?;
                 let annotation = if self.take(&TokenKind::Colon).is_some() {
@@ -358,6 +369,7 @@ impl Parser {
                 let kind = if let Some(try_span) = try_span {
                     StmtKind::TryVar {
                         name,
+                        reassignable: !immutable,
                         name_span,
                         annotation,
                         value,
@@ -367,6 +379,7 @@ impl Parser {
                 } else {
                     StmtKind::Var {
                         name,
+                        reassignable: !immutable,
                         annotation,
                         value,
                     }

@@ -85,7 +85,7 @@ struct Checker {
     diagnostics: Vec<Diagnostic>,
     // None records a binding whose initializer failed, avoiding spurious
     // "unknown variable" diagnostics on subsequent uses of that binding.
-    scopes: Vec<BTreeMap<String, Option<Type>>>,
+    scopes: Vec<BTreeMap<String, LocalBinding>>,
     return_type: Type,
     tasks: Vec<BTreeMap<String, TaskState>>,
     /// First body scope exited by a break/continue, nearest loop last.
@@ -98,6 +98,12 @@ struct Checker {
     enums: BTreeMap<usize, EnumDecl>,
     enum_names: BTreeMap<String, usize>,
     type_names: Vec<String>,
+}
+
+#[derive(Clone, Copy)]
+struct LocalBinding {
+    ty: Option<Type>,
+    reassignable: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -652,9 +658,10 @@ impl Checker {
             .collect();
         let mut scope = BTreeMap::new();
         for param in &function.params {
-            scope
-                .entry(param.name.clone())
-                .or_insert((param.ty != Type::Void).then_some(param.ty));
+            scope.entry(param.name.clone()).or_insert(LocalBinding {
+                ty: (param.ty != Type::Void).then_some(param.ty),
+                reassignable: true,
+            });
         }
         // Parameters and declarations in the outer body share one scope.
         self.scopes.push(scope);
@@ -708,14 +715,18 @@ impl Checker {
         flow
     }
 
-    fn lookup_local(&self, name: &str) -> Option<Option<Type>> {
+    fn lookup_binding(&self, name: &str) -> Option<LocalBinding> {
         self.scopes
             .iter()
             .rev()
             .find_map(|scope| scope.get(name).copied())
     }
 
-    fn declare_local(&mut self, name: &str, ty: Option<Type>, span: Span) {
+    fn lookup_local(&self, name: &str) -> Option<Option<Type>> {
+        self.lookup_binding(name).map(|binding| binding.ty)
+    }
+
+    fn declare_local(&mut self, name: &str, ty: Option<Type>, span: Span, reassignable: bool) {
         self.check_reserved_name(name, span);
         if self.lookup_local(name) == Some(Some(Type::Task)) {
             self.error(
@@ -727,7 +738,7 @@ impl Checker {
         if let Some(scope) = self.scopes.last_mut() {
             match scope.entry(name.to_owned()) {
                 Entry::Vacant(entry) => {
-                    entry.insert(ty);
+                    entry.insert(LocalBinding { ty, reassignable });
                 }
                 Entry::Occupied(_) => self.error(
                     "S007",
@@ -961,6 +972,7 @@ impl Checker {
         match &mut statement.kind {
             StmtKind::Var {
                 name,
+                reassignable,
                 annotation,
                 value,
             } => {
@@ -996,7 +1008,7 @@ impl Checker {
                     }
                     None => actual,
                 };
-                self.declare_local(name, ty, statement.span);
+                self.declare_local(name, ty, statement.span, *reassignable);
                 if actual == Some(Type::Task) {
                     let result = match &value.kind {
                         ExprKind::Call { name, args }
@@ -1021,6 +1033,7 @@ impl Checker {
             }
             StmtKind::TryVar {
                 name,
+                reassignable,
                 name_span,
                 annotation,
                 value,
@@ -1087,7 +1100,7 @@ impl Checker {
                     }
                     None => *success_type,
                 };
-                self.declare_local(name, ty, *name_span);
+                self.declare_local(name, ty, *name_span, *reassignable);
                 return Flow::NEXT.branch(Flow::RETURN);
             }
             StmtKind::Assign { name, value } => {
@@ -1095,6 +1108,16 @@ impl Checker {
                     self.error(
                         "S019",
                         format!("task handle '{name}' cannot be reassigned"),
+                        statement.span,
+                    );
+                }
+                if self
+                    .lookup_binding(name)
+                    .is_some_and(|binding| !binding.reassignable)
+                {
+                    self.error(
+                        "S036",
+                        format!("binding '{name}' declared with let cannot be reassigned"),
                         statement.span,
                     );
                 }
@@ -1254,7 +1277,7 @@ impl Checker {
                 self.loops.push(self.scopes.len());
                 self.scopes.push(BTreeMap::new());
                 self.tasks.push(BTreeMap::new());
-                self.declare_local(name, *element_type, *name_span);
+                self.declare_local(name, *element_type, *name_span, true);
                 self.check_block(body);
                 self.tasks.pop();
                 self.scopes.pop();
@@ -1322,7 +1345,7 @@ impl Checker {
                             .as_ref()
                             .and_then(|variant| variant.fields.get(index))
                             .map(|field| field.ty);
-                        self.declare_local(&binding.name, binding.ty, binding.span);
+                        self.declare_local(&binding.name, binding.ty, binding.span, true);
                     }
                     returns = returns.branch(self.check_block(&mut arm.body));
                     self.tasks.pop();
@@ -2147,6 +2170,7 @@ mod tests {
     fn var(name: &str, annotation: Option<Type>, value: Expr) -> Stmt {
         stmt(StmtKind::Var {
             name: name.into(),
+            reassignable: true,
             annotation,
             value,
         })

@@ -16,7 +16,7 @@ after verified increments. Existing caches are preserved.
 - [x] Add checked local definitions, references and versioned rename with editor providers.
 - [x] Snapshot iteration for buffer/ints/Map keys, including cleanup and worker safety.
 - [x] Typed file errors, explicit initializer propagation and immediate Result-discard rejection.
-- [ ] Binding-only immutable locals are drafted under `docs/status/immutable-bindings-milestone.md`; not yet integrated.
+- [x] Binding-only immutable locals, both frontends, editor identity, cleanup and cache/self-rebuild acceptance.
 - [ ] Eight dedicated chats implement remaining sections in `docs/status/backlog-lanes.md`; draft readiness does not complete a checkbox.
 
 Three workers may run alongside the coordinator in this session. The coordinator
@@ -62,6 +62,8 @@ tests and 38 editor tests. This evidence predates new work below.
 - [ ] Fixed arrays, slices and SIMD/vector types.
 - [ ] Tuples and destructuring.
 - [ ] Type aliases, immutable declarations and constants.
+  - [x] Binding-only immutable local `let` declarations.
+  - [ ] Transparent type aliases and compile-time constants.
 - [ ] Compile-time evaluation.
 
 ## Functions, generics and control flow

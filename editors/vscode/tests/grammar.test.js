@@ -55,3 +55,14 @@ test("grammar highlights contextual initializer propagation while keeping ordina
     assert.equal(expression.test(source), false, source);
   }
 });
+
+test("grammar highlights statement let bindings while preserving ordinary let names", () => {
+  const pattern = grammar.patterns.find((pattern) => pattern.match?.includes("(let)"));
+  const expression = new RegExp(pattern.match, "m");
+  for (const source of ["let value=1", "  let let=1", "def main(){let value=1}", "var x=1;let result=try read()", "# comment\nlet item=buffer(\"x\")"]) {
+    assert.equal(source.match(expression)[1], "let", source);
+  }
+  for (const source of ["def let(value:int){}", "let(1)", "let[int](1)", "let.field", "let=2", "let\nvalue=1", "var value=let and flag", "let # comment\nvalue=1"]) {
+    assert.equal(expression.test(source), false, source);
+  }
+});

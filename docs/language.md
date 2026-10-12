@@ -49,7 +49,20 @@ The bootstrap limits syntax nesting and combined block/expression tree depth to 
 
 There are no implicit conversions. A condition must be `bool`; integers do not act as booleans.
 
-Every `var` needs an initializer. An optional annotation checks the initializer's type. Otherwise, the compiler infers the variable's type from its initializer. Reassignment must preserve that type.
+Every `var` or `let` needs an initializer. An optional annotation checks the initializer's type. Otherwise, the compiler infers the binding's type. A `var` can be reassigned to the same type; a `let` cannot be reassigned.
+
+```bhasa
+let greeting = buffer("hello")
+append(greeting, " world") // Contents can change.
+// greeting = buffer("again") would fail: the binding cannot be reassigned.
+```
+
+`let` protects the binding only. Record fields, collection contents, mutating
+methods and synchronous borrowed calls retain their existing behavior. Use
+`let value = try operation()` for propagated results, and `let job = spawn(...)`
+for a task handle that must still be joined or awaited. `let` is contextual: a
+function or ordinary variable named `let` remains valid. See the
+[binding example](../examples/basics/bindings.bh).
 
 ```bhasa
 def main() {

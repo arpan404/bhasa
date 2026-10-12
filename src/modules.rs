@@ -1053,14 +1053,18 @@ fn mark_type_inner(module: &mut Module, index: usize, depth: usize) -> usize {
     }
     index
 }
-/// Contextual propagation markers, identified only in complete var headers.
+/// Contextual let/try markers in local declaration headers.
 /// The parser owns the immediate marker/operand predicate; lowering protects
 /// these identifiers while still rewriting every name in the operand.
-pub(crate) fn try_initializer_markers(tokens: &[Token]) -> BTreeSet<usize> {
+pub(crate) fn contextual_binding_markers(tokens: &[Token]) -> BTreeSet<usize> {
     let mut markers = BTreeSet::new();
     for (index, token) in tokens.iter().enumerate() {
-        if token.kind != K::Var {
+        let immutable = crate::parser::starts_let_declaration(tokens, index);
+        if token.kind != K::Var && !immutable {
             continue;
+        }
+        if immutable {
+            markers.insert(index);
         }
         let name = next(tokens, index + 1);
         if tokens.get(name).and_then(ident).is_none() {
@@ -1141,7 +1145,7 @@ pub(crate) fn try_initializer_markers(tokens: &[Token]) -> BTreeSet<usize> {
 fn collect_bindings(module: &mut Module) {
     module
         .protected
-        .extend(try_initializer_markers(&module.tokens));
+        .extend(contextual_binding_markers(&module.tokens));
     let mut braces = Vec::new();
     let mut expression_depth = 0usize;
     for index in 0..module.tokens.len() {
@@ -1182,7 +1186,10 @@ fn collect_bindings(module: &mut Module) {
             }
             // Declarations are statements, never expressions. Malformed nested
             // annotations must not create thousands of synthetic local scopes.
-            K::Var if expression_depth == 0 => {
+            _ if expression_depth == 0
+                && (module.tokens[index].kind == K::Var
+                    || crate::parser::starts_let_declaration(&module.tokens, index)) =>
+            {
                 let name_index = next(&module.tokens, index + 1);
                 let Some(name) = module.tokens.get(name_index).and_then(ident) else {
                     continue;
@@ -1551,7 +1558,7 @@ mod try_marker_tests {
             "]".repeat(4000)
         );
         let tokens = crate::lexer::lex_rust(&text).unwrap();
-        assert!(super::try_initializer_markers(&tokens).is_empty());
+        assert!(super::contextual_binding_markers(&tokens).is_empty());
         assert_eq!(bindings(&text).len(), 1);
     }
 

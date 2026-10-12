@@ -1,8 +1,8 @@
 # Immutable local bindings
 
-Prepared follow-up to typed errors under the user's full-backlog authorization.
-Workers prepare ignored drafts while error sources remain frozen; apply only
-when that increment is verified and committed. Preserve both frontends, caches,
+Integrated and verified follow-up to typed errors under the user's full-backlog
+authorization. Evidence: integration.md, 468 reference / 483 hybrid tests,
+59 LSP / 82 Node tests, both releases, A/B/C and unchanged-cache reuse. Preserve both frontends, caches,
 Rust host, `.bh` and exactly lowercase bhasa.toml.
 
 ## Contract

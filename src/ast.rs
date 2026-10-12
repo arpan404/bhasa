@@ -392,12 +392,15 @@ pub struct Stmt {
 pub enum StmtKind {
     Var {
         name: String,
+        /// False for a contextual `let`; contents remain mutable.
+        reassignable: bool,
         annotation: Option<Type>,
         value: Expr,
     },
     /// Only an entire variable initializer may propagate an error.
     TryVar {
         name: String,
+        reassignable: bool,
         name_span: Span,
         annotation: Option<Type>,
         value: Expr,

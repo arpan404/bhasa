@@ -307,3 +307,45 @@ Initial review reserved S037/BH221 for pending-result obligations to avoid the
 immutable S036/BH220 collision, and routed native parity before cache-planner
 integration. Generated/global byte offsets must not leak into diagnostic text.
 All new lane sources remain isolated drafts awaiting acceptance.
+
+## Immutable integration and second backlog dispatch
+
+October 11 evening: all eight first increments handed off as isolated drafts.
+Compact wait cursors are saved at revision 2 in backlog-state.json. Root applied
+the reserved immutable Var/TryVar metadata, both checker/emitter paths, shared
+module/generic marker protection, BH220 bridge and editor identity changes.
+Cargo all-target check and the six reference/two host integration groups pass;
+59 LSP tests and 82 Node tests pass. Complete frozen-source suites, matching
+hybrid archive, releases, self-rebuild and unchanged-cache gates are running.
+No immutable checkbox is complete until those gates finish.
+
+Independent review caught contextual marker hover resolving an ordinary `let`
+symbol and recoverable UBSan reports not failing native acceptance. Root fixed
+both and added protocol regressions for `let let`, `let let = try read()`, a
+function named let, UTF-8/CRLF positions and versioned rename. The imported-path
+fixture now compares canonical paths on macOS. These were test/editor findings;
+there is no evidence of a new runtime ownership defect.
+
+Completed chats received concrete second increments: native BH221 seed execution,
+unused generic alias semantic validation, checked semantic highlighting, CLI lock
+operations/inspection, private Text storage migration, live bounded HTTP fixtures
+and file_handle compiler drafts, typed channel descriptor/lowering drafts, and
+Wasm guest allocation/import policy. All remain isolated; no new chats or
+duplicate assignments were created. Channel factory proposal uses Channel[T]
+with distinct Sender[T]/Receiver[T] owners, avoiding tuple dependencies. Blocking
+worker channel calls and shared non-atomic file handles remain excluded.
+
+The native pending-failure draft has separate local field 8 atop immutable field
+7 and has passed 41 isolated seed probes. Root independent review is in progress;
+S037/BH221 integration still needs combined host/native and existing-test evidence.
+No full assigned/passed/aggregate error-safety claim is made by that local slice.
+
+Immutable final gates pass: 468 reference / 483 hybrid, 59 LSP / 82 Node, both
+Clippy configurations, formatting, thirteen release examples, five package tests
+and A/B/C at run.V33q6Djk. Thirty-two native hits, four unchanged Rust adapter
+runs and two unchanged hybrid builds show zero compilations. Final matching
+archive key is 89752ec3eb1d4387292584272e0b7eae37705041b0aa085299abc15f52a04998
+from run.4w9SLwHa. The new example's range spelling was corrected before the
+complete frozen-source rerun. Scoped immutable work is accepted; broader
+readonly/aliases/constants remain open. Root is committing this verified
+increment before applying S037/BH221 and ownership-fixture migrations.

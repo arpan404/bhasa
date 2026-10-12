@@ -8,9 +8,9 @@ stops when no meaningful work remains without a real external change.
 
 The integration chat at 01a12ba1-6cad-7f00-a505-1eb6a34b6e41 owns contracts,
 source integration, Cargo gates, releases, todo.md and authorized progress
-commits/pushes. Error propagation is in final validation. Binding-only let is
-already drafted by internal workers under immutable-bindings-milestone.md and
-reserved for integration; do not assign it again.
+commits/pushes. Typed errors are committed and pushed as 86a99ed. Binding-only
+let is applied from immutable-bindings-milestone.md and undergoing combined
+validation; do not assign it again.
 
 ## Shared workflow
 

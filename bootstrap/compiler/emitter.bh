@@ -14,7 +14,7 @@
 # Signature node: next, name-token, result, argc, body-start, body-end, external,
 # owner-record-type (0 for global), followed by [parameter-name-token, parameter-type] pairs.
 # Local node: next, name-token, type, slot-register, scope-depth, ownership-state,
-# task-worker-signature (-1 for ordinary locals).
+# task-worker-signature (-1 for ordinary locals), reassignable (0 let / 1 ordinary).
 # Ownership state: 0 borrowed/scalar, 1 allocation, 2 pending task, 3 joined task.
 # Errors: 200 syntax, 201 type, 202 name/duplicate, 203 unsupported,
 # 204 depth limit, 205 control flow, 206 integer range, 207 ignored I/O status,
@@ -22,7 +22,8 @@
 # 211 unknown record, 212 duplicate/schema, 213 recursive/deep record,
 # 214 overlapping record/field argument borrows, 215 enum/variant/pattern,
 # 216 duplicate or missing exhaustive match arms, 217 nonfinite float literal,
-# 218 invalid try operand shape, 219 incompatible try return/error type.
+# 218 invalid try operand shape, 219 incompatible try return/error type,
+# 220 reassignment of an immutable local binding.
 
 def be_kind(tokens: ints, ctx: ints) -> int { return bh_token_kind(tokens, get(ctx, 0)) }
 def be_next(ctx: ints) { set(ctx, 0, get(ctx, 0) + 1) }
@@ -302,7 +303,7 @@ def be_bind(source: buffer, tokens: ints, ctx: ints, errors: ints, allocations: 
     var node = len(ctx)
     push(ctx, get(ctx, 7)); push(ctx, name); push(ctx, ty); push(ctx, slot); push(ctx, get(ctx, 8)); push(ctx, owns)
     var task_worker = -1; if ty == 6 { task_worker = get(ctx, 30) }
-    push(ctx, task_worker)
+    push(ctx, task_worker); push(ctx, 1)
     set(ctx, 7, node)
 }
 def be_string(globals: buffer, ctx: ints, text: buffer) -> buffer {
@@ -1498,12 +1499,19 @@ def be_try(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buffe
     return payload
 }
 
+# Like try, let is contextual. Existing calls, member access, assignments and
+# expressions using an ordinary identifier named let retain their grammar.
+def be_let_declaration(source: buffer, tokens: ints, ctx: ints) -> bool {
+    var token = get(ctx, 0)
+    return bh_token_kind(tokens, token) == 1 and same(bh_token_text(source, tokens, token), "let") and bh_token_kind(tokens, token + 1) == 1
+}
+
 def be_statement(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buffer, allocations: buffer, body: buffer) {
     var kind = be_kind(tokens, ctx)
     if kind == 319 { be_for(source, tokens, ctx, errors, globals, allocations, body); return }
     if kind == 321 or kind == 322 { be_loop_exit(tokens, ctx, errors, body, kind == 321); return }
     if kind == 316 { be_match(source, tokens, ctx, errors, globals, allocations, body); return }
-    if kind == 302 {
+    if kind == 302 or be_let_declaration(source, tokens, ctx) {
         be_next(ctx)
         var name = get(ctx, 0)
         be_expect(tokens, ctx, errors, 1)
@@ -1524,6 +1532,7 @@ def be_statement(source: buffer, tokens: ints, ctx: ints, errors: ints, globals:
         if be_owned(ty) { binding_owns = 1 }
         if ty == 6 { binding_owns = 2 }
         be_bind(source, tokens, ctx, errors, allocations, body, name, ty, operand, binding_owns)
+        if kind != 302 and len(errors) == 0 { set(ctx, get(ctx, 7) + 7, 0) }
         be_end(tokens, ctx, errors)
         return
     }
@@ -1582,6 +1591,7 @@ def be_statement(source: buffer, tokens: ints, ctx: ints, errors: ints, globals:
         var ty = get(ctx, 14); var owns = get(ctx, 15)
         if local < 0 { be_error(tokens, ctx, errors, 202); return }
         if get(ctx, local + 2) == 6 { be_error_at(tokens, errors, 208, name) }
+        if get(ctx, local + 7) == 0 { be_error_at(tokens, errors, 220, name); return }
         if ty == 0 or get(ctx, local + 2) != ty { be_error(tokens, ctx, errors, 201) }
         if be_owned(ty) and get(ctx, local + 5) == 0 { be_error(tokens, ctx, errors, 201) }
         operand = be_own(body, ctx, ty, operand, owns)

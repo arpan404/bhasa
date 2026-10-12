@@ -2771,3 +2771,184 @@ fn propagated_success_bindings_have_checked_hover_references_and_rename() {
         .unwrap();
     bhasa::check(&apply_rename(source, &changes[0])).unwrap();
 }
+// Append these tests to tests/lsp.rs; they use that file's protocol helpers.
+
+#[test]
+fn immutable_binding_named_let_has_identity_only_on_binder_and_reads() {
+    for (source, detail, read_needle, references) in [
+        (
+            "# 🌍 let\r\ndef main(){print(\"🌍 let\"); let let = 1; print(let)}\r\n",
+            "let let: int",
+            "print(let)",
+            2,
+        ),
+        (
+            "# 🌍 let\r\nenum R{ok(payload:buffer);error(problem:buffer)}\r\ndef read()->R{return R.ok(buffer(\"x\"))}\r\ndef run()->R{print(\"🌍 let\"); let let = try read();append(let,\"!\");return R.ok(let)}\r\ndef main(){}\r\n",
+            "let let: buffer",
+            "append(let,",
+            3,
+        ),
+    ] {
+        let marker = source.find("let let").unwrap();
+        let binder = source.find("let =").unwrap();
+        let read = source.find(read_needle).unwrap() + read_needle.find("let").unwrap();
+        let mut messages = start();
+        messages.push(open(URI, source, 7));
+        for (id, method) in [
+            (2, "textDocument/definition"),
+            (3, "textDocument/hover"),
+            (4, "textDocument/prepareRename"),
+        ] {
+            messages.push(editor_request(id, method, URI, source, marker));
+        }
+        messages.push(refactor_at(5, "textDocument/references", URI, source, "let let", None));
+        messages.push(refactor_at(6, "textDocument/rename", URI, source, "let let", Some("contents")));
+        for (id, method) in [
+            (7, "textDocument/definition"),
+            (8, "textDocument/hover"),
+            (9, "textDocument/prepareRename"),
+        ] {
+            messages.push(editor_request(id, method, URI, source, binder));
+        }
+        messages.push(refactor_at(10, "textDocument/references", URI, source, "let =", None));
+        messages.push(refactor_at(11, "textDocument/rename", URI, source, "let =", Some("contents")));
+        messages.push(editor_request(12, "textDocument/definition", URI, source, read));
+        messages.push(editor_request(13, "textDocument/hover", URI, source, read));
+        let output = exchange(messages);
+        let updates = publications(&output, URI);
+        assert!(diagnostics(updates.last().unwrap()).is_empty(), "{output:?}");
+        for id in [2, 3, 4] {
+            assert_eq!(result(&output, id), &Value::Null, "marker query {id}: {source}");
+        }
+        assert!(result(&output, 5).as_array().unwrap().is_empty());
+        assert_eq!(error_code(response(&output, 6)), -32803);
+        for id in [7, 12] {
+            assert_selection(result(&output, id), URI, source, "let =", "let");
+        }
+        for id in [8, 13] {
+            assert_eq!(hover_text(result(&output, id)), Some(detail), "{source}");
+        }
+        let prepared = result(&output, 9);
+        assert_eq!(prepared.get("placeholder").and_then(Value::as_str), Some("let"));
+        assert_eq!(prepared.get("range"), Some(&Value::object([
+            ("start", source_position(source, binder)),
+            ("end", source_position(source, binder + 3)),
+        ])));
+        let locations = result(&output, 10).as_array().unwrap();
+        assert_eq!(locations.len(), references, "{source}: {locations:?}");
+        assert!(locations.iter().all(|location| {
+            location.get("uri").and_then(Value::as_str) == Some(URI)
+                && location.get("range").and_then(|range| range.get("start")) != Some(&source_position(source, marker))
+        }));
+        for byte in [binder, read] {
+            assert!(locations.iter().any(|location| location.get("range") == Some(&Value::object([
+                ("start", source_position(source, byte)),
+                ("end", source_position(source, byte + 3)),
+            ]))), "missing reference at {byte}: {locations:?}");
+        }
+        let changes = result(&output, 11).get("documentChanges").unwrap().as_array().unwrap();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].get("textDocument").unwrap().get("version").and_then(Value::as_i64), Some(7));
+        assert_eq!(changes[0].get("edits").unwrap().as_array().unwrap().len(), references);
+        let changed = apply_rename(source, &changes[0]);
+        let expected = source.replacen("let =", "contents =", 1)
+            .replace("print(let)", "print(contents)")
+            .replace("append(let,", "append(contents,")
+            .replace("R.ok(let)", "R.ok(contents)");
+        assert_eq!(changed, expected);
+        assert!(changed.contains("let contents ="));
+        bhasa::check(&changed).unwrap();
+    }
+}
+
+#[test]
+fn function_named_let_remains_navigable_and_rename_preserves_declaration_markers() {
+    let source = "# 🌍 let\r\ndef let(value:int)->int{return value+1}\r\ndef main(){print(\"🌍 let\"); let answer = let(41);print(answer)}\r\n";
+    let marker = source.find("let answer").unwrap();
+    let call = source.find("let(41)").unwrap();
+    let mut messages = start();
+    messages.push(open(URI, source, 3));
+    for (id, method) in [
+        (2, "textDocument/definition"),
+        (3, "textDocument/hover"),
+        (4, "textDocument/prepareRename"),
+    ] {
+        messages.push(editor_request(id, method, URI, source, marker));
+    }
+    messages.push(refactor_at(
+        5,
+        "textDocument/references",
+        URI,
+        source,
+        "let answer",
+        None,
+    ));
+    messages.push(editor_request(
+        6,
+        "textDocument/definition",
+        URI,
+        source,
+        call,
+    ));
+    messages.push(editor_request(7, "textDocument/hover", URI, source, call));
+    messages.push(refactor_at(
+        8,
+        "textDocument/prepareRename",
+        URI,
+        source,
+        "let(41)",
+        None,
+    ));
+    messages.push(refactor_at(
+        9,
+        "textDocument/references",
+        URI,
+        source,
+        "let(41)",
+        None,
+    ));
+    messages.push(refactor_at(
+        10,
+        "textDocument/rename",
+        URI,
+        source,
+        "let(41)",
+        Some("increment"),
+    ));
+    let output = exchange(messages);
+    let updates = publications(&output, URI);
+    assert!(
+        diagnostics(updates.last().unwrap()).is_empty(),
+        "{output:?}"
+    );
+    for id in [2, 3, 4] {
+        assert_eq!(
+            result(&output, id),
+            &Value::Null,
+            "contextual marker resolved to global function: {id}"
+        );
+    }
+    assert!(result(&output, 5).as_array().unwrap().is_empty());
+    assert_selection(result(&output, 6), URI, source, "def let", "let");
+    assert!(hover_text(result(&output, 7)).is_some_and(|text| text.contains("def let(")));
+    assert_eq!(
+        result(&output, 8)
+            .get("placeholder")
+            .and_then(Value::as_str),
+        Some("let")
+    );
+    assert_eq!(result(&output, 9).as_array().unwrap().len(), 2);
+    let changes = result(&output, 10)
+        .get("documentChanges")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert_eq!(changes.len(), 1);
+    assert_eq!(
+        changes[0].get("edits").unwrap().as_array().unwrap().len(),
+        2
+    );
+    let changed = apply_rename(source, &changes[0]);
+    assert_eq!(changed, "# 🌍 let\r\ndef increment(value:int)->int{return value+1}\r\ndef main(){print(\"🌍 let\"); let answer = increment(41);print(answer)}\r\n");
+    bhasa::check(&changed).unwrap();
+}

@@ -32,8 +32,9 @@ two one-payload variants named ok and error; their concrete error types must be
 identical. Declaration order does not matter, and names such as Result are not
 special. Private enums cannot be implicitly unpacked outside their module.
 
-This first form is limited to an entire var initializer. An annotation specifies
-the success type. Use `var value = try operation()` or `var value = try result`.
+This first form is limited to an entire `var` or `let` initializer. An annotation
+specifies the success type. Use `let value = try operation()` or
+`var value = try result`.
 General nested expressions, assignments, return operands and parenthesized
 propagation are not supported. `try` remains a contextual identifier, preserving
 ordinary calls such as try(value), try[T](value), member access and arithmetic

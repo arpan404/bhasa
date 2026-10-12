@@ -1047,8 +1047,11 @@ impl Server {
                 } else {
                     self.file_uri(&file.path)
                 };
-                for token in crate::lexer::lex(&file.source).unwrap_or_default() {
-                    if matches!(&token.kind, TokenKind::Ident(name) if name == &target.name)
+                let tokens = crate::lexer::lex(&file.source).unwrap_or_default();
+                let markers = crate::modules::contextual_binding_markers(&tokens);
+                for (index, token) in tokens.iter().enumerate() {
+                    if !markers.contains(&index)
+                        && matches!(&token.kind, TokenKind::Ident(name) if name == &target.name)
                         && !targets_by_site.contains_key(&(
                             file_uri.clone(),
                             token.span.start,
@@ -1445,6 +1448,13 @@ impl Server {
                 Value::Null
             };
         };
+        if !completion {
+            let tokens = crate::lexer::lex(&doc.source).unwrap_or_default();
+            let markers = crate::modules::contextual_binding_markers(&tokens);
+            if markers.iter().any(|index| tokens[*index].span == word.span) {
+                return Value::Null;
+            }
+        }
         let mut analysis = self.analyze(uri, doc);
         // A single bounded recovery removes the unfinished access/name and closes
         // open blocks. It exists only for this query, never for diagnostics or builds.
@@ -1554,7 +1564,7 @@ impl Server {
                     });
             }
             for keyword in [
-                "var", "def", "struct", "enum", "if", "else", "while", "for", "in", "break",
+                "var", "let", "def", "struct", "enum", "if", "else", "while", "for", "in", "break",
                 "continue", "return", "try", "match", "case", "private", "import", "true", "false",
                 "int", "float", "bool", "str", "buffer", "ints", "List", "Map",
             ] {
@@ -2048,24 +2058,44 @@ fn lexical_bindings(
     let declaration_span = |name: &str, span: Span| {
         tokens
             .iter()
-            .find(|token| {
-                token.span.start + file.base >= span.start
+            .enumerate()
+            .find(|(index, token)| {
+                !crate::parser::starts_let_declaration(&tokens, *index)
+                    && token.span.start + file.base >= span.start
                     && token.span.end + file.base <= span.end
                     && matches!(&token.kind, TokenKind::Ident(value) if value == name)
             })
-            .map_or(span, |token| {
+            .map_or(span, |(_, token)| {
                 Span::new(token.span.start + file.base, token.span.end + file.base)
             })
     };
+    let immutable_declarations: BTreeSet<_> = tokens
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| crate::parser::starts_let_declaration(&tokens, *index))
+        .flat_map(|(index, token)| {
+            [
+                token.span.start + file.base,
+                tokens[index + 1].span.start + file.base,
+            ]
+        })
+        .collect();
     let mut bindings: Vec<(usize, Suggestion)> = Vec::new();
     let mut add = |name: &str, ty: Option<Type>, declaration: Span, visible: usize, block: Span| {
+        let immutable = immutable_declarations.contains(&declaration.start);
         let declaration = declaration_span(name, declaration);
         if (block.start <= offset && offset <= block.end && visible <= offset)
             || (declaration.start <= offset && offset < declaration.end)
         {
             let detail = ty.map_or_else(
-                || format!("var {name}"),
-                |ty| format!("{name}: {}", display_type(program, ty, expansion)),
+                || format!("{} {name}", if immutable { "let" } else { "var" }),
+                |ty| {
+                    format!(
+                        "{}{name}: {}",
+                        if immutable { "let " } else { "" },
+                        display_type(program, ty, expansion)
+                    )
+                },
             );
             bindings.push((
                 block.start,
@@ -2089,6 +2119,7 @@ fn lexical_bindings(
                     name,
                     annotation,
                     value,
+                    ..
                 } => {
                     if let Some(block) = scope(statement.span.start) {
                         let inferred = value.ty.or(*annotation).or(match value.kind {
@@ -2748,8 +2779,9 @@ impl ReferenceIndex<'_> {
             .partition_point(|file| file.base <= span.start)
             .checked_sub(1)?;
         let file = &self.files[index];
-        let token = file.tokens.iter().find(|token| {
-            token.span.start >= span.start
+        let (_, token) = file.tokens.iter().enumerate().find(|(index, token)| {
+            !crate::parser::starts_let_declaration(&file.tokens, *index)
+                && token.span.start >= span.start
                 && token.span.end <= span.end
                 && matches!(&token.kind, TokenKind::Ident(value) if value == name)
         })?;
@@ -2901,6 +2933,7 @@ impl ReferenceIndex<'_> {
                     name,
                     annotation,
                     value,
+                    ..
                 } => {
                     if let Some(ty) = annotation {
                         self.type_reference(

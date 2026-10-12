@@ -942,6 +942,7 @@ struct TaskInfo {
 #[derive(Clone)]
 struct Local {
     ty: Type,
+    reassignable: bool,
     pointer: String,
     owned: bool,
     task: Option<TaskInfo>,
@@ -1027,6 +1028,7 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
                 &Value::new(param.ty, format!("%arg{index}")),
                 param.span,
                 false,
+                true,
             )?;
         }
         let body = function
@@ -1084,7 +1086,14 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
         self.terminated = false;
     }
 
-    fn bind(&mut self, name: &str, value: &Value, span: Span, owned: bool) -> Result<()> {
+    fn bind(
+        &mut self,
+        name: &str,
+        value: &Value,
+        span: Span,
+        owned: bool,
+        reassignable: bool,
+    ) -> Result<()> {
         if !identifier(name) || value.ty == Type::Void {
             return Err(error("invalid local name or void local value", span));
         }
@@ -1114,6 +1123,7 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
             name.to_owned(),
             Local {
                 ty: value.ty,
+                reassignable,
                 pointer,
                 owned: owned && value.ty.is_owned(),
                 task: value.task,
@@ -1259,6 +1269,7 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
         match &statement.kind {
             StmtKind::Var {
                 name,
+                reassignable,
                 annotation,
                 value,
             } => {
@@ -1267,20 +1278,34 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
                     value.require(*ty, statement.span)?;
                 }
                 let value = self.acquire(value);
-                self.bind(name, &value, statement.span, true)?;
+                self.bind(name, &value, statement.span, true, *reassignable)?;
             }
             StmtKind::TryVar {
                 name,
+                reassignable,
                 annotation,
                 value,
                 try_span,
                 success_type,
                 ..
             } => {
-                self.try_initializer(name, value, *annotation, *success_type, *try_span)?;
+                self.try_initializer(
+                    name,
+                    value,
+                    *annotation,
+                    *success_type,
+                    *try_span,
+                    *reassignable,
+                )?;
             }
             StmtKind::Assign { name, value } => {
                 let local = self.local(name, statement.span)?;
+                if !local.reassignable {
+                    return Err(error(
+                        format!("cannot reassign immutable binding '{name}' in checked AST"),
+                        statement.span,
+                    ));
+                }
                 if local.ty.is_owned() && !local.owned {
                     return Err(error("cannot rebind a borrowed parameter", statement.span));
                 }
@@ -1466,7 +1491,7 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
                             llvm_type(field.ty)
                         ));
                         let binding_value = self.acquire(Value::new(field.ty, loaded));
-                        self.bind(&binding.name, &binding_value, binding.span, true)?;
+                        self.bind(&binding.name, &binding_value, binding.span, true, true)?;
                     }
                     self.release(&value);
                     self.block(&arm.body, false)?;
@@ -1542,6 +1567,7 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
         annotation: Option<Type>,
         success_type: Option<Type>,
         span: Span,
+        reassignable: bool,
     ) -> Result<()> {
         let value = self.expression(expression)?;
         let Type::Enum(source_id) = value.ty else {
@@ -1641,7 +1667,7 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
         ));
         let success_value = self.acquire(Value::new(source.success, loaded));
         self.release(&value);
-        self.bind(name, &success_value, span, true)?;
+        self.bind(name, &success_value, span, true, reassignable)?;
         Ok(())
     }
 
@@ -1735,7 +1761,7 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
                     return Err(error("invalid iterable binding type in checked AST", span));
                 }
                 let value = self.acquire(value);
-                self.bind("bhasa_rt_iteration_snapshot", &value, span, true)?;
+                self.bind("bhasa_rt_iteration_snapshot", &value, span, true, true)?;
                 if let (Some(count), Some(get)) = (count, get) {
                     let end = self.fresh();
                     self.instruction(format!("{end} = call i64 {count}(ptr {})", value.operand));
@@ -1838,7 +1864,7 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
             }
             None => Value::new(Type::Int, index),
         };
-        self.bind(name, &value, span, true)?;
+        self.bind(name, &value, span, true, true)?;
         self.block(body, false)?;
         if !self.terminated {
             self.drop_locals(false);
@@ -2681,6 +2707,7 @@ mod tests {
     fn var(name: &str, value: Expr) -> Stmt {
         stmt(StmtKind::Var {
             name: name.into(),
+            reassignable: true,
             annotation: None,
             value,
         })
