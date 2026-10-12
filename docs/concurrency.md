@@ -79,7 +79,7 @@ in the caller and follows the caller's restrictions.
 `await` blocks the calling thread; it does not suspend a coroutine. A blocking
 I/O call also occupies its worker. If all four pooled jobs block, queued work
 waits for one to return. This scheduler does not add async functions, an I/O
-reactor, cancellation, channels or detached tasks.
+reactor, cancellation or detached tasks.
 
 ## Task ownership
 
@@ -108,8 +108,77 @@ The native runtime uses POSIX threads on macOS and Linux. Allocation, thread
 creation, synchronization or join failures stop the process with a diagnostic.
 Runtime guards also reject pooled scheduling and awaiting from worker entry
 points. Typed task frames use checked native allocations and deterministic
-cleanup. There are no channels, arbitrary shared aggregate references or
-task-handle transfers.
+cleanup. Arbitrary shared aggregate references and task-handle transfers remain
+unsupported.
+
+## Typed bounded channels
+
+Import `@std` to create `channel[T](capacity)`. Capacity must be positive. The
+returned `Channel[T]` owns a sender and receiver; `sender()` and `receiver()`
+return additional owned endpoints sharing the same bounded FIFO queue.
+
+```bhasa
+import "@std" as ch
+
+def main() {
+    let pair = ch.channel[buffer](2)
+    let sender = pair.sender()
+    let receiver = pair.receiver()
+    var message = buffer("hello")
+
+    match sender.try_send(message) {
+        case ch.SendResult[buffer].ok(status) {}
+        case ch.SendResult[buffer].error(failure) { print("send failed") }
+    }
+    set(message, 0, 88)
+    match receiver.try_recv() {
+        case ch.ReceiveResult[buffer].ok(value) { print(value) }
+        case ch.ReceiveResult[buffer].error(reason) { print("receive failed") }
+    }
+    sender.close()
+}
+```
+
+This prints `hello`. Sending acquires an independent payload copy, so caller
+mutation does not change queued data. A successful receive transfers the queued
+value to the receiver. A failed send returns that independent value in
+`SendFailure[T].closed(value)` or `SendFailure[T].full(value)`; it never consumes
+the caller's original value. Both send and receive results must be handled.
+
+| Endpoint operation | Result | Behavior |
+| --- | --- | --- |
+| `sender.send(value)` | `SendResult[T]` | Waits for space or closure. |
+| `sender.try_send(value)` | `SendResult[T]` | Returns immediately; full and closed queues return the value. |
+| `receiver.recv()` | `ReceiveResult[T]` | Waits for a value or closure. |
+| `receiver.try_recv()` | `ReceiveResult[T]` | Returns immediately; errors are `ReceiveError.empty` or `ReceiveError.closed`. |
+| `sender.close()` / `receiver.close()` | `void` | Closes the shared queue and wakes waiting callers. |
+
+Closing prevents further sends while allowing receivers to drain queued values.
+Dropping the last sender also closes the queue. Dropping the last receiver closes
+it and destroys unread values exactly once. Copies of endpoint variables retain
+distinct owners; scope exit releases each owner, and the last owner frees queue
+storage. No garbage collector or detached cleanup worker is involved.
+
+Endpoints can be passed to typed task workers. Workers may use `try_send`,
+`try_recv` and `close`; blocking `send` and `recv` are forbidden in every task
+worker, including through helper functions and methods. The compiler checks the
+resolved call graph again before emission, and the runtime also enforces the
+worker restriction. The complete [channel example](../examples/channels/main.bh)
+uses a receiver task.
+
+Payloads include scalars, owned buffers/ints and concrete records/enums whose
+contents satisfy the transfer rules. TCP/TLS handles retain their documented
+shared-resource behavior. Tasks, regular-file handles and nested channel
+endpoints are refused, including when hidden in aggregate fields or aliases.
+Source code cannot construct endpoints or access their private storage.
+
+This first channel runtime admits the shared target layer's supported 64-bit
+macOS and Linux targets. Execution is verified on ARM64 macOS; Linux execution
+remains unverified. `select`, channel deadlines, cancellation and coroutine-based waiting
+remain future work. Invalid capacity, allocation and synchronization failures are
+fatal runtime traps. The compiler currently registers the repository's canonical
+standard library; relocating an installed library needs a separate registration
+contract.
 
 The [async implementation report](status/async.md) records queue saturation,
 concurrent execution, allocation cleanup, thread shutdown and sanitizer checks.

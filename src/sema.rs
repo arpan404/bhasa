@@ -8,6 +8,11 @@ use crate::diagnostic::Diagnostic;
 /// Check a complete program and annotate every expression on success.
 pub fn check(mut program: Program) -> Result<CheckedProgram, Vec<Diagnostic>> {
     normalize_enum_types(&mut program);
+    if let Some(authority) = &program.channels {
+        authority
+            .validate(&program)
+            .map_err(|message| vec![Diagnostic::new("C101", message, Span::default())])?;
+    }
     let mut checker = Checker {
         signatures: BTreeMap::new(),
         diagnostics: Vec::new(),
@@ -23,6 +28,8 @@ pub fn check(mut program: Program) -> Result<CheckedProgram, Vec<Diagnostic>> {
         enums: BTreeMap::new(),
         enum_names: BTreeMap::new(),
         type_names: program.type_names.clone(),
+        channel_program: program.clone(),
+        current_function: String::new(),
     };
     for declaration in &program.enums {
         if let Some(id) = program
@@ -83,6 +90,9 @@ pub fn check(mut program: Program) -> Result<CheckedProgram, Vec<Diagnostic>> {
         }
     }
     if checker.diagnostics.is_empty() {
+        checker.diagnostics.extend(channel_worker_effects(&program));
+    }
+    if checker.diagnostics.is_empty() {
         checker
             .diagnostics
             .extend(crate::ownership::check(&program));
@@ -101,6 +111,8 @@ pub fn check(mut program: Program) -> Result<CheckedProgram, Vec<Diagnostic>> {
 }
 
 struct Checker {
+    channel_program: Program,
+    current_function: String,
     signatures: BTreeMap<String, FunctionSig>,
     diagnostics: Vec<Diagnostic>,
     // None records a binding whose initializer failed, avoiding spurious
@@ -669,6 +681,7 @@ impl Checker {
     }
 
     fn check_function(&mut self, function: &mut Function) {
+        self.current_function = function.name.clone();
         let Some(body) = &mut function.body else {
             return;
         };
@@ -892,6 +905,29 @@ impl Checker {
                 args[0].span,
             );
             return None;
+        }
+        if let (Some(authority), Some(signature)) =
+            (&self.channel_program.channels, self.signatures.get(&worker))
+        {
+            for ty in [signature.params[0], signature.return_type] {
+                if ty != Type::Void
+                    && crate::channel_transfer::check_worker_transfer(
+                        &self.channel_program,
+                        authority.registry(),
+                        authority.context(),
+                        ty,
+                        &[],
+                    )
+                    .is_err()
+                {
+                    self.error(
+                        "S020",
+                        "worker value cannot transfer across threads",
+                        args[0].span,
+                    );
+                    return None;
+                }
+            }
         }
         self.pending_workers.push((worker, args[0].span));
         let ty = actual.map(|_| Type::Task);
@@ -1466,7 +1502,15 @@ impl Checker {
                     let field = self
                         .records
                         .get(&id)
-                        .filter(|record| !crate::collections::is_collection(&record.name))
+                        .filter(|record| {
+                            !crate::collections::is_collection(&record.name)
+                                && self
+                                    .channel_program
+                                    .channels
+                                    .as_ref()
+                                    .and_then(|a| a.schema(Type::Record(id)))
+                                    .is_none()
+                        })
                         .and_then(|record| record.fields.iter().find(|field| field.name == *name))
                         .map(|field| field.ty);
                     if field.is_none() {
@@ -1598,7 +1642,17 @@ impl Checker {
         let resolved = if let Some(Type::Record(id)) = receiver_ty {
             let record = self.records.get(&id);
             if record.is_some_and(|record| {
-                record.methods.iter().any(|method| method.name == name)
+                self.channel_program
+                    .channels
+                    .as_ref()
+                    .and_then(|a| {
+                        a.operation(
+                            &self.channel_program,
+                            &method_key(&self.type_name(Type::Record(id)), &name),
+                        )
+                    })
+                    .is_some()
+                    || record.methods.iter().any(|method| method.name == name)
                     || crate::collections::schema(record)
                         .ok()
                         .flatten()
@@ -1675,6 +1729,19 @@ impl Checker {
         arg_types: &[Option<Type>],
         span: Span,
     ) -> Option<Type> {
+        if let Some(operation) = self
+            .channel_program
+            .channels
+            .as_ref()
+            .and_then(|a| a.operation(&self.channel_program, name))
+        {
+            self.check_arity(name, operation.params.len(), args.len(), span);
+            self.check_argument_aliases(args);
+            for ((argument, actual), expected) in args.iter().zip(arg_types).zip(operation.params) {
+                self.require_type(*actual, expected, argument.span, "channel argument");
+            }
+            return Some(operation.result);
+        }
         if let Some((owner, method)) = name.split_once('.') {
             if let Some(id) = self.record_names.get(owner).copied() {
                 if let Ok(Some(schema)) = crate::collections::schema(&self.records[&id]) {
@@ -1737,6 +1804,31 @@ impl Checker {
             return None;
         }
         if let Some(id) = self.record_names.get(name).copied() {
+            if let Some(authority) = &self.channel_program.channels {
+                if let Some(schema) = authority.schema(Type::Record(id)) {
+                    match schema {
+                        crate::channels::Schema::Endpoint { .. } => {
+                            self.error("S029", "endpoint constructors are compiler-only", span);
+                            return None;
+                        }
+                        crate::channels::Schema::Channel { .. } => {
+                            if !authority.factory_allowed(id, &self.current_function, span) {
+                                self.error(
+                                    "S029",
+                                    "Channel construction requires its registered factory",
+                                    span,
+                                );
+                                return None;
+                            }
+                            self.check_arity(name, 1, args.len(), span);
+                            if let Some(actual) = arg_types.first() {
+                                self.require_type(*actual, Type::Int, span, "channel capacity");
+                            }
+                            return Some(Type::Record(id));
+                        }
+                    }
+                }
+            }
             let record = self.records[&id].clone();
             if crate::collections::is_collection(&record.name) {
                 self.check_arity(name, 0, args.len(), span);
@@ -1848,7 +1940,7 @@ impl Checker {
     }
 }
 
-fn normalize_enum_types(program: &mut Program) {
+pub(crate) fn normalize_enum_types(program: &mut Program) {
     let ids = program
         .enums
         .iter()
@@ -2213,6 +2305,109 @@ pub(crate) fn file_worker_violation(
     None
 }
 
+/// Repeated by codegen to reject a modified checked worker graph.
+pub(crate) fn channel_worker_effects(program: &Program) -> Vec<Diagnostic> {
+    let Some(authority) = &program.channels else {
+        return Vec::new();
+    };
+    let graph = call_graph(program);
+    let mut workers = Vec::new();
+    crate::modules::visit_program_expressions(program, &mut |expression| {
+        if let ExprKind::Call { name, args } = &expression.kind {
+            if matches!(name.as_str(), "spawn" | "async_spawn") {
+                if let Some(Expr {
+                    kind: ExprKind::Call { name: worker, .. },
+                    ..
+                }) = args.first()
+                {
+                    workers.push((worker.clone(), expression.span));
+                }
+            }
+        }
+    });
+    let mut errors = Vec::new();
+    let externs: BTreeSet<_> = program
+        .functions
+        .iter()
+        .filter(|function| function.body.is_none())
+        .map(|function| function.name.clone())
+        .chain(program.records.iter().flat_map(|record| {
+            record
+                .methods
+                .iter()
+                .filter(|method| method.body.is_none())
+                .map(|method| method_key(&record.name, &method.name))
+        }))
+        .collect();
+    for (worker, span) in workers {
+        let Some(function) = program
+            .functions
+            .iter()
+            .find(|function| function.name == worker)
+        else {
+            errors.push(Diagnostic::new(
+                "S020",
+                "channel worker must be a global Bhasa function",
+                span,
+            ));
+            continue;
+        };
+        if function.body.is_none()
+            || function.params.len() != 1
+            || crate::channel_transfer::check_worker_transfer(
+                program,
+                authority.registry(),
+                authority.context(),
+                function.params[0].ty,
+                &[],
+            )
+            .is_err()
+            || (function.return_type != Type::Void
+                && crate::channel_transfer::check_worker_transfer(
+                    program,
+                    authority.registry(),
+                    authority.context(),
+                    function.return_type,
+                    &[],
+                )
+                .is_err())
+        {
+            errors.push(Diagnostic::new(
+                "S020",
+                "channel worker has an unsupported transfer signature",
+                span,
+            ));
+            continue;
+        }
+        let mut pending = vec![worker.clone()];
+        let mut visited = BTreeSet::new();
+        while let Some(current) = pending.pop() {
+            if !visited.insert(current.clone()) {
+                continue;
+            }
+            if externs.contains(&current) || matches!(current.as_str(), "async_spawn" | "await") {
+                errors.push(Diagnostic::new("S020", format!("worker '{worker}' reaches forbidden extern or pooled operation '{current}'"), span));
+                break;
+            }
+            if authority
+                .operation(program, &current)
+                .is_some_and(|operation| operation.blocking())
+            {
+                errors.push(Diagnostic::new(
+                    "S020",
+                    format!("worker '{worker}' reaches blocking channel operation '{current}'"),
+                    span,
+                ));
+                break;
+            }
+            if let Some(calls) = graph.get(&current) {
+                pending.extend(calls.iter().cloned());
+            }
+        }
+    }
+    errors
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2316,6 +2511,7 @@ mod tests {
 
     fn program(body: Block) -> Program {
         Program {
+            channels: None,
             records: Vec::new(),
             enums: Vec::new(),
             type_names: Vec::new(),
@@ -2341,6 +2537,7 @@ mod tests {
     #[test]
     fn forward_calls_recursion_and_external_signatures() {
         let checked = check(Program {
+            channels: None,
             records: Vec::new(),
             enums: Vec::new(),
             type_names: Vec::new(),
@@ -2381,6 +2578,7 @@ mod tests {
     #[test]
     fn optional_main_and_legal_entry_points() {
         check(Program {
+            channels: None,
             records: Vec::new(),
             enums: Vec::new(),
             type_names: Vec::new(),
@@ -2389,6 +2587,7 @@ mod tests {
         .unwrap();
         check(program(vec![])).unwrap();
         check(Program {
+            channels: None,
             records: Vec::new(),
             enums: Vec::new(),
             type_names: Vec::new(),
@@ -2407,6 +2606,7 @@ mod tests {
         ] {
             rejects(
                 Program {
+                    channels: None,
                     records: Vec::new(),
                     enums: Vec::new(),
                     type_names: Vec::new(),
@@ -2422,6 +2622,7 @@ mod tests {
         for body in [None, Some(vec![])] {
             rejects(
                 Program {
+                    channels: None,
                     records: Vec::new(),
                     enums: Vec::new(),
                     type_names: Vec::new(),
@@ -2440,6 +2641,7 @@ mod tests {
         for body in [None, Some(vec![])] {
             rejects(
                 Program {
+                    channels: None,
                     records: Vec::new(),
                     enums: Vec::new(),
                     type_names: Vec::new(),
@@ -2454,6 +2656,7 @@ mod tests {
         );
         rejects(
             Program {
+                channels: None,
                 records: Vec::new(),
                 enums: Vec::new(),
                 type_names: Vec::new(),
@@ -2471,6 +2674,7 @@ mod tests {
     #[test]
     fn externs_accept_only_int_parameters_and_int_or_void_results() {
         check(Program {
+            channels: None,
             records: Vec::new(),
             enums: Vec::new(),
             type_names: Vec::new(),
@@ -2480,6 +2684,7 @@ mod tests {
         for ty in [Type::Bool, Type::Str, Type::Void] {
             rejects(
                 Program {
+                    channels: None,
                     records: Vec::new(),
                     enums: Vec::new(),
                     type_names: Vec::new(),
@@ -2495,6 +2700,7 @@ mod tests {
         for ty in [Type::Bool, Type::Str] {
             rejects(
                 Program {
+                    channels: None,
                     records: Vec::new(),
                     enums: Vec::new(),
                     type_names: Vec::new(),
@@ -2509,6 +2715,7 @@ mod tests {
     fn parameters_cannot_be_void_or_duplicate_including_externs() {
         rejects(
             Program {
+                channels: None,
                 records: Vec::new(),
                 enums: Vec::new(),
                 type_names: Vec::new(),
@@ -2524,6 +2731,7 @@ mod tests {
         for body in [None, Some(vec![])] {
             rejects(
                 Program {
+                    channels: None,
                     records: Vec::new(),
                     enums: Vec::new(),
                     type_names: Vec::new(),
@@ -2543,6 +2751,7 @@ mod tests {
     fn parameters_share_the_outer_body_scope() {
         rejects(
             Program {
+                channels: None,
                 records: Vec::new(),
                 enums: Vec::new(),
                 type_names: Vec::new(),
@@ -2850,6 +3059,7 @@ mod tests {
         );
         rejects(
             Program {
+                channels: None,
                 records: Vec::new(),
                 enums: Vec::new(),
                 type_names: Vec::new(),
@@ -2864,6 +3074,7 @@ mod tests {
         );
         rejects(
             Program {
+                channels: None,
                 records: Vec::new(),
                 enums: Vec::new(),
                 type_names: Vec::new(),
@@ -2887,6 +3098,7 @@ mod tests {
         ] {
             rejects(
                 Program {
+                    channels: None,
                     records: Vec::new(),
                     enums: Vec::new(),
                     type_names: Vec::new(),
@@ -2904,6 +3116,7 @@ mod tests {
             )],
         ] {
             check(Program {
+                channels: None,
                 records: Vec::new(),
                 enums: Vec::new(),
                 type_names: Vec::new(),

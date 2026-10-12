@@ -1,0 +1,3 @@
+import "@std" as ch
+struct Plain {value:int; def recv(self)->int {return self.value}}
+def main(){var plain=Plain(7);print(plain.recv());let pair=ch.channel[int](1);match pair.sender().try_send(42){case ch.SendResult[int].ok(status){} case ch.SendResult[int].error(failure){}} match pair.receiver().try_recv(){case ch.ReceiveResult[int].ok(value){print(value)} case ch.ReceiveResult[int].error(reason){print(-1)}}}

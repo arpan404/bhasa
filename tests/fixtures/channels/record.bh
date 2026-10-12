@@ -1,0 +1,3 @@
+import "@std" as ch
+struct Item {value:buffer}
+def main(){let pair=ch.channel[Item](1);match pair.sender().try_send(Item(buffer("record"))){case ch.SendResult[Item].ok(status){} case ch.SendResult[Item].error(failure){}} match pair.receiver().try_recv(){case ch.ReceiveResult[Item].ok(value){print(value.value)} case ch.ReceiveResult[Item].error(reason){print(-1)}}}

@@ -23,6 +23,8 @@ after verified increments. Existing caches are preserved.
 - [x] Private Text, collection and JSON storage with copy-returning public APIs.
 - [x] Transparent nongeneric type aliases, checked alias editor identity and inspection metadata.
 - [x] Owned buffer/ints transfer, typed regular-file streams and atomic TCP shared-owner copies; both frontends and release/cache/self-rebuild gates.
+- [x] Typed bounded channels, payload/worker guards and checked editor/API metadata; both frontends, matching release/cache/self-rebuild acceptance.
+- [ ] Further work is paused at the user's request; read summary.md before resuming.
 - [ ] Eight dedicated chats implement remaining sections in `docs/status/backlog-lanes.md`; draft readiness does not complete a checkbox.
 
 Three workers may run alongside the coordinator in this session. The coordinator
@@ -60,6 +62,7 @@ tests and 38 editor tests. This evidence predates new work below.
 - [ ] User-defined deterministic resource cleanup.
 - [ ] Safe ownership transfer/sharing between threads.
   - [x] Atomic TCP shared-descriptor copies with distinct live owners and final-close checks.
+  - [x] Independently owned channel payload snapshots and checked endpoint copies through typed task frames.
 - [ ] Copy elision and allocation/copy benchmarks.
   - [x] Exact O0/O2 allocation/copy/drop counters for the bounded owned buffer/ints slice.
   - [ ] Representative allocation/runtime benchmarks and broader elision.
@@ -110,6 +113,8 @@ tests and 38 editor tests. This evidence predates new work below.
 
 - [x] Typed tasks with independently owned inputs/results.
 - [ ] Typed channels, bounded backpressure, close and select.
+  - [x] Typed bounded queues with blocking/nonblocking send/receive, close/drain/drop and checked task endpoint copies.
+  - [ ] Multi-channel select.
 - [ ] Cancellation, deadlines, task groups and supervision.
 - [ ] Checked shared-state locks, atomics and scoped concurrency.
 - [ ] Configurable executor capacity and scheduling measurements.

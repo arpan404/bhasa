@@ -446,7 +446,11 @@ impl Server {
                 let mut symbols: Vec<_> = analysis
                     .symbols
                     .into_iter()
-                    .filter(|symbol| symbol.uri == uri && symbol.kind != 13)
+                    .filter(|symbol| {
+                        symbol.uri == uri
+                            && symbol.kind != 13
+                            && symbol.channel_operation_identity().is_none()
+                    })
                     .collect();
                 symbols.sort_by_key(|symbol| symbol.selection_span.start);
                 Ok(Value::Array(
@@ -983,6 +987,15 @@ impl Server {
         else {
             return Ok(empty());
         };
+        if target.channel_operation_identity().is_some() {
+            return if method == "textDocument/rename" {
+                Err(rename_error(
+                    "Compiler-issued channel operations cannot be renamed",
+                ))
+            } else {
+                Ok(empty())
+            };
+        }
         let target_anchor = anchor(&target);
         // All open roots participate, including importers of an open library.
         // Unrelated broken graphs do not disable refactoring this graph.
@@ -1401,6 +1414,14 @@ enum BindingKind {
     Immutable,
 }
 
+#[derive(Clone, Copy)]
+enum SymbolOrigin {
+    Source,
+    ChannelOperation {
+        owner: usize,
+        operation: crate::channel_registry::Operation,
+    },
+}
 #[derive(Clone)]
 struct Symbol {
     name: String,
@@ -1414,8 +1435,15 @@ struct Symbol {
     detail: String,
     private: bool,
     binding: Option<BindingKind>,
+    origin: SymbolOrigin,
 }
 impl Symbol {
+    fn channel_operation_identity(&self) -> Option<(usize, crate::channel_registry::Operation)> {
+        match self.origin {
+            SymbolOrigin::Source => None,
+            SymbolOrigin::ChannelOperation { owner, operation } => Some((owner, operation)),
+        }
+    }
     fn location(&self) -> Value {
         Value::object([
             ("uri", self.uri.clone().into()),
@@ -1615,6 +1643,7 @@ impl Server {
             }
         }
         let mut analysis = self.analyze(uri, doc);
+        let originally_checked = analysis.program.is_some();
         // A single bounded recovery removes the unfinished access/name and closes
         // open blocks. It exists only for this query, never for diagnostics or builds.
         if completion && analysis.program.is_none() {
@@ -1705,6 +1734,7 @@ impl Server {
                         uri,
                         ty,
                         expansion.as_ref(),
+                        originally_checked,
                     ));
                 } else if let Some(qualifier) = &word.qualifier {
                     // Enum variant access has a type qualifier, not a value receiver.
@@ -1853,7 +1883,10 @@ impl Server {
             .symbols
             .iter()
             .filter(|symbol| {
-                symbol.uri == uri && !matches!(symbol.kind, 3 | 13) && (local || !symbol.private)
+                symbol.uri == uri
+                    && !matches!(symbol.kind, 3 | 13)
+                    && symbol.channel_operation_identity().is_none()
+                    && (local || !symbol.private)
             })
             .collect();
         for import in &file.imports {
@@ -1875,6 +1908,7 @@ impl Server {
         uri: &str,
         ty: Type,
         expansion: Option<&crate::ExpandedFiles>,
+        allow_intrinsics: bool,
     ) -> BTreeMap<String, Suggestion> {
         let mut result = BTreeMap::new();
         let Some(program) = &analysis.program else {
@@ -1886,6 +1920,25 @@ impl Server {
         let Some(record) = program.record(id) else {
             return result;
         };
+        if allow_intrinsics {
+            for operation in channel_operations(program)
+                .into_iter()
+                .filter(|operation| operation.owner == id)
+            {
+                let name = operation.operation.name();
+                result.insert(
+                    name.into(),
+                    Suggestion {
+                        label: name.into(),
+                        detail: channel_signature(program, &operation, expansion),
+                        kind: 2,
+                    },
+                );
+            }
+            if !result.is_empty() {
+                return result;
+            }
+        }
         if let Ok(Some(schema)) = crate::collections::schema(record) {
             for name in schema.methods() {
                 let (args, ret) = schema.method(name).unwrap();
@@ -1963,6 +2016,44 @@ fn display_type(program: &Program, ty: Type, expansion: Option<&crate::ExpandedF
         map.modules
             .display_names(&map.generics.display_names(&name))
     })
+}
+fn channel_operations(program: &Program) -> Vec<crate::channel_registry::ResolvedOperation> {
+    program
+        .channels
+        .as_ref()
+        .and_then(|authority| authority.operations(program).ok())
+        .unwrap_or_default()
+}
+fn channel_parameters(
+    program: &Program,
+    operation: &crate::channel_registry::ResolvedOperation,
+    expansion: Option<&crate::ExpandedFiles>,
+) -> Vec<String> {
+    operation
+        .params
+        .iter()
+        .skip(1)
+        .enumerate()
+        .map(|(index, ty)| {
+            format!(
+                "arg{}: {}",
+                index + 1,
+                display_type(program, *ty, expansion)
+            )
+        })
+        .collect()
+}
+fn channel_signature(
+    program: &Program,
+    operation: &crate::channel_registry::ResolvedOperation,
+    expansion: Option<&crate::ExpandedFiles>,
+) -> String {
+    bounded_detail(&format!(
+        "def {}({}) -> {}",
+        operation.operation.name(),
+        channel_parameters(program, operation, expansion).join(", "),
+        display_type(program, operation.result, expansion)
+    ))
 }
 // Only checked identity participates. TextMate retains lexical highlighting;
 // incomplete graphs deliberately return no semantic overrides.
@@ -2291,6 +2382,21 @@ fn checked_signature_help(analysis: &Analysis, doc: &Document, offset: usize) ->
                         let (params, result) = schema.method(method)?;
                         Some((method, params, result))
                     });
+                    let channel = channel_operations(program).into_iter().find(|operation| {
+                        program
+                            .type_names
+                            .get(operation.owner)
+                            .is_some_and(|owner| {
+                                ast::method_key(owner, operation.operation.name()) == *name
+                            })
+                            && operation.params.len() == args.len()
+                            && operation
+                                .params
+                                .iter()
+                                .zip(args)
+                                .all(|(ty, arg)| arg.ty == Some(*ty))
+                            && expr.ty == Some(operation.result)
+                    });
                     let (label, parameters) = if let Some((function, method)) = declaration {
                         (
                             format!(
@@ -2323,6 +2429,14 @@ fn checked_signature_help(analysis: &Analysis, doc: &Document, offset: usize) ->
                                     )])
                                 })
                                 .collect::<Vec<_>>(),
+                        )
+                    } else if let Some(operation) = channel {
+                        (
+                            channel_signature(program, &operation, expansion.as_ref()),
+                            channel_parameters(program, &operation, expansion.as_ref())
+                                .into_iter()
+                                .map(|label| Value::object([("label", label.into())]))
+                                .collect(),
                         )
                     } else if let Some((method, params, result)) = collection {
                         let parameters: Vec<_> = params
@@ -3045,6 +3159,7 @@ fn local_symbols(uri: &str, source: &str) -> Vec<Symbol> {
                 detail: source_signature(source, function.span, false),
                 private: private_at(&tokens, selection),
                 binding: None,
+                origin: SymbolOrigin::Source,
                 children: Vec::new(),
             },
         ));
@@ -3077,6 +3192,7 @@ fn local_symbols(uri: &str, source: &str) -> Vec<Symbol> {
                     detail: source_signature(source, field.span, true),
                     private: private_at(&tokens, token.span),
                     binding: None,
+                    origin: SymbolOrigin::Source,
                     children: Vec::new(),
                 },
             ));
@@ -3100,6 +3216,7 @@ fn local_symbols(uri: &str, source: &str) -> Vec<Symbol> {
                     detail: source_signature(source, method.span, false),
                     private: private_at(&tokens, selection),
                     binding: None,
+                    origin: SymbolOrigin::Source,
                     children: Vec::new(),
                 },
             ));
@@ -3123,6 +3240,7 @@ fn local_symbols(uri: &str, source: &str) -> Vec<Symbol> {
                 ),
                 private: private_at(&tokens, selection),
                 binding: None,
+                origin: SymbolOrigin::Source,
                 children,
             },
         ));
@@ -3156,6 +3274,7 @@ fn local_symbols(uri: &str, source: &str) -> Vec<Symbol> {
                 detail: source_signature(source, variant.span, true),
                 private: false,
                 binding: None,
+                origin: SymbolOrigin::Source,
                 children: Vec::new(),
             });
         }
@@ -3176,6 +3295,7 @@ fn local_symbols(uri: &str, source: &str) -> Vec<Symbol> {
                 ),
                 private: private_at(&tokens, selection),
                 binding: None,
+                origin: SymbolOrigin::Source,
                 children,
             },
         ));
@@ -3185,7 +3305,8 @@ fn local_symbols(uri: &str, source: &str) -> Vec<Symbol> {
 }
 fn declaration_at<'a>(symbols: &'a [Symbol], uri: &str, offset: usize) -> Option<&'a Symbol> {
     for symbol in symbols {
-        if symbol.uri == uri
+        if symbol.channel_operation_identity().is_none()
+            && symbol.uri == uri
             && symbol.selection_span.start <= offset
             && offset < symbol.selection_span.end
         {
@@ -3300,6 +3421,42 @@ fn checked_references(
             );
         }
     }
+    for operation in channel_operations(program) {
+        let Some(record) = program.record(operation.owner) else {
+            continue;
+        };
+        let Some(file) = index
+            .files
+            .iter()
+            .rev()
+            .find(|file| file.base <= record.span.start)
+        else {
+            continue;
+        };
+        let selection_span = Span::new(record.span.start - file.base, record.span.end - file.base);
+        let name = operation.operation.name();
+        let key = format!("{}#channel-operation:{}:{name}", file.uri, operation.owner);
+        index
+            .targets
+            .insert(ast::method_key(&record.name, name), key.clone());
+        symbols.push(Symbol {
+            name: name.into(),
+            key,
+            uri: file.uri.clone(),
+            kind: 6,
+            range: range(&file.source, selection_span),
+            selection: range(&file.source, selection_span),
+            selection_span,
+            children: Vec::new(),
+            detail: channel_signature(program, &operation, index.expansion.as_ref()),
+            private: false,
+            binding: None,
+            origin: SymbolOrigin::ChannelOperation {
+                owner: operation.owner,
+                operation: operation.operation,
+            },
+        });
+    }
     for function in &program.functions {
         index.name(
             function.span,
@@ -3364,7 +3521,9 @@ fn checked_references(
         refs: &mut Vec<DefinitionReference>,
     ) {
         for symbol in symbols {
-            if targets.values().any(|target| target == &symbol.key) {
+            if symbol.channel_operation_identity().is_none()
+                && targets.values().any(|target| target == &symbol.key)
+            {
                 refs.push(DefinitionReference {
                     uri: symbol.uri.clone(),
                     span: symbol.selection_span,
@@ -3472,6 +3631,7 @@ fn checked_references(
                 ),
                 private: alias.private,
                 binding: None,
+                origin: SymbolOrigin::Source,
             });
             index.references.push(DefinitionReference {
                 uri: file_uri,
@@ -3536,6 +3696,7 @@ fn checked_references(
                 detail: format!("module {alias}"),
                 private: false,
                 binding: None,
+                origin: SymbolOrigin::Source,
             });
             index.references.push(DefinitionReference {
                 uri: file_uri.clone(),
@@ -3623,6 +3784,7 @@ impl ReferenceIndex<'_> {
             detail: format!("var {name}"),
             private: false,
             binding: Some(binding),
+            origin: SymbolOrigin::Source,
         });
         self.references.push(DefinitionReference {
             uri: file.uri.clone(),

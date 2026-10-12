@@ -952,6 +952,10 @@ fn validate_file_runtime_target(ir: &str, triple: &str) -> Result<(), String> {
             format!("streaming file runtime cannot link this target: {message}; use --emit object for an unlinked object")
         })?;
     }
+    if ir.contains("; bhasa runtime: channels") {
+        target::require_native_posix64(triple)
+            .map_err(|message| format!("channel runtime cannot link this target: {message}"))?;
+    }
     Ok(())
 }
 
@@ -978,6 +982,12 @@ fn add_native_runtime(
     let uses_net = ir.contains("; bhasa runtime: net") || uses_tls;
     let uses_text = ir.contains("; bhasa runtime: text");
     let uses_collections = ir.contains("; bhasa runtime: collections");
+    let uses_channels = ir.contains("; bhasa runtime: channels");
+    let uses_threads = ir.contains("; bhasa runtime: threads") || uses_channels;
+    if uses_channels {
+        files.push(("channel.h", include_str!("../runtime/channel.h")));
+        files.push(("channel.c", include_str!("../runtime/channel.c")));
+    }
     if uses_file {
         files.push(("file.h", include_str!("../runtime/file.h")));
         files.push(("file.c", include_str!("../runtime/file.c")));
@@ -998,7 +1008,7 @@ fn add_native_runtime(
         files.push(("tls.h", include_str!("../runtime/tls.h")));
         files.push(("tls.c", include_str!("../runtime/tls.c")));
     }
-    if ir.contains("; bhasa runtime: threads") {
+    if uses_threads {
         files.push(("concurrency.h", include_str!("../runtime/concurrency.h")));
         files.push(("concurrency.c", include_str!("../runtime/concurrency.c")));
     }
@@ -1070,7 +1080,10 @@ fn add_native_runtime(
         command.arg(directory.join("tls.c")).arg("-pthread");
         add_openssl(command)?;
     }
-    if ir.contains("; bhasa runtime: threads") {
+    if uses_channels {
+        command.arg(directory.join("channel.c"));
+    }
+    if uses_threads {
         command.arg(directory.join("concurrency.c")).arg("-pthread");
     }
     if ir.contains("; bhasa runtime: gpu") && gpu == "metal" {
@@ -2040,6 +2053,208 @@ define i32 @main() sanitize_address {{
             check_hit(true);
         }
         for name in ["file.h", "net.h", "core.h"] {
+            let path = directory.path.join(name);
+            let original = fs::read(&path).unwrap();
+            let mut changed = original.clone();
+            changed.extend_from_slice(b"\nenum { BHASA_RUNTIME_CACHE_HEADER_REVISION = 1 };\n");
+            fs::write(&path, &changed).unwrap();
+            check_hit(false);
+            fs::write(&path, &original).unwrap();
+            check_hit(true);
+        }
+    }
+
+    #[test]
+    fn channel_only_target_guard_precedes_runtime_and_output_writes() {
+        let ir = "; bhasa runtime: core\n; bhasa runtime: channels\n";
+        assert!(!ir.contains("; bhasa runtime: file"));
+        for triple in [
+            "i686-unknown-linux-gnu",
+            "x86_64-unknown-linux-gnux32",
+            "aarch64-unknown-linux-gnu_ilp32",
+            "x86_64-unknown-linux-android",
+            "arm64-apple-ios18.0",
+            "wasm32-unknown-unknown",
+            "x86_64-pc-windows-msvc",
+        ] {
+            let directory = TemporaryDirectory::new(&std::env::temp_dir()).unwrap();
+            let output = directory.path.join("app");
+            let mut command = Command::new("unused-channel-clang-test-path");
+            command.arg("-o").arg(&output);
+            let before: Vec<_> = command.get_args().map(|arg| arg.to_owned()).collect();
+            let error =
+                add_native_runtime(&mut command, &directory.path, ir, triple, None).unwrap_err();
+            assert!(
+                error.starts_with("channel runtime cannot link this target: "),
+                "{triple}: {error}"
+            );
+            assert!(
+                error.contains("unsupported native 64-bit POSIX target"),
+                "{error}"
+            );
+            assert!(!output.exists());
+            assert_eq!(fs::read_dir(&directory.path).unwrap().count(), 0);
+            assert_eq!(
+                command
+                    .get_args()
+                    .map(|arg| arg.to_owned())
+                    .collect::<Vec<_>>(),
+                before
+            );
+            // A builtin declaration is not a channel runtime request.
+            add_native_runtime(
+                &mut command,
+                &directory.path,
+                "declare ptr @bhasa_rt_channel_new(ptr, i64, ptr)\n",
+                triple,
+                None,
+            )
+            .unwrap();
+            assert_eq!(fs::read_dir(&directory.path).unwrap().count(), 0);
+            assert_eq!(
+                command
+                    .get_args()
+                    .map(|arg| arg.to_owned())
+                    .collect::<Vec<_>>(),
+                before
+            );
+        }
+    }
+
+    #[test]
+    fn channel_runtime_marker_extracts_only_requested_runtime_sources() {
+        for channels in [false, true] {
+            let directory = TemporaryDirectory::new(&std::env::temp_dir()).unwrap();
+            let mut command = Command::new("unused-channel-clang-test-path");
+            let mut ir = "; bhasa runtime: core\n".to_owned();
+            ir.push_str("declare ptr @bhasa_rt_channel_new(ptr, i64, ptr)\n");
+            if channels {
+                ir.push_str("; bhasa runtime: channels\n");
+            }
+            add_native_runtime(
+                &mut command,
+                &directory.path,
+                &ir,
+                "arm64-apple-macosx26.0.0",
+                None,
+            )
+            .unwrap();
+            let arguments: Vec<_> = command.get_args().map(Path::new).collect();
+            for name in ["channel.c", "channel.h", "concurrency.c", "concurrency.h"] {
+                assert_eq!(directory.path.join(name).exists(), channels, "{name}");
+            }
+            for name in ["channel.c", "concurrency.c"] {
+                assert_eq!(
+                    arguments
+                        .iter()
+                        .any(|path| path.file_name().is_some_and(|p| p == name)),
+                    channels,
+                    "{name}"
+                );
+            }
+            assert_eq!(
+                arguments.iter().any(|path| *path == Path::new("-pthread")),
+                channels
+            );
+            for name in ["file.c", "file.h", "net.c", "net.h", "tls.c", "text.c"] {
+                assert!(!directory.path.join(name).exists(), "{name}");
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn channel_native_cache_tracks_promoted_runtime_sources_and_headers() {
+        let Some(toolchain) = streaming_file_test_toolchain() else {
+            return;
+        };
+        let triple = toolchain.resolved_triple(&Target::Native).unwrap();
+        let root = TemporaryDirectory::new(&std::env::temp_dir()).unwrap();
+        let directory = TemporaryDirectory::new(&root.path).unwrap();
+        let source = directory.path.join("program.ll");
+        let placeholder = directory.path.join("placeholder");
+        fs::write(
+            &source,
+            format!("target triple = \"{triple}\"\ndefine i32 @main() {{ ret i32 0 }}\n"),
+        )
+        .unwrap();
+        let opts = options(&["build", "unused.bh"]);
+        let mut initial = clang_command(&toolchain, &opts, &triple, &source, &placeholder, &[]);
+        add_native_runtime(
+            &mut initial,
+            &directory.path,
+            "; bhasa runtime: core\n; bhasa runtime: channels\n",
+            &triple,
+            None,
+        )
+        .unwrap();
+        for name in ["channel.c", "channel.h", "concurrency.c", "concurrency.h"] {
+            assert!(directory.path.join(name).exists(), "{name}");
+        }
+        for name in ["file.c", "file.h", "net.c", "net.h"] {
+            assert!(!directory.path.join(name).exists(), "{name}");
+        }
+        let program = initial.get_program().to_owned();
+        let arguments: Vec<_> = initial.get_args().map(|arg| arg.to_owned()).collect();
+        let make_command = |artifact: &Path| {
+            let mut command = Command::new(&program);
+            command.args(arguments.iter().map(|arg| {
+                if arg == placeholder.as_os_str() {
+                    artifact.as_os_str().to_owned()
+                } else {
+                    arg.clone()
+                }
+            }));
+            command
+        };
+        let first = directory.path.join("first");
+        let mut command = make_command(&first);
+        let cache = crate::build_cache::prepare(
+            &command,
+            &first,
+            &directory.path,
+            &root.path.join("build"),
+        )
+        .unwrap()
+        .expect("host native cache should admit the promoted runtime plan");
+        assert!(!cache.restore(&first).unwrap());
+        let result = toolchain.invoke(&mut command).unwrap();
+        assert!(result.status.success(), "{}", tool_output(&result));
+        cache.store(&first).unwrap();
+        let mut ordinal = 0;
+        let mut check_hit = |expected: bool| {
+            ordinal += 1;
+            let artifact = directory.path.join(format!("artifact-{ordinal}"));
+            let command = make_command(&artifact);
+            let entry = crate::build_cache::prepare(
+                &command,
+                &artifact,
+                &directory.path,
+                &root.path.join("build"),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(
+                entry.restore(&artifact).unwrap(),
+                expected,
+                "step {ordinal}"
+            );
+            if expected {
+                assert_eq!(fs::read(&artifact).unwrap(), fs::read(&first).unwrap());
+            }
+        };
+        check_hit(true);
+        for name in ["channel.c", "concurrency.c"] {
+            let path = directory.path.join(name);
+            let original = fs::read(&path).unwrap();
+            let mut changed = original.clone();
+            changed.extend_from_slice(b"\n/* runtime revision for cache probe */\n");
+            fs::write(&path, &changed).unwrap();
+            check_hit(false);
+            fs::write(&path, &original).unwrap();
+            check_hit(true);
+        }
+        for name in ["channel.h", "concurrency.h", "core.h"] {
             let path = directory.path.join(name);
             let original = fs::read(&path).unwrap();
             let mut changed = original.clone();

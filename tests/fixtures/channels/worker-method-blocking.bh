@@ -1,0 +1,4 @@
+import "@std" as ch
+struct Holder {endpoint:ch.Receiver[int]; def get(self)->int {match self.endpoint.recv(){case ch.ReceiveResult[int].ok(value){return value} case ch.ReceiveResult[int].error(reason){return -1}}}}
+def consume(holder:Holder)->int{return holder.get()}
+def main(){let pair=ch.channel[int](1);var task=spawn(consume(Holder(pair.receiver())));let value=join(task);print(value)}

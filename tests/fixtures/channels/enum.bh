@@ -1,0 +1,3 @@
+import "@std" as ch
+enum Item {some(value:int);none}
+def main(){let pair=ch.channel[Item](1);match pair.sender().try_send(Item.some(6)){case ch.SendResult[Item].ok(status){} case ch.SendResult[Item].error(failure){}} match pair.receiver().try_recv(){case ch.ReceiveResult[Item].ok(value){match value {case Item.some(number){print(number)} case Item.none{print(-2)}}} case ch.ReceiveResult[Item].error(reason){print(-1)}}}

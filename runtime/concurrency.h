@@ -33,4 +33,7 @@ void *bhasa_rt_await_owned(void *handle);
 void *bhasa_rt_task_alloc(int64_t bytes);
 void bhasa_rt_task_free(void *frame);
 
+/* Internal guard for blocking runtimes. All Bhasa worker kinds are guarded. */
+void bhasa_rt_require_nonworker(const char *operation);
+
 #endif

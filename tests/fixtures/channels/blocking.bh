@@ -1,0 +1,22 @@
+import "@std" as ch
+def main()->int {
+    let pair=ch.channel[int](1)
+    let sender=pair.sender()
+    let receiver=pair.receiver()
+    match receiver.try_recv() {
+        case ch.ReceiveResult[int].ok(value) {return 1}
+        case ch.ReceiveResult[int].error(reason) {
+            match reason {case ch.ReceiveError.empty {} case ch.ReceiveError.closed {return 2}}
+        }
+    }
+    match sender.send(42) {
+        case ch.SendResult[int].ok(status) {}
+        case ch.SendResult[int].error(failure) {return 3}
+    }
+    receiver.close()
+    match receiver.recv() {
+        case ch.ReceiveResult[int].ok(value) {print(value)}
+        case ch.ReceiveResult[int].error(reason) {return 4}
+    }
+    return 0
+}

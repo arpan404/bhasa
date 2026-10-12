@@ -5024,3 +5024,334 @@ fn checked_owned_tooling_grouped_moves_keep_exact_keyword_and_operand_identity()
     );
     assert!(bhasa::check(&renamed).is_ok(), "{renamed}");
 }
+
+fn channel_tooling_fixture(label: &str, source: &str) -> PathBuf {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(format!("channel-tooling-{}-{label}.bh", std::process::id()));
+    fs::write(&path, source).unwrap();
+    path
+}
+const CHANNEL_TOOLING_SOURCE: &str = "import \"std/channels.bh\" as ch\nstruct User{value:int;def send(self,x:int)->int{return self.value+x}}\ndef main(){let pair=ch.channel[int](1);let sender=pair.sender();let receiver=pair.receiver();match sender.try_send(42){case ch.SendResult[int].ok(status){}case ch.SendResult[int].error(failure){}}match receiver.try_recv(){case ch.ReceiveResult[int].ok(value){print(value)}case ch.ReceiveResult[int].error(reason){}}sender.close();receiver.close();let ordinary=User(1);print(ordinary.send(2))}\n";
+#[test]
+fn checked_channel_tooling_completion_hover_signature_semantics_and_readonly_identity() {
+    let source = CHANNEL_TOOLING_SOURCE;
+    let path = channel_tooling_fixture("checked", source);
+    let uri = file_uri(&path);
+    let loaded = bhasa::project::load_editor_graph(&path).unwrap();
+    bhasa::sema::check(bhasa::parse_files(&loaded.files).unwrap()).unwrap();
+    let site = source.find("sender.close()").unwrap() + 7;
+    let call = source.find("sender.try_send(42)").unwrap();
+    let getter = source.find("pair.sender()").unwrap();
+    let mut messages = start();
+    messages.push(open(&uri, source, 1));
+    messages.push(editor_request(
+        2,
+        "textDocument/completion",
+        &uri,
+        source,
+        site,
+    ));
+    messages.push(editor_request(
+        3,
+        "textDocument/hover",
+        &uri,
+        source,
+        call + 7,
+    ));
+    messages.push(signature_at(4, &uri, source, call + 16));
+    messages.push(signature_at(5, &uri, source, getter + 12));
+    messages.push(semantic_request(6, &uri));
+    messages.push(editor_request(
+        7,
+        "textDocument/prepareRename",
+        &uri,
+        source,
+        call + 7,
+    ));
+    messages.push(editor_request(
+        8,
+        "textDocument/definition",
+        &uri,
+        source,
+        call + 7,
+    ));
+    let pair_site = source.find("pair.sender()").unwrap() + 5;
+    messages.push(editor_request(
+        9,
+        "textDocument/completion",
+        &uri,
+        source,
+        pair_site,
+    ));
+    let receiver_site = source.find("receiver.close()").unwrap() + 9;
+    messages.push(editor_request(
+        10,
+        "textDocument/completion",
+        &uri,
+        source,
+        receiver_site,
+    ));
+    let namespace_site = source.find("ch.channel[int]").unwrap() + 3;
+    messages.push(editor_request(
+        11,
+        "textDocument/completion",
+        &uri,
+        source,
+        namespace_site,
+    ));
+
+    let output = exchange(messages);
+    let items = result(&output, 2).get("items").unwrap().as_array().unwrap();
+    for name in ["send", "try_send", "close"] {
+        assert!(
+            items
+                .iter()
+                .any(|i| i.get("label").unwrap().as_str() == Some(name)),
+            "{output:?}"
+        );
+    }
+    assert!(!items
+        .iter()
+        .any(|i| i.get("label").unwrap().as_str() == Some("recv")));
+    assert!(
+        result(&output, 3)
+            .to_string()
+            .contains("def try_send(arg1: int)"),
+        "{output:?}"
+    );
+    assert!(signature_label(result(&output, 4))
+        .unwrap()
+        .contains("def try_send(arg1: int)"));
+    assert!(signature_label(result(&output, 5))
+        .unwrap()
+        .contains("def sender()"));
+    assert_eq!(
+        semantic_site(result(&output, 6), source, call + 7),
+        Some((5, 0))
+    );
+    assert_eq!(result(&output, 7), &Value::Null);
+    let definition = result(&output, 8);
+    assert_eq!(definition.get("uri").unwrap().as_str(), Some(uri.as_str()));
+    assert_eq!(
+        definition.get("range").unwrap().get("start"),
+        Some(&source_position(
+            source,
+            source.find("ch.channel[int]").unwrap()
+        ))
+    );
+    for (id, expected) in [
+        (9, vec!["sender", "receiver"]),
+        (10, vec!["recv", "try_recv", "close"]),
+    ] {
+        let values = result(&output, id)
+            .get("items")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        for name in expected {
+            assert!(
+                values
+                    .iter()
+                    .any(|value| value.get("label").unwrap().as_str() == Some(name)),
+                "{output:?}"
+            );
+        }
+    }
+    let exports = result(&output, 11)
+        .get("items")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert!(
+        !exports.iter().any(|value| [
+            "send", "recv", "try_send", "try_recv", "close", "sender", "receiver"
+        ]
+        .contains(&value.get("label").unwrap().as_str().unwrap())),
+        "{output:?}"
+    );
+
+    fs::remove_file(path).unwrap();
+}
+#[test]
+fn checked_channel_tooling_ordinary_same_named_methods_keep_their_own_signatures() {
+    let source = CHANNEL_TOOLING_SOURCE;
+    let path = channel_tooling_fixture("ordinary", source);
+    let uri = file_uri(&path);
+    let site = source.find("ordinary.send(2)").unwrap() + 9;
+    let mut messages = start();
+    messages.push(open(&uri, source, 1));
+    messages.push(editor_request(2, "textDocument/hover", &uri, source, site));
+    messages.push(signature_at(3, &uri, source, site + 5));
+    messages.push(semantic_request(4, &uri));
+    let output = exchange(messages);
+    assert!(
+        result(&output, 2)
+            .to_string()
+            .contains("def send(x: int) -> int"),
+        "{output:?}"
+    );
+    assert_eq!(
+        signature_label(result(&output, 3)),
+        Some("def send(x: int) -> int")
+    );
+    assert_eq!(
+        semantic_site(result(&output, 4), source, site),
+        Some((5, 0))
+    );
+    fs::remove_file(path).unwrap();
+}
+#[test]
+fn checked_channel_tooling_rejected_and_incomplete_graphs_cannot_offer_intrinsics() {
+    for (label,source) in [("rejected",CHANNEL_TOOLING_SOURCE.replace("try_send(42)","try_send(false)")),("incomplete","import \"std/channels.bh\" as ch\ndef main(){let pair=ch.channel[int](1);let sender=pair.sender();sender.".into())] {
+        let path=channel_tooling_fixture(label,&source);let uri=file_uri(&path);
+        let site=if label=="incomplete"{source.len()}else{source.find("sender.try_send").unwrap()+7};
+        let mut messages=start();messages.push(open(&uri,&source,1));messages.push(editor_request(2,"textDocument/completion",&uri,&source,site));messages.push(semantic_request(3,&uri));
+        let output=exchange(messages);let items=result(&output,2).get("items").unwrap().as_array().unwrap();
+        assert!(!items.iter().any(|i|["send","try_send","close"].contains(&i.get("label").unwrap().as_str().unwrap())),"{output:?}");
+        assert!(decoded_semantic(result(&output,3)).is_empty());fs::remove_file(path).unwrap();
+    }
+}
+
+#[test]
+fn checked_channel_tooling_modified_registered_overlay_cannot_issue_hints() {
+    let source = CHANNEL_TOOLING_SOURCE;
+    let path = channel_tooling_fixture("modified-overlay", source);
+    let uri = file_uri(&path);
+    let std_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("std/channels.bh");
+    let standard = fs::read_to_string(&std_path).unwrap() + "\n";
+    let mut messages = start();
+    messages.push(open(&uri, source, 1));
+    messages.push(open(&file_uri(&std_path), &standard, 2));
+    let site = source.find("sender.close()").unwrap() + 7;
+    messages.push(editor_request(
+        2,
+        "textDocument/completion",
+        &uri,
+        source,
+        site,
+    ));
+    messages.push(editor_request(3, "textDocument/hover", &uri, source, site));
+    messages.push(semantic_request(4, &uri));
+    let output = exchange(messages);
+    assert_eq!(result(&output, 3), &Value::Null, "{output:?}");
+    assert!(!result(&output, 2)
+        .get("items")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|value| value.get("label").unwrap().as_str() == Some("close")));
+    assert!(decoded_semantic(result(&output, 4)).is_empty());
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn checked_channel_tooling_document_outline_contains_only_source_declarations() {
+    let source = CHANNEL_TOOLING_SOURCE;
+    let path = channel_tooling_fixture("source-outline", source);
+    let uri = file_uri(&path);
+    let mut messages = start();
+    messages.push(open(&uri, source, 1));
+    messages.push(request(
+        2,
+        "textDocument/documentSymbol",
+        document_params(&uri),
+    ));
+    let site = source.find("sender.try_send(42)").unwrap() + 7;
+    messages.push(editor_request(
+        3,
+        "textDocument/definition",
+        &uri,
+        source,
+        site,
+    ));
+    messages.push(semantic_request(4, &uri));
+    let output = exchange(messages);
+    let outline = result(&output, 2).as_array().unwrap();
+    assert_eq!(outline.len(), 3, "{output:?}");
+    for name in ["ch", "User", "main"] {
+        assert_eq!(
+            outline
+                .iter()
+                .filter(|symbol| symbol.get("name").unwrap().as_str() == Some(name))
+                .count(),
+            1,
+            "{output:?}"
+        );
+    }
+    let user = outline
+        .iter()
+        .find(|symbol| symbol.get("name").unwrap().as_str() == Some("User"))
+        .unwrap();
+    assert!(user
+        .get("children")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|symbol| symbol.get("name").unwrap().as_str() == Some("send")));
+    assert_eq!(
+        result(&output, 3).get("uri").unwrap().as_str(),
+        Some(uri.as_str())
+    );
+    assert_eq!(
+        semantic_site(result(&output, 4), source, site),
+        Some((5, 0))
+    );
+    fs::remove_file(path).unwrap();
+}
+#[test]
+fn checked_channel_tooling_ordinary_uri_marker_preserves_completion_and_rename() {
+    let source = "def work(x:int)->int{return x}\ndef main(){print(work(2))}\n";
+    for uri in [
+        "untitled:ordinary-control.bh",
+        "untitled:review#channel-operation:ordinary.bh",
+    ] {
+        let site = source.find("work(2)").unwrap();
+        let mut messages = start();
+        messages.push(open(uri, source, 1));
+        messages.push(editor_request(
+            2,
+            "textDocument/completion",
+            uri,
+            source,
+            site,
+        ));
+        messages.push(editor_request(
+            3,
+            "textDocument/prepareRename",
+            uri,
+            source,
+            site,
+        ));
+        messages.push(request(
+            4,
+            "textDocument/rename",
+            Value::object([
+                ("textDocument", document(uri)),
+                ("position", source_position(source, site)),
+                ("newName", "renamed".into()),
+            ]),
+        ));
+        let output = exchange(messages);
+        assert!(
+            result(&output, 2)
+                .get("items")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item.get("label").unwrap().as_str() == Some("work")),
+            "{uri}: {output:?}"
+        );
+        assert_ne!(result(&output, 3), &Value::Null, "{uri}: {output:?}");
+        let change = &result(&output, 4)
+            .get("documentChanges")
+            .unwrap()
+            .as_array()
+            .unwrap()[0];
+        let renamed = apply_rename(source, change);
+        assert!(renamed.contains("def renamed("));
+        assert!(renamed.contains("print(renamed(2))"));
+    }
+}

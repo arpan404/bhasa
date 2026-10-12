@@ -4,6 +4,13 @@ pub mod ast;
 mod bhasa_lexer;
 pub mod build_cache;
 pub mod builtins;
+mod channel_codegen;
+#[cfg(test)]
+#[path = "../tests/fixtures/channels/lowering_model.rs"]
+mod channel_model;
+mod channel_registry;
+mod channel_transfer;
+mod channels;
 pub mod codegen;
 pub mod collections;
 pub mod diagnostic;
@@ -59,6 +66,11 @@ impl ExpandedFiles {
         let mut program = generics::parse_expansion(&self.generics)
             .map_err(|errors| self.modules.map_diagnostics(errors))?;
         self.modules.remap_program(&mut program);
+        if let Some(receipts) = &self.generics.channels {
+            sema::normalize_enum_types(&mut program);
+            channel_registry::bind_expansion(&mut program, receipts)
+                .map_err(|error| vec![error])?;
+        }
         Ok(program)
     }
     pub fn check(&self) -> Result<ast::CheckedProgram, Vec<Diagnostic>> {
@@ -91,9 +103,13 @@ pub(crate) fn expand_files(
 ) -> Result<ExpandedFiles, Vec<Diagnostic>> {
     let modules = modules::expand_files(files)?;
     let type_roots = modules.type_roots()?;
-    let generics =
-        generics::expand_with_type_roots(&modules.source, &modules.boundaries, &type_roots)
-            .map_err(|errors| modules.map_diagnostics(errors))?;
+    let generics = generics::expand_with_channel_roots(
+        &modules.source,
+        &modules.boundaries,
+        &type_roots,
+        modules.channels.as_ref(),
+    )
+    .map_err(|errors| modules.map_diagnostics(errors))?;
     Ok(ExpandedFiles { modules, generics })
 }
 pub(crate) fn check_files(
@@ -128,8 +144,21 @@ pub fn compile_files_with_bhasa(
         if expanded.modules.has_member_privacy() {
             expanded.check()?;
         }
-        bhasa_lexer::compile(&expanded.source, target_triple, &expanded.boundaries)
+        if let Some(receipts) = &expanded.generics.channels {
+            let manifest = receipts
+                .native_manifest(&expanded.source, &expanded.boundaries, target_triple)
+                .map_err(|errors| expanded.map_diagnostics(errors))?;
+            bhasa_lexer::compile_with_channels(
+                &expanded.source,
+                target_triple,
+                &expanded.boundaries,
+                &manifest,
+            )
             .map_err(|errors| expanded.map_diagnostics(errors))
+        } else {
+            bhasa_lexer::compile(&expanded.source, target_triple, &expanded.boundaries)
+                .map_err(|errors| expanded.map_diagnostics(errors))
+        }
     }
     #[cfg(not(feature = "bhasa-frontend"))]
     {

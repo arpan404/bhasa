@@ -185,3 +185,182 @@ fn inspection_owned_rejects_invalid_transfer_before_reporting_api() {
         assert!(value.get("diagnostics").unwrap().as_array().unwrap().iter().any(|v|v.get("code").and_then(Value::as_str)==Some("S038")));
     }
 }
+
+#[test]
+#[cfg(unix)]
+fn inspection_channel_apis_hide_issued_storage_and_preserve_ordinary_fields_without_tools() {
+    let workspace = Workspace::new("inspect-channel-opaque");
+    std::os::unix::fs::symlink(fixture("std"), workspace.file("std")).unwrap();
+    workspace.write("bhasa.toml","[package]\nname=\"query-channels\"\nversion=\"0.1.0\"\nentry=\"main.bh\"\n[dependencies]\nstd=\"std\"\n");
+    let source="import \"@std\" as ch\nstruct Ordinary{__sender:int;private __payload:buffer;value:int}\ndef main(){let pair=ch.channel[int](1);let sender=pair.sender();let receiver=pair.receiver();sender.close();receiver.close()}\n";
+    let main = workspace.write("main.bh", source);
+    let invoke = |workspace: &Workspace, path: &std::path::Path| {
+        workspace
+            .command()
+            .arg("inspect")
+            .arg(path)
+            .arg("--json")
+            .env("PATH", "")
+            .env("BHASA_CLANG", workspace.file("unavailable-clang"))
+            .env("CARGO", workspace.file("unavailable-cargo"))
+            .output()
+            .unwrap()
+    };
+    let output = invoke(&workspace, &main);
+    succeeds(&output);
+    assert!(output.stderr.is_empty(), "{}", describe(&output));
+    assert_eq!(output.stdout, invoke(&workspace, &main).stdout);
+    let value = report(&output);
+    assert_eq!(value.get("ok"), Some(&Value::Bool(true)));
+    let declarations = value.get("declarations").unwrap().as_array().unwrap();
+    let lookup = |name: &str| {
+        declarations
+            .iter()
+            .find(|row| row.get("name").and_then(Value::as_str) == Some(name))
+            .unwrap()
+    };
+    let mut issued_count = 0;
+    for (owner, expected) in [
+        (
+            "Channel[int]",
+            vec![
+                ("sender", None, "Sender[int]"),
+                ("receiver", None, "Receiver[int]"),
+            ],
+        ),
+        (
+            "Sender[int]",
+            vec![
+                ("send", Some("int"), "SendResult[int]"),
+                ("try_send", Some("int"), "SendResult[int]"),
+                ("close", None, "void"),
+            ],
+        ),
+        (
+            "Receiver[int]",
+            vec![
+                ("recv", None, "ReceiveResult[int]"),
+                ("try_recv", None, "ReceiveResult[int]"),
+                ("close", None, "void"),
+            ],
+        ),
+    ] {
+        let row = lookup(owner);
+        assert!(
+            row.get("fields").unwrap().as_array().unwrap().is_empty(),
+            "opaque owner exposed storage: {row:?}"
+        );
+        let methods = row.get("methods").unwrap().as_array().unwrap();
+        assert_eq!(methods.len(), expected.len());
+        issued_count += methods.len();
+        for (name, payload, result_type) in expected {
+            let method = methods
+                .iter()
+                .find(|method| method.get("name").and_then(Value::as_str) == Some(name))
+                .unwrap();
+            assert_eq!(
+                method.get("kind").and_then(Value::as_str),
+                Some("intrinsic_method")
+            );
+            assert_eq!(method.get("owner").and_then(Value::as_str), Some(owner));
+            assert_eq!(
+                method.get("returns").and_then(Value::as_str),
+                Some(result_type)
+            );
+            assert_eq!(method.get("location"), row.get("location"));
+            assert_eq!(
+                method
+                    .get("location")
+                    .unwrap()
+                    .get("file")
+                    .and_then(Value::as_str),
+                Some(as_str(&main.canonicalize().unwrap()))
+            );
+            let start = method
+                .get("location")
+                .unwrap()
+                .get("span")
+                .unwrap()
+                .get("start")
+                .unwrap()
+                .as_i64()
+                .unwrap() as usize;
+            let end = method
+                .get("location")
+                .unwrap()
+                .get("span")
+                .unwrap()
+                .get("end")
+                .unwrap()
+                .as_i64()
+                .unwrap() as usize;
+            assert_eq!(&source[start..end], "ch.channel[int]");
+            let parameters = method.get("parameters").unwrap().as_array().unwrap();
+            assert_eq!(parameters.len(), 1 + usize::from(payload.is_some()));
+            assert_eq!(
+                parameters[0].get("name").and_then(Value::as_str),
+                Some("self")
+            );
+            assert_eq!(
+                parameters[0].get("type").and_then(Value::as_str),
+                Some(owner)
+            );
+            if let Some(payload) = payload {
+                assert_eq!(
+                    parameters[1].get("type").and_then(Value::as_str),
+                    Some(payload)
+                );
+            }
+            for parameter in parameters {
+                assert_eq!(
+                    parameter.get("mode").and_then(Value::as_str),
+                    Some("borrowed")
+                );
+                assert_eq!(parameter.get("mode_id").and_then(Value::as_i64), Some(0));
+            }
+        }
+    }
+    assert_eq!(issued_count, 8);
+    let ordinary = lookup("Ordinary");
+    let fields = ordinary.get("fields").unwrap().as_array().unwrap();
+    assert_eq!(fields.len(), 3);
+    for (name, private) in [("__sender", false), ("__payload", true), ("value", false)] {
+        let field = fields
+            .iter()
+            .find(|field| field.get("name").and_then(Value::as_str) == Some(name))
+            .unwrap();
+        assert_eq!(field.get("private"), Some(&Value::Bool(private)));
+    }
+    assert!(!workspace.file("build").exists() && !workspace.file("target").exists());
+    workspace.write("main.bh","import \"@std\" as ch\ndef main(){let pair=ch.channel[int](1);let sender=pair.sender();let bad=sender.try_send(false)}\n");
+    let rejected = invoke(&workspace, &main);
+    fails(&rejected);
+    let rejected = report(&rejected);
+    assert_eq!(rejected.get("ok"), Some(&Value::Bool(false)));
+    assert!(rejected.get("declarations").is_none());
+    assert!(!workspace.file("build").exists());
+    let control = Workspace::new("inspect-channel-no-authority");
+    let main = control.write(
+        "main.bh",
+        "struct Ordinary{__sender:int;private __payload:buffer;value:int}\ndef main(){}\n",
+    );
+    let output = invoke(&control, &main);
+    succeeds(&output);
+    assert_eq!(output.stdout, invoke(&control, &main).stdout);
+    let value = report(&output);
+    let row = value
+        .get("declarations")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row.get("name").and_then(Value::as_str) == Some("Ordinary"))
+        .unwrap();
+    let fields = row.get("fields").unwrap().as_array().unwrap();
+    assert_eq!(fields.len(), 3);
+    assert_eq!(fields[0].get("private"), Some(&Value::Bool(false)));
+    assert_eq!(fields[1].get("private"), Some(&Value::Bool(true)));
+    assert_eq!(fields[2].get("private"), Some(&Value::Bool(false)));
+    assert!(row.get("methods").unwrap().as_array().unwrap().is_empty());
+    assert!(!control.file("build").exists() && !control.file("target").exists());
+}

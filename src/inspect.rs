@@ -164,6 +164,62 @@ impl Query<'_> {
                 .collect(),
         )
     }
+    fn channel_methods(&self, record: &crate::ast::RecordDecl) -> Vec<Value> {
+        let operations = self
+            .program
+            .channels
+            .as_ref()
+            .and_then(|authority| authority.operations(self.program).ok())
+            .unwrap_or_default();
+        operations
+            .into_iter()
+            .filter(|operation| {
+                operation.owner
+                    == self
+                        .program
+                        .type_names
+                        .iter()
+                        .position(|name| name == &record.name)
+                        .unwrap_or(usize::MAX)
+            })
+            .map(|operation| {
+                Value::object([
+                    ("name", operation.operation.name().into()),
+                    ("kind", "intrinsic_method".into()),
+                    ("owner", self.ty(Type::Record(operation.owner))),
+                    ("private", false.into()),
+                    ("location", self.location(record.span)),
+                    (
+                        "parameters",
+                        Value::Array(
+                            operation
+                                .params
+                                .iter()
+                                .enumerate()
+                                .map(|(index, ty)| {
+                                    Value::object([
+                                        (
+                                            "name",
+                                            if index == 0 {
+                                                "self".to_owned()
+                                            } else {
+                                                format!("arg{index}")
+                                            }
+                                            .into(),
+                                        ),
+                                        ("type", self.ty(*ty)),
+                                        ("mode", "borrowed".into()),
+                                        ("mode_id", 0_i64.into()),
+                                    ])
+                                })
+                                .collect(),
+                        ),
+                    ),
+                    ("returns", self.ty(operation.result)),
+                ])
+            })
+            .collect()
+    }
     fn declarations(&self) -> Value {
         let mut declarations = Vec::new();
         for function in &self.program.functions {
@@ -173,12 +229,19 @@ impl Query<'_> {
             if crate::collections::is_collection(&record.name) {
                 continue;
             }
+            // These rows exist only after authority validation and an exact owner ID match.
+            let channel_methods = self.channel_methods(record);
+            let fields = if channel_methods.is_empty() {
+                self.fields(&record.fields)
+            } else {
+                Value::Array(Vec::new())
+            };
             declarations.push(Value::object([
                 ("name", self.display(&record.name).into()),
                 ("kind", "struct".into()),
                 ("private", self.private(record.span).into()),
                 ("location", self.location(record.span)),
-                ("fields", self.fields(&record.fields)),
+                ("fields", fields),
                 (
                     "methods",
                     Value::Array(
@@ -186,6 +249,7 @@ impl Query<'_> {
                             .methods
                             .iter()
                             .map(|method| self.function(method))
+                            .chain(channel_methods)
                             .collect(),
                     ),
                 ),

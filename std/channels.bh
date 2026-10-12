@@ -1,0 +1,46 @@
+# Typed bounded channels use compiler-issued Sender/Receiver specializations
+# and registered Channel templates.
+# Source contains no erased pointers, native callbacks or closure values.
+# Authenticated declaration stubs supply real module exports. Their storage and
+# methods are compiler-issued; no source endpoint constructor is permitted.
+struct Sender[T] { private __payload: T }
+struct Receiver[T] { private __payload: T }
+
+enum ChannelSent {
+    sent
+}
+
+enum SendFailure[T] {
+    closed(value: T)
+    full(value: T)
+}
+
+enum SendResult[T] {
+    ok(status: ChannelSent)
+    error(failure: SendFailure[T])
+}
+
+enum ReceiveError {
+    closed
+    empty
+}
+
+enum ReceiveResult[T] {
+    ok(value: T)
+    error(reason: ReceiveError)
+}
+
+struct Channel[T] {
+    private __sender: Sender[T]
+    private __receiver: Receiver[T]
+
+    # Public sender()/receiver() signatures and implementations are issued only
+    # by validated expansion metadata. Source getter bodies are forbidden.
+}
+
+# Inside this defining module, the checked Channel constructor accepts capacity
+# only. Compiler lowering creates both native owners and fills the private pair.
+# Callers use channel[T], then acquire endpoint copies through the getters.
+def channel[T](capacity: int) -> Channel[T] {
+    return Channel[T](capacity)
+}

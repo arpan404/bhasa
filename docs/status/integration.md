@@ -85,9 +85,9 @@ and general guest UBSan are outside this instrumentation claim.
 
 ## Remaining work
 
-Readonly/mutable borrows, channels and broader Result obligations remain isolated.
-Channel source authority and corrected native target/DAG/family/schema traversal
-have independent replay evidence, but are not wired into shared source. The raw
+Readonly/mutable borrows and broader Result obligations remain isolated.
+Typed bounded channels and corrected native authority/target/DAG/family/schema
+traversal now pass complete combined acceptance; the final evidence follows below. The raw
 five-argument synchronous C manifest boundary checks consistency; it is not
 cryptographic issuer authentication. Native explicit-borrow parity is now assigned
 against that reviewed channel baseline. S036/BH220, S037/BH221, S038/BH222,
@@ -108,3 +108,61 @@ the previously tested API; CUDA/Vulkan hardware, Linux/Windows execution and rea
 VS Code GUI remain unverified. Node Wasm probes are test tools; production still
 needs a reviewed no-GC engine and compiler/linker. No SDK or registry/release was
 installed or published.
+
+## Typed bounded channels: integrated and verified
+
+Both frontends now support compiler-issued Channel[T], Sender[T] and Receiver[T]
+through the canonical standard library. Bounded queues return typed full/closed
+errors, copy sender payloads independently, transfer received frames, drain after
+sender close and destroy unread frames at receiver close/final drop. Resolved
+worker graphs refuse blocking operations through free functions and methods;
+nonblocking operations and close remain available to workers.
+
+The native five-argument synchronous manifest bridge validates family-bound
+nominal/schema identities with traversal-local DAG memoization and bounded ranges.
+It borrows host storage for the call without retaining, mutating or freeing it.
+This adapter is a trusted consistency boundary, not cryptographic issuer
+verification for arbitrary raw callers. The existing four-argument entry remains.
+
+Checked LSP operation signatures/hover/navigation/semantic identities use explicit
+symbol origin. Synthetic methods do not become source outline declarations or
+rename edits; ordinary URI marker text grants no authority. Inspector metadata
+lists validated operations and suppresses private issued storage. Original graph
+success remains required; recovery does not create channel authority.
+
+| Gate | Result and evidence |
+| --- | --- |
+| Complete reference | 690 passing tests; build/verify-channels-reference-final.log. |
+| Complete matching hybrid | 726 passing tests; build/verify-channels-hybrid-final.log, run.0i4xahgR. |
+| Editor/inspection | 104 LSP groups per configuration, six actual CLI inspection groups per configuration, 94 Node tests. |
+| Runtime/ownership | 40,000 FIFO values, 40,108 exact payload drops and 14 fatal guards; nine valid guests at O0/O2 in both frontends with marked LLVM/C ASan, C UBSan and zero tracked live allocations. |
+| Native bridge | Four private unit groups exercise actual sealed dispatch, mapped original BH220/BH221, transitive free/method BH224 and nine exact BH223 malformed-manifest refusals. |
+| Source review | build/channel-final-source-review/receipt.md pins 81 accepted source identities, exact contextual transitions and bounded documentation claims. |
+| Formatting/Clippy | Both configurations with warnings denied, final matching hybrid archive and fmt pass; verify-channels-clippy-reference-final.log, -clippy-matching-hybrid.log and -fmt-final.log. |
+| Matching releases | 17 examples and five package tests per frontend; build/verify-channels-release-smoke-final.log. |
+| Persistent reuse | 40 scheduled unchanged native hits, four unchanged Rust adapter runs and two unchanged hybrid builds; zero Rust Compiling lines in reuse gates. |
+| A -> B -> C | Complete compiler LLVM and tested outputs agree at build/selfhost/run.O1R7XfeD; build/verify-channels-selfhost.log. |
+| Frozen inputs | All 301 source/test/example/dependency/editor identities remain exact; build/verify-channels-frozen-sources.json and -artifact-identity.json. |
+
+Final matching archive key:
+`f2ed8d6376f99ede7e82d6b6187e049533138c2b88249cddb629a0a96f180f03`.
+Complete hybrid, matching release, Clippy and both unchanged build checks use it.
+The exact current bootstrap source is retained in run.0i4xahgR/frontend.bh and the
+A/B/C compiler.bh. Caches were preserved; Cargo used at most two jobs and tests
+one thread. Complete reference and hybrid suites were serialized.
+
+Original failures are retained. The first full reference command could not start
+the existing HTTP listener because sandbox loopback bind returned EPERM; the
+unchanged complete suites pass with loopback permission. Independent review also
+corrected synthetic editor declarations, URI-based origin guessing, inspector
+storage visibility, descendant-held pipe timeouts and target/cache test attribution.
+No ownership or diagnostic rule was weakened. LLVM ASan and C ASan/UBSan plus
+explicit runtime accounting do not claim arbitrary guest UBSan, general libc leak
+coverage or a race proof.
+
+The scoped channel box is complete; select, deadlines/cancellation, async I/O,
+borrowed views, generic/aggregate ownership transfer and full language completion
+remain open. Linux/Windows execution, unavailable GPU/SDK hardware and actual VS
+Code GUI are not promoted to verified evidence. No SDK or registry/release was
+installed or published. Further implementation is paused at the user's request;
+the schedule is deleted and summary.md records the resume boundary.

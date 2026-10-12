@@ -84,6 +84,7 @@ impl Parser {
             self.skip_separators();
         }
         Ok(Program {
+            channels: None,
             functions,
             records,
             enums,

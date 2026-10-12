@@ -24,6 +24,7 @@ struct Mapping {
 /// Expanded source and a mapping back to the caller's original virtual source.
 #[derive(Debug, Clone)]
 pub struct Expansion {
+    pub(crate) channels: Option<crate::channel_registry::ExpansionReceipts>,
     pub source: String,
     /// EOF positions, each followed by a separator byte unless at source EOF.
     pub boundaries: Vec<usize>,
@@ -264,6 +265,11 @@ impl Expansion {
 pub fn parse_expansion(
     expansion: &Expansion,
 ) -> std::result::Result<ast::Program, Vec<Diagnostic>> {
+    if let Some(receipts) = &expansion.channels {
+        receipts
+            .validate(&expansion.source, &expansion.boundaries)
+            .map_err(|error| vec![error])?;
+    }
     let mut program = ast::Program::default();
     let mut start = 0;
     let mut ends = expansion.boundaries.clone();
@@ -543,6 +549,9 @@ enum DeclarationKind {
 enum Intrinsic {
     List,
     Map,
+    Sender,
+    Receiver,
+    Channel,
 }
 #[derive(Debug, Clone)]
 struct Template {
@@ -591,6 +600,9 @@ struct Engine<'a> {
     types: BTreeSet<String>,
     instances: Vec<Instance>,
     instance_names: BTreeMap<String, usize>,
+    channels: Option<crate::channel_registry::ModuleEvidence>,
+    families: Vec<crate::channel_registry::FamilyNames>,
+    family_keys: BTreeSet<String>,
 }
 
 impl Engine<'_> {
@@ -866,7 +878,95 @@ impl Engine<'_> {
         }
     }
 
+    fn register_channels(&mut self) -> Result<()> {
+        let Some(evidence) = &self.channels else {
+            return Ok(());
+        };
+        for (role, intrinsic) in [
+            ("Sender", Intrinsic::Sender),
+            ("Receiver", Intrinsic::Receiver),
+            ("Channel", Intrinsic::Channel),
+        ] {
+            let name = &evidence.names()[role];
+            let template = *self.by_name.get(name).ok_or_else(|| {
+                error(
+                    "G008",
+                    "registered channel template missing",
+                    Span::default(),
+                )
+            })?;
+            if self.templates[template].kind != DeclarationKind::Struct
+                || self.templates[template].params.len() != 1
+            {
+                return Err(error(
+                    "G008",
+                    "registered channel template identity changed",
+                    self.templates[template].span,
+                ));
+            }
+            self.templates[template].intrinsic = Some(intrinsic);
+        }
+        Ok(())
+    }
     fn instantiate(
+        &mut self,
+        template: usize,
+        args: Vec<Concrete>,
+        site: Span,
+        ancestors: &[usize],
+    ) -> Result<Concrete> {
+        let result = self.intern_instance(template, args.clone(), site, ancestors)?;
+        let channel_use = matches!(
+            self.templates[template].intrinsic,
+            Some(Intrinsic::Sender | Intrinsic::Receiver | Intrinsic::Channel)
+        ) || self
+            .channels
+            .as_ref()
+            .is_some_and(|e| e.names().get("channel") == Some(&self.templates[template].name));
+        if channel_use {
+            let [payload] = args.as_slice() else {
+                return Err(error("G008", "channel requires one concrete payload", site));
+            };
+            if self.family_keys.insert(payload.name.clone()) {
+                let names = self.channels.as_ref().unwrap().names().clone();
+                let mut family = BTreeMap::new();
+                for role in [
+                    "Sender",
+                    "Receiver",
+                    "Channel",
+                    "SendFailure",
+                    "SendResult",
+                    "ReceiveResult",
+                    "channel",
+                ] {
+                    let template = *self
+                        .by_name
+                        .get(&names[role])
+                        .ok_or_else(|| error("G008", "channel family template missing", site))?;
+                    family.insert(
+                        role,
+                        self.intern_instance(template, vec![payload.clone()], site, ancestors)?
+                            .name,
+                    );
+                }
+                self.families.push(crate::channel_registry::FamilyNames {
+                    payload: payload.name.clone(),
+                    sender: family["Sender"].clone(),
+                    receiver: family["Receiver"].clone(),
+                    pair: family["Channel"].clone(),
+                    send_failure: family["SendFailure"].clone(),
+                    send_result: family["SendResult"].clone(),
+                    receive_result: family["ReceiveResult"].clone(),
+                    factory: family["channel"].clone(),
+                    receipt: names["ChannelSent"].clone(),
+                    receive_error: names["ReceiveError"].clone(),
+                });
+            }
+        }
+        Ok(result)
+    }
+
+    fn intern_instance(
         &mut self,
         template: usize,
         args: Vec<Concrete>,
@@ -927,6 +1027,9 @@ impl Engine<'_> {
         let name = match declaration.intrinsic {
             Some(Intrinsic::List) => format!("{PREFIX}list_{}", self.instances.len()),
             Some(Intrinsic::Map) => format!("{PREFIX}map_{}", self.instances.len()),
+            Some(Intrinsic::Sender) => format!("{PREFIX}sender_{}", self.instances.len()),
+            Some(Intrinsic::Receiver) => format!("{PREFIX}receiver_{}", self.instances.len()),
+            Some(Intrinsic::Channel) => format!("{PREFIX}channel_{}", self.instances.len()),
             None => format!("{PREFIX}{}", self.instances.len()),
         };
         self.instance_names
@@ -1017,7 +1120,7 @@ impl Engine<'_> {
             } else if let Some(declaration) = self
                 .templates
                 .iter()
-                .find(|template| template.intrinsic.is_none() && template.tokens.start == index)
+                .find(|template| !template.tokens.is_empty() && template.tokens.start == index)
             {
                 index = declaration.tokens.end;
                 continue;
@@ -1271,7 +1374,7 @@ pub fn expand(
     source: &str,
     boundaries: &[usize],
 ) -> std::result::Result<Expansion, Vec<Diagnostic>> {
-    expand_inner(source, boundaries, &[]).map_err(|error| vec![error])
+    expand_inner(source, boundaries, &[], None).map_err(|error| vec![error])
 }
 
 /// A canonical type requested by source metadata, without a runtime wrapper.
@@ -1289,7 +1392,7 @@ pub fn expand_with_type_roots(
     boundaries: &[usize],
     roots: &[TypeRoot],
 ) -> std::result::Result<Expansion, Vec<Diagnostic>> {
-    expand_inner(source, boundaries, roots).map_err(|error| vec![error])
+    expand_inner(source, boundaries, roots, None).map_err(|error| vec![error])
 }
 
 fn parse_type_root(root: &TypeRoot) -> Result<TypeExpr> {
@@ -1303,6 +1406,9 @@ fn parse_type_root(root: &TypeRoot) -> Result<TypeExpr> {
             types: BTreeSet::new(),
             instances: Vec::new(),
             instance_names: BTreeMap::new(),
+            channels: None,
+            families: Vec::new(),
+            family_keys: BTreeSet::new(),
         };
         let mut index = 0;
         let expression = engine.type_expr(&mut index, 0)?;
@@ -1346,6 +1452,9 @@ pub fn template_program(
             types: BTreeSet::new(),
             instances: Vec::new(),
             instance_names: BTreeMap::new(),
+            channels: None,
+            families: Vec::new(),
+            family_keys: BTreeSet::new(),
         };
         engine.discover()?;
         engine.add_intrinsics();
@@ -1353,7 +1462,7 @@ pub fn template_program(
         for template in engine
             .templates
             .iter()
-            .filter(|template| template.intrinsic.is_none())
+            .filter(|template| !template.tokens.is_empty())
         {
             program.merge(engine.template_program(template)?);
         }
@@ -1362,7 +1471,23 @@ pub fn template_program(
     result().map_err(|error| vec![error])
 }
 
-fn expand_inner(source: &str, boundaries: &[usize], roots: &[TypeRoot]) -> Result<Expansion> {
+pub(crate) fn expand_with_channel_roots(
+    source: &str,
+    boundaries: &[usize],
+    roots: &[TypeRoot],
+    evidence: Option<&crate::channel_registry::ModuleEvidence>,
+) -> std::result::Result<Expansion, Vec<Diagnostic>> {
+    expand_inner(source, boundaries, roots, evidence).map_err(|error| vec![error])
+}
+fn expand_inner(
+    source: &str,
+    boundaries: &[usize],
+    roots: &[TypeRoot],
+    evidence: Option<&crate::channel_registry::ModuleEvidence>,
+) -> Result<Expansion> {
+    if let Some(evidence) = evidence {
+        evidence.validate(source, boundaries)?;
+    }
     let tokens = scan(source, boundaries)?;
     let mut engine = Engine {
         source,
@@ -1373,11 +1498,17 @@ fn expand_inner(source: &str, boundaries: &[usize], roots: &[TypeRoot]) -> Resul
         types: BTreeSet::new(),
         instances: Vec::new(),
         instance_names: BTreeMap::new(),
+        channels: None,
+        families: Vec::new(),
+        family_keys: BTreeSet::new(),
     };
+    engine.channels = evidence.cloned();
     engine.discover()?;
+    engine.register_channels()?;
     let has_arguments = engine.tokens.iter().any(|token| token.text(source) == "[");
     if engine.templates.is_empty() && !has_arguments && roots.is_empty() {
         return Ok(Expansion {
+            channels: None,
             source: source.to_owned(),
             boundaries: boundaries.to_vec(),
             mappings: vec![Mapping {
@@ -1394,7 +1525,7 @@ fn expand_inner(source: &str, boundaries: &[usize], roots: &[TypeRoot]) -> Resul
     for template in engine
         .templates
         .iter()
-        .filter(|template| template.intrinsic.is_none())
+        .filter(|template| !template.tokens.is_empty())
     {
         engine.template_program(template)?;
     }
@@ -1428,7 +1559,7 @@ fn expand_inner(source: &str, boundaries: &[usize], roots: &[TypeRoot]) -> Resul
     for template in engine
         .templates
         .iter()
-        .filter(|template| template.intrinsic.is_none())
+        .filter(|template| !template.tokens.is_empty())
     {
         let blank = source[template.span.start..template.span.end]
             .bytes()
@@ -1474,6 +1605,27 @@ fn expand_inner(source: &str, boundaries: &[usize], roots: &[TypeRoot]) -> Resul
                     "\nstruct {} {{ __key: {}; __value: {} }}\n",
                     instance.name, instance.args[0].name, instance.args[1].name
                 ),
+                Intrinsic::Sender | Intrinsic::Receiver => format!(
+                    "\nstruct {} {{ __payload: {} }}\n",
+                    instance.name, instance.args[0].name
+                ),
+                Intrinsic::Channel => {
+                    let family = engine
+                        .families
+                        .iter()
+                        .find(|f| f.pair == instance.name)
+                        .ok_or_else(|| {
+                            error(
+                                "G008",
+                                "channel specialization lost its receipt",
+                                instance.site,
+                            )
+                        })?;
+                    format!(
+                        "\nstruct {} {{ __sender: {}; __receiver: {} }}\n",
+                        instance.name, family.sender, family.receiver
+                    )
+                }
             };
             builder.append(&schema, instance.site, false);
             if builder.output.len() - initial_len > MAX_GENERATED_BYTES {
@@ -1531,12 +1683,21 @@ fn expand_inner(source: &str, boundaries: &[usize], roots: &[TypeRoot]) -> Resul
     if !engine.instances.is_empty() {
         builder.boundaries.push(builder.output.len());
     }
+    let channel_receipts = engine.channels.clone().map(|module| {
+        crate::channel_registry::expanded_receipts(
+            module,
+            engine.families.clone(),
+            &builder.output,
+            &builder.boundaries,
+        )
+    });
     let names = engine
         .instances
         .iter()
         .map(|instance| (instance.name.clone(), instance.display.clone()))
         .collect();
     Ok(Expansion {
+        channels: channel_receipts,
         source: builder.output,
         boundaries: builder.boundaries,
         mappings: builder.mappings,

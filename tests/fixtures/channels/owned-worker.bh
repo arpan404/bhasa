@@ -1,0 +1,59 @@
+import "@std" as ch
+def consume(endpoint: ch.Receiver[buffer]) -> buffer {
+    match endpoint.try_recv() {
+        case ch.ReceiveResult[buffer].ok(value) { return value }
+        case ch.ReceiveResult[buffer].error(reason) { return buffer("bad") }
+    }
+}
+def accepted(sender:ch.Sender[buffer], value:buffer) {
+    match sender.try_send(value) {
+        case ch.SendResult[buffer].ok(status) {}
+        case ch.SendResult[buffer].error(failure) { print(-1) }
+    }
+}
+def discard_unread() {
+    let pair=ch.channel[buffer](1)
+    accepted(pair.sender(),buffer("unread"))
+}
+def main()->int {
+    discard_unread()
+    let pair=ch.channel[buffer](1)
+    let sender=pair.sender()
+    let receiver=pair.receiver()
+    var original=buffer("first")
+    accepted(sender, original)
+    set(original,0,88)
+    match sender.try_send(buffer("full")) {
+        case ch.SendResult[buffer].ok(status) {return 1}
+        case ch.SendResult[buffer].error(failure) {
+            match failure {
+                case ch.SendFailure[buffer].closed(value) {return 2}
+                case ch.SendFailure[buffer].full(value) {if not same(value,"full") {return 3}}
+            }
+        }
+    }
+    var task=spawn(consume(receiver))
+    let received=join(task)
+    if not same(received,"first") {return 4}
+    sender.close()
+    match sender.try_send(buffer("closed")) {
+        case ch.SendResult[buffer].ok(status) {return 5}
+        case ch.SendResult[buffer].error(failure) {
+            match failure {
+                case ch.SendFailure[buffer].closed(value) {if not same(value,"closed") {return 6}}
+                case ch.SendFailure[buffer].full(value) {return 7}
+            }
+        }
+    }
+    match receiver.try_recv() {
+        case ch.ReceiveResult[buffer].ok(value) {return 8}
+        case ch.ReceiveResult[buffer].error(reason) {
+            match reason {
+                case ch.ReceiveError.closed {}
+                case ch.ReceiveError.empty {return 9}
+            }
+        }
+    }
+    print(42)
+    return 0
+}

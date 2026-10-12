@@ -1,0 +1,2 @@
+import "@std" as ch
+def main(){let pair=ch.channel[int](1);var result=pair.sender().try_send(42); match pair.receiver().try_recv(){case ch.ReceiveResult[int].ok(value){print(value)} case ch.ReceiveResult[int].error(reason){print(-1)}}}

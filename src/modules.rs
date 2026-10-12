@@ -54,6 +54,7 @@ pub struct TypeAliasNominalUse {
 }
 #[derive(Debug, Clone)]
 pub struct Expansion {
+    pub(crate) channels: Option<crate::channel_registry::ModuleEvidence>,
     /// Original-source metadata for API inspection and editor symbol identity.
     pub type_aliases: Vec<TypeAliasInfo>,
     pub type_alias_uses: Vec<TypeAliasUse>,
@@ -389,11 +390,13 @@ pub fn expand_files(files: &[SourceFile]) -> std::result::Result<Expansion, Vec<
     expand_inner(files).map_err(|error| vec![error])
 }
 fn expand_inner(files: &[SourceFile]) -> Result<Expansion> {
+    let loaded_channels = crate::channel_registry::registered_module(files)?;
     let original = crate::project::flattened_source(files);
     let mut modules = Vec::new();
     let mut enabled = files
         .iter()
         .any(|file| file.imports.iter().any(|import| import.alias.is_some()));
+    enabled |= loaded_channels.is_some();
     for (owner, file) in files.iter().enumerate() {
         let mut tokens = crate::lexer::lex(&file.source).map_err(|mut errors| {
             let mut error = errors.remove(0);
@@ -444,6 +447,7 @@ fn expand_inner(files: &[SourceFile]) -> Result<Expansion> {
         modules.push(module);
     }
     let mut expansion = Expansion {
+        channels: None,
         type_aliases: Vec::new(),
         type_alias_uses: Vec::new(),
         type_alias_nominal_uses: Vec::new(),
@@ -793,6 +797,20 @@ fn expand_inner(files: &[SourceFile]) -> Result<Expansion> {
     expansion
         .type_alias_uses
         .sort_by_key(|use_| use_.span.start);
+    if let Some(loaded) = loaded_channels {
+        let owner = loaded.owner();
+        let bindings = modules[owner]
+            .declarations
+            .iter()
+            .map(|(name, declaration)| (name.clone(), declaration.internal.clone()))
+            .collect();
+        expansion.channels = Some(crate::channel_registry::lowered_receipt(
+            loaded,
+            bindings,
+            &expansion.source,
+            &expansion.boundaries,
+        )?);
+    }
     Ok(expansion)
 }
 fn append(expansion: &mut Expansion, text: &str, original: Span, linear: bool) -> Result<()> {
@@ -1994,7 +2012,10 @@ pub(crate) fn visit_program_spans(program: &mut ast::Program, map: &impl Fn(Span
         }
     }
 }
-fn visit_program_expressions(program: &ast::Program, visit: &mut impl FnMut(&ast::Expr)) {
+pub(crate) fn visit_program_expressions(
+    program: &ast::Program,
+    visit: &mut impl FnMut(&ast::Expr),
+) {
     fn expr(value: &ast::Expr, visit: &mut impl FnMut(&ast::Expr)) {
         visit(value);
         match &value.kind {

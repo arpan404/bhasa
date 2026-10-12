@@ -1,0 +1,3 @@
+import "@std" as ch
+def consume(endpoint:ch.Receiver[int])->int {match endpoint.recv(){case ch.ReceiveResult[int].ok(value){return value} case ch.ReceiveResult[int].error(reason){return -1}}}
+def main(){let pair=ch.channel[int](1);var task=spawn(consume(pair.receiver()));let value=join(task);print(value)}

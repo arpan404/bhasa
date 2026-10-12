@@ -80,6 +80,8 @@ pub struct Program {
     pub enums: Vec<EnumDecl>,
     /// Includes unresolved names so checking can report unknown types by name.
     pub type_names: Vec<String>,
+    /// Opaque loader/expansion authority; public AST mutation is revalidated.
+    pub channels: Option<std::sync::Arc<crate::channel_registry::BoundAuthority>>,
 }
 impl Program {
     pub fn type_name(&self, ty: Type) -> String {
@@ -149,6 +151,10 @@ impl Program {
     /// Merge a parsed module after converting its local type IDs to this program's
     /// IDs. Duplicate declarations remain intact for semantic diagnostics.
     pub fn merge(&mut self, mut other: Program) {
+        // Issuance is after the final merge; merging an issued graph revokes it.
+        if self.channels.is_some() || other.channels.is_some() {
+            self.channels = None;
+        }
         let ids: Vec<_> = other
             .type_names
             .iter()

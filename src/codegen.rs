@@ -321,11 +321,25 @@ fn emit_module(program: &CheckedProgram, target: &str) -> Result<String> {
     {
         return Err(error("invalid LLVM target triple", Span::default()));
     }
+    if let Some(authority) = &program.program.channels {
+        authority
+            .validate(&program.program)
+            .map_err(|message| error(message, Span::default()))?;
+    }
     validate_declarations(program)?;
+    if let Some(diagnostic) = crate::sema::channel_worker_effects(&program.program)
+        .into_iter()
+        .next()
+    {
+        return Err(diagnostic);
+    }
     let mut module = Module {
         program: &program.program,
         signatures: &program.signatures,
         task_wrappers: BTreeSet::new(),
+        used_channels: BTreeSet::new(),
+        target,
+        channels: false,
         record_helpers: BTreeSet::new(),
         enum_helpers: BTreeSet::new(),
         strings: Vec::new(),
@@ -362,6 +376,7 @@ fn emit_module(program: &CheckedProgram, target: &str) -> Result<String> {
         }
     }
     definitions.push_str(&module.emit_task_wrappers()?);
+    definitions.push_str(&module.emit_channel_helpers()?);
     definitions.push_str(&module.emit_record_helpers(target)?);
     if let Some(main) = program.signatures.get("main") {
         if module.runtime.is_empty() {
@@ -426,6 +441,9 @@ fn emit_module(program: &CheckedProgram, target: &str) -> Result<String> {
     }
     if !module.runtime.is_empty() {
         output.push_str("; bhasa runtime: core\n");
+    }
+    if module.channels {
+        output.push_str("; bhasa runtime: channels\n");
     }
     if module.threads {
         output.push_str("; bhasa runtime: threads\n");
@@ -516,6 +534,9 @@ struct Module<'a> {
     program: &'a Program,
     signatures: &'a BTreeMap<String, FunctionSig>,
     task_wrappers: BTreeSet<String>,
+    used_channels: BTreeSet<usize>,
+    target: &'a str,
+    channels: bool,
     record_helpers: BTreeSet<usize>,
     enum_helpers: BTreeSet<usize>,
     strings: Vec<String>,
@@ -551,6 +572,39 @@ fn task_frame_size(ty: Type) -> String {
 }
 
 impl Module<'_> {
+    fn emit_channel_helpers(&mut self) -> Result<String> {
+        let Some(authority) = &self.program.channels else {
+            return Ok(String::new());
+        };
+        let authority = std::sync::Arc::clone(authority);
+        let mut output = String::new();
+        for pair in self.used_channels.clone() {
+            let helpers = crate::channel_codegen::emit_helpers(
+                self.program,
+                authority.registry(),
+                authority.context(),
+                pair,
+                self.target,
+                &[],
+            )
+            .map_err(|message| error(message, Span::default()))?;
+            for declaration in helpers.declarations {
+                if !declaration.contains("@llvm.trap") {
+                    self.runtime.insert(declaration);
+                }
+            }
+            for ty in helpers.required_owned_helpers {
+                self.record_field_helper(ty, true);
+                self.record_field_helper(ty, false);
+            }
+            output.push_str(&helpers.descriptor);
+            output.push_str(&helpers.definitions);
+            self.channels = true;
+            self.threads = true;
+            self.needs_trap = true;
+        }
+        Ok(output)
+    }
     fn emit_task_wrappers(&mut self) -> Result<String> {
         let mut output = String::new();
         for worker in self.task_wrappers.clone() {
@@ -608,6 +662,15 @@ impl Module<'_> {
     }
 
     fn field(&self, ty: Type, name: &str, span: Span) -> Result<(usize, usize, Type)> {
+        if self
+            .program
+            .channels
+            .as_ref()
+            .and_then(|a| a.schema(ty))
+            .is_some()
+        {
+            return Err(error("channel storage is compiler-only", span));
+        }
         let Type::Record(id) = ty else {
             return Err(error("field access requires a record", span));
         };
@@ -644,6 +707,15 @@ impl Module<'_> {
             };
             emitted.insert(id);
             let record = self.record(id, Span::default())?.clone();
+            if self
+                .program
+                .channels
+                .as_ref()
+                .and_then(|a| a.schema(Type::Record(id)))
+                .is_some_and(|schema| matches!(schema, crate::channels::Schema::Endpoint { .. }))
+            {
+                continue;
+            }
             if let Some(schema) = crate::collections::schema(&record)
                 .map_err(|message| error(message, record.span))?
             {
@@ -1009,6 +1081,7 @@ impl Value {
 struct FunctionEmitter<'a, 'b> {
     module: &'a mut Module<'b>,
     return_type: Type,
+    function_key: String,
     scopes: Vec<BTreeMap<String, Local>>,
     allocations: String,
     body: String,
@@ -1030,6 +1103,7 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
         let mut emitter = Self {
             module,
             return_type: function.return_type,
+            function_key: name.to_owned(),
             scopes: vec![BTreeMap::new()],
             allocations: String::new(),
             body: String::new(),
@@ -2265,6 +2339,46 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
     }
 
     fn call(&mut self, name: &str, args: &[Expr], span: Span) -> Result<Value> {
+        if let Some(operation) = self
+            .module
+            .program
+            .channels
+            .as_ref()
+            .and_then(|a| a.operation(self.module.program, name))
+        {
+            if operation.params.len() != args.len() {
+                return Err(error("channel argument count mismatch", span));
+            }
+            let mut values = Vec::new();
+            for (argument, expected) in args.iter().zip(operation.params) {
+                let value = self.expression(argument)?;
+                value.require(expected, argument.span)?;
+                values.push(value);
+            }
+            self.module.used_channels.insert(operation.pair);
+            let arguments = values
+                .iter()
+                .map(|v| format!("{} {}", llvm_type(v.ty), v.operand))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let call = format!(
+                "call {} {}({arguments})",
+                llvm_type(operation.result),
+                operation.helper
+            );
+            let result = if operation.result == Type::Void {
+                self.instruction(call);
+                Value::new(Type::Void, "")
+            } else {
+                let result = self.fresh();
+                self.instruction(format!("{result} = {call}"));
+                Value::new(operation.result, result).owned()
+            };
+            for value in &values {
+                self.release(value);
+            }
+            return Ok(result);
+        }
         if let Some((owner, variant_name)) = name.split_once('.') {
             if let Some(id) = self
                 .module
@@ -2368,6 +2482,31 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
             .iter()
             .position(|candidate| candidate == name)
         {
+            if let Some(authority) = &self.module.program.channels {
+                if let Some(schema) = authority.schema(Type::Record(id)) {
+                    match schema {
+                        crate::channels::Schema::Endpoint { .. } => {
+                            return Err(error("endpoint constructor is compiler-only", span))
+                        }
+                        crate::channels::Schema::Channel { .. } => {
+                            if !authority.factory_allowed(id, &self.function_key, span)
+                                || args.len() != 1
+                            {
+                                return Err(error("unapproved Channel constructor", span));
+                            }
+                            let capacity = self.expression(&args[0])?;
+                            capacity.require(Type::Int, span)?;
+                            self.module.used_channels.insert(id);
+                            let result = self.fresh();
+                            self.instruction(format!(
+                                "{result} = call ptr @bhasa.channel.{id}.new(i64 {})",
+                                capacity.operand
+                            ));
+                            return Ok(Value::new(Type::Record(id), result).owned());
+                        }
+                    }
+                }
+            }
             let record = self.module.record(id, span)?.clone();
             if crate::collections::schema(&record)
                 .map_err(|message| error(message, span))?
@@ -2852,6 +2991,7 @@ mod tests {
             .collect();
         CheckedProgram {
             program: Program {
+                channels: None,
                 functions,
                 records: Vec::new(),
                 enums: Vec::new(),

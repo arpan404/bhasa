@@ -169,6 +169,8 @@ def be_method_find(source: buffer, tokens: ints, ctx: ints, owner: int, name: in
     return -1
 }
 def be_function_symbol(source: buffer, tokens: ints, ctx: ints, node: int) -> buffer {
+    var issued = bc_symbol(ctx, node)
+    if len(issued) != 0 { return issued }
     var symbol = buffer()
     if get(ctx, node + 7) >= 100 {
         symbol = be_number("bhasa.method.", get(ctx, node + 7)); append(symbol, ".")
@@ -181,9 +183,9 @@ def be_function_symbol(source: buffer, tokens: ints, ctx: ints, node: int) -> bu
 def be_parameter_mode(ctx: ints, signature: int, index: int) -> int {
     var node = get(ctx, 31); var steps = 0
     while node >= 0 {
-        if node < 37 or node + 5 >= len(ctx) or steps >= len(ctx) { return -1 }
+        if node < 40 or node + 5 >= len(ctx) or steps >= len(ctx) { return -1 }
         if get(ctx, node + 1) == signature and get(ctx, node + 2) == index {
-            if signature < 37 or index < 0 or signature + 9 + index * 2 >= len(ctx) { return -1 }
+            if signature < 40 or index < 0 or signature + 9 + index * 2 >= len(ctx) { return -1 }
             if get(ctx, node + 4) != get(ctx, signature + 8 + index * 2) - 1 or get(ctx, node + 5) != get(ctx, signature + 9 + index * 2) { return -1 }
             return get(ctx, node + 3)
         }
@@ -203,7 +205,7 @@ def be_owned_marker(source: buffer, tokens: ints, token: int) -> bool {
     return bh_token_kind(tokens, token) == 1 and same(bh_token_text(source, tokens, token), "owned") and bh_token_kind(tokens, token + 1) == 1
 }
 def be_validate_modes(source: buffer, tokens: ints, ctx: ints, errors: ints, signature: int) {
-    if signature < 37 or signature + 7 >= len(ctx) { be_error_at(tokens, errors, 222, 0); return }
+    if signature < 40 or signature + 7 >= len(ctx) { be_error_at(tokens, errors, 222, 0); return }
     var count = get(ctx, signature + 3)
     if count < 0 or count > (len(ctx) - signature - 8) / 2 { be_error_at(tokens, errors, 222, 0); return }
     var i = 0
@@ -239,7 +241,7 @@ def be_move(source: buffer, tokens: ints, ctx: ints, errors: ints, body: buffer)
     var local = be_find(source, tokens, ctx, get(ctx, 7), name)
     if local < 0 { be_error_at(tokens, errors, 222, marker); be_meta(ctx, 0, 0); return buffer() }
     var ty = get(ctx, local + 2)
-    if get(ctx, 33) == 0 or get(ctx, get(ctx, 12) + 7) >= 100 or (ty != 4 and ty != 5) or get(ctx, local + 5) != 1 or get(ctx, local + 10) != 1 or get(ctx, local + 9) != 1 or get(ctx, local + 11) != get(ctx, 32) { be_error_at(tokens, errors, 222, marker); be_meta(ctx, ty, 0); return buffer() }
+    if get(ctx, 33) != 1 or get(ctx, get(ctx, 12) + 7) >= 100 or (ty != 4 and ty != 5) or get(ctx, local + 5) != 1 or get(ctx, local + 10) != 1 or get(ctx, local + 9) != 1 or get(ctx, local + 11) != get(ctx, 32) { be_error_at(tokens, errors, 222, marker); be_meta(ctx, ty, 0); return buffer() }
     var loan = get(ctx, 36)
     while loan >= 0 {
         if get(ctx, loan + 1) == local { be_error_at(tokens, errors, 222, marker); be_meta(ctx, ty, 0); return buffer() }
@@ -815,7 +817,7 @@ def be_signature_contains_file(ctx: ints, signature: int) -> bool {
     }
     return false
 }
-def be_worker_has_extern(ctx: ints, worker: int) -> bool {
+def be_worker_effect(ctx: ints, worker: int) -> int {
     var pending = ints(); push(pending, worker)
     var visited = ints()
     var cursor = 0
@@ -826,8 +828,9 @@ def be_worker_has_extern(ctx: ints, worker: int) -> bool {
         while i < len(visited) { if get(visited, i) == node { known = true }; i = i + 1 }
         if not known {
             push(visited, node)
-            if node == -2 { return true }
-            if get(ctx, node + 6) == 1 or be_signature_contains_file(ctx, node) { return true }
+            if node == -3 { return 224 }
+            if node == -2 { return 209 }
+            if get(ctx, node + 6) == 1 or be_signature_contains_file(ctx, node) { return 209 }
             var edge = get(ctx, 25)
             while edge >= 0 {
                 if get(ctx, edge + 1) == node { push(pending, get(ctx, edge + 2)) }
@@ -835,12 +838,13 @@ def be_worker_has_extern(ctx: ints, worker: int) -> bool {
             }
         }
     }
-    return false
+    return 0
 }
 def be_check_workers(tokens: ints, ctx: ints, errors: ints) {
     var node = get(ctx, 26)
     while node >= 0 and len(errors) == 0 {
-        if be_worker_has_extern(ctx, get(ctx, node + 1)) { be_error_at(tokens, errors, 209, get(ctx, node + 2)) }
+        var effect = be_worker_effect(ctx, get(ctx, node + 1))
+        if effect != 0 { be_error_at(tokens, errors, effect, get(ctx, node + 2)) }
         node = get(ctx, node)
     }
 }
@@ -1100,6 +1104,12 @@ def be_invoke(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: bu
     var result_type = 0
     var result_owned = 0
     if record >= 0 {
+        var family = bc_family(ctx, record + 100)
+        if family >= 0 {
+            if get(ctx, family + 1) != record + 100 or get(ctx, 12) != get(ctx, family + 10) or len(args) != 4 or get(args, 0) != 1 { be_error_at(tokens, errors, 223, name_token); return buffer() }
+            result_type = record + 100; result_owned = 1; result = be_reg(ctx)
+            var line = buffer(); append(line, result); append(line, " = call ptr @bhasa.channel."); append(line, to_buffer(result_type)); append(line, ".new("); append(line, arguments); append(line, ")"); be_line(body, line)
+        } else {
         if be_enum_info(ctx, record + 100) >= 0 { be_error_at(tokens, errors, 215, name_token); return buffer() }
         result_type = record + 100; result_owned = 1
         var fields = get(ctx, record + 2)
@@ -1116,6 +1126,7 @@ def be_invoke(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: bu
             append(line, ", ptr "); append(line, pointer); be_line(body, line)
             set(args, field * 4 + 1, 0)
             field = field + 1
+        }
         }
     } else {
     if method < 0 and same(name, "print") {
@@ -1144,7 +1155,11 @@ def be_invoke(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: bu
                     }
                 }
                 symbol = be_function_symbol(source, tokens, ctx, signature)
-                be_call_edge(ctx, signature)
+                var issued = bc_operation(ctx, signature)
+                if issued >= 0 {
+                    if not bc_shape(source, tokens, ctx, get(ctx, issued + 2)) { be_error_at(tokens, errors, 223, name_token) }
+                    if get(ctx, issued + 3) == 3 or get(ctx, issued + 3) == 5 { be_call_edge(ctx, -3) }
+                } else { be_call_edge(ctx, signature) }
             }
         }
         var line = buffer()
@@ -1246,6 +1261,7 @@ def be_postfix(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: b
         if ty < 100 { be_error_at(tokens, errors, 201, name); return value }
         if be_kind(tokens, ctx) == 40 {
             var method = be_method_find(source, tokens, ctx, ty, name)
+            if bc_family(ctx, ty) >= 0 { method = bc_signature(source, tokens, ctx, ty, name) }
             if be_collection_kind(ctx, ty) != 0 { method = be_collection_signature(source, tokens, ctx, ty, name) }
             if method < 0 { be_error_at(tokens, errors, 202, name); return value }
             value = be_invoke(source, tokens, ctx, errors, globals, allocations, body, name, method, value, ty, owns, path, tree_depth - 1)
@@ -1969,7 +1985,7 @@ def be_record_find(source: buffer, tokens: ints, ctx: ints, name: int) -> int {
     return be_find(source, tokens, ctx, get(ctx, 19), name)
 }
 def be_record_field(source: buffer, tokens: ints, ctx: ints, ty: int, name: int) -> int {
-    if ty < 100 or be_enum_info(ctx, ty) >= 0 or be_collection_kind(ctx, ty) != 0 { return -1 }
+    if ty < 100 or bc_family(ctx, ty) >= 0 or be_enum_info(ctx, ty) >= 0 or be_collection_kind(ctx, ty) != 0 { return -1 }
     var node = be_record_node(ty)
     var index = 0
     while index < get(ctx, node + 2) {
@@ -2367,6 +2383,7 @@ def be_collection_helper(ctx: ints, definitions: buffer, node: int) {
 }
 
 def be_record_helper(ctx: ints, definitions: buffer, node: int, size_type: buffer) {
+    if bc_endpoint(ctx, node + 100) { return }
     if be_collection_kind(ctx, node + 100) != 0 { be_collection_helper(ctx, definitions, node); return }
     var record = be_number("%bhasa.record.", node + 100)
     var name = be_number("@bhasa.record.", node + 100)
@@ -2720,7 +2737,14 @@ def be_enum_helpers(ctx: ints, definitions: buffer, node: int, info: int) {
 }
 
 def bh_compile(source: buffer, tokens: ints, errors: ints, target: buffer) -> buffer {
+    return bc_compile(source, tokens, errors, target, ints(), false)
+}
+def bh_compile_channels(source: buffer, tokens: ints, errors: ints, target: buffer, manifest: ints) -> buffer {
+    return bc_compile(source, tokens, errors, target, manifest, true)
+}
+def bc_compile(source: buffer, tokens: ints, errors: ints, target: buffer, manifest: ints, required: bool) -> buffer {
     if len(errors) != 0 { return buffer() }
+    if required and len(target) > 128 { bh_triple(errors, 223, 0, 0); return buffer() }
     # Validate the table at the module boundary, including its final EOF row.
     # The normal scanner produces these invariants; reject malformed callers.
     if len(tokens) < 3 or len(tokens) % 3 != 0 {
@@ -2750,9 +2774,9 @@ def bh_compile(source: buffer, tokens: ints, errors: ints, target: buffer) -> bu
     }
     var ctx = ints()
     var i = 0
-    while i < 37 { push(ctx, 0); i = i + 1 }
+    while i < 40 { push(ctx, 0); i = i + 1 }
     set(ctx, 6, -1); set(ctx, 7, -1); set(ctx, 19, -1); set(ctx, 20, -1); set(ctx, 21, -1); set(ctx, 24, -1); set(ctx, 25, -1); set(ctx, 26, -1); set(ctx, 27, -1); set(ctx, 28, -1); set(ctx, 29, -1)
-    set(ctx, 31, -1); set(ctx, 35, -1); set(ctx, 36, -1)
+    set(ctx, 31, -1); set(ctx, 35, -1); set(ctx, 36, -1); set(ctx, 37, -1); set(ctx, 38, -1)
     if len(target) == 0 { be_error(tokens, ctx, errors, 200); return buffer() }
     i = 0
     while i < len(target) {
@@ -2763,6 +2787,8 @@ def bh_compile(source: buffer, tokens: ints, errors: ints, target: buffer) -> bu
     be_records(source, tokens, ctx, errors)
     if len(errors) != 0 { return buffer() }
     be_signatures(source, tokens, ctx, errors)
+    if len(errors) != 0 { return buffer() }
+    bc_bind(source, tokens, ctx, errors, target, manifest, required)
     if len(errors) != 0 { return buffer() }
     var globals = buffer()
     var definitions = buffer()
@@ -2780,6 +2806,8 @@ def bh_compile(source: buffer, tokens: ints, errors: ints, target: buffer) -> bu
     be_check_workers(tokens, ctx, errors)
     if len(errors) != 0 { return buffer() }
     be_task_wrappers(source, tokens, ctx, definitions)
+    bc_helpers(source, tokens, ctx, errors, definitions, globals)
+    if len(errors) != 0 { return buffer() }
     be_record_helpers(ctx, definitions, globals, target)
     var runtime = be_contains(definitions, buffer("@bhasa_rt_"))
     node = get(ctx, 6)
@@ -2805,10 +2833,379 @@ def bh_compile(source: buffer, tokens: ints, errors: ints, target: buffer) -> bu
     if be_contains(definitions, buffer("@bhasa_rt_utf8_")) { append(module, "; bhasa runtime: text\n") }
     if be_contains(definitions, buffer("@bhasa_rt_tcp_")) or be_contains(definitions, buffer("@bhasa_rt_monotonic_millis")) { append(module, "; bhasa runtime: net\n") }
     if be_contains(definitions, buffer("@bhasa_rt_spawn_")) or be_contains(definitions, buffer("@bhasa_rt_async_spawn_")) or be_contains(definitions, buffer("@bhasa_rt_await_")) or be_contains(definitions, buffer("@bhasa_rt_join_")) or be_contains(definitions, buffer("@bhasa_rt_task_alloc")) { append(module, "; bhasa runtime: threads\n") }
+    if get(ctx, 37) >= 0 { append(module, "; bhasa runtime: channels\n") }
     if be_contains(definitions, buffer("@bhasa_rt_file_")) { append(module, "; bhasa runtime: file\n") }
     if be_contains(definitions, buffer("@bhasa_rt_tls_")) { append(module, "; bhasa runtime: tls\n") }
     if be_contains(definitions, buffer("@bhasa_rt_gpu_")) { append(module, "; bhasa runtime: gpu\n") }
     append(module, "target triple = \""); append(module, target); append(module, "\"\n\n"); append(module, be_declarations(ctx))
     append(module, globals); append(module, "\n"); append(module, definitions)
     return module
+}
+
+# ctx37 families, ctx38 issued operations, ctx39 compilation nonce.
+# Family nodes: next,pair,sender,receiver,payload,send-result,send-failure,
+# sent,receive-result,receive-error,factory. Never stores the borrowed manifest.
+# -1 is a valid table with no matching family; -2 is invalid authority metadata.
+def bc_family(ctx: ints, ty: int) -> int {
+    if len(ctx) < 40 { return -2 }
+    var n = get(ctx, 37); var steps = 0; var found = -1
+    while n >= 0 {
+        if n < 40 or n >= len(ctx) or len(ctx) - n <= 10 or steps >= len(ctx) { return -2 }
+        if get(ctx, n + 1) == ty or get(ctx, n + 2) == ty or get(ctx, n + 3) == ty {
+            if found >= 0 { return -2 }
+            found = n
+        }
+        n = get(ctx, n); steps = steps + 1
+    }
+    if n != -1 { return -2 }
+    return found
+}
+def bc_endpoint(ctx: ints, ty: int) -> bool {
+    var n = bc_family(ctx, ty)
+    if n < 0 { return false }
+    return get(ctx, n + 2) == ty or get(ctx, n + 3) == ty
+}
+def bc_target(target: buffer) -> bool {
+    if len(target) > 128 { return false }
+    var parts = ints(); push(parts, 0); var i = 0
+    while i < len(target) { if get(target, i) == 45 { push(parts, i + 1) }; i = i + 1 }
+    if len(parts) != 3 and len(parts) != 4 { return false }
+    var arch = slice(target, 0, get(parts, 1) - 1)
+    var vendor = slice(target, get(parts, 1), get(parts, 2) - get(parts, 1) - 1)
+    var os_end = len(target); if len(parts) == 4 { os_end = get(parts, 3) - 1 }
+    var os = slice(target, get(parts, 2), os_end - get(parts, 2))
+    if len(parts) == 4 {
+        var abi = slice(target, get(parts, 3), len(target) - get(parts, 3))
+        return (same(arch, "aarch64") or same(arch, "x86_64")) and (same(vendor, "unknown") or same(vendor, "pc")) and same(os, "linux") and (same(abi, "gnu") or same(abi, "musl"))
+    }
+    if not (same(arch, "arm64") or same(arch, "aarch64") or same(arch, "x86_64")) or not same(vendor, "apple") { return false }
+    var prefix = 0
+    if len(os) >= 6 { if same(slice(os, 0, 6), "darwin") or same(slice(os, 0, 6), "macosx") { prefix = 6 } }
+    if prefix == 0 and len(os) >= 5 { if same(slice(os, 0, 5), "macos") { prefix = 5 } }
+    if prefix == 0 { return false }
+    if len(os) == prefix { return true }
+    i = prefix; var components = 1; var digits = 0; var value = 0
+    while i < len(os) {
+        var byte = get(os, i)
+        if byte == 46 {
+            if digits == 0 or components == 3 { return false }
+            components = components + 1; digits = 0; value = 0
+        } else {
+            if byte < 48 or byte > 57 { return false }
+            var digit = byte - 48
+            if value > (4294967295 - digit) / 10 { return false }
+            value = value * 10 + digit; digits = digits + 1
+        }
+        i = i + 1
+    }
+    return digits > 0
+}
+def bc_anchor(tokens: ints, ctx: ints, start: int, end: int, role: int) -> int {
+    if start < 0 or end <= start { return -1 }
+    var n = get(ctx, 19); if role == 2 { n = get(ctx, 6) }
+    var found = -1
+    while n >= 0 {
+        var name = get(ctx, n + 1); var after = get(ctx, n + 4)
+        if role == 2 { after = get(ctx, n + 5) }
+        if name > 0 and after > 0 {
+            if bh_token_start(tokens, name - 1) == start and bh_token_end(tokens, after - 1) == end {
+                var kind = bh_token_kind(tokens, name - 1)
+                if (role == 0 and kind != 313) or (role == 1 and kind != 315) or (role == 2 and kind != 300) or found >= 0 { return -1 }
+                found = n
+            }
+        }
+        n = get(ctx, n)
+    }
+    return found
+}
+def bc_variant(source: buffer, tokens: ints, ctx: ints, ty: int, word: str, payload: int) -> int {
+    var info = be_enum_info(ctx, ty)
+    if info < 0 { return -1 }
+    var n = get(ctx, info + 2)
+    while n >= 0 {
+        if same(bh_token_text(source, tokens, get(ctx, n + 1)), word) {
+            var count = 0; if payload != 0 { count = 1 }
+            if get(ctx, n + 2) != count { return -1 }
+            if count == 1 { if get(ctx, ty - 100 + 6 + get(ctx, n + 3) * 3) != payload { return -1 } }
+            return n
+        }
+        n = get(ctx, n)
+    }
+    return -1
+}
+# Validation-local state indexed by native record node. -3 missing, -2 active,
+# -1 unvisited, nonnegative successful subtree height. Last two slots count work.
+# Every bc_payload_root call makes a fresh table, including emission rechecks.
+def bc_payload_memo(ctx: ints) -> ints {
+    if len(ctx) < 40 { return ints() }
+    var memo = ints(); var i = 0
+    while i < len(ctx) { push(memo, -3); i = i + 1 }
+    push(memo, 0); push(memo, 0)
+    var node = get(ctx, 19); var steps = 0
+    while node >= 0 {
+        if node < 40 or node >= len(ctx) or len(ctx) - node <= 4 or steps >= len(ctx) { return ints() }
+        var count = get(ctx, node + 2)
+        if count < 0 or count > (len(ctx) - node - 5) / 3 { return ints() }
+        set(memo, node, -1); node = get(ctx, node); steps = steps + 1
+    }
+    if node != -1 { return ints() }
+    return memo
+}
+def bc_payload_height(ctx: ints, ty: int, depth: int, memo: ints) -> int {
+    if len(memo) != len(ctx) + 2 or depth < 0 { return -1 }
+    set(memo, len(ctx), get(memo, len(ctx)) + 1)
+    if ty == 0 or ty == 6 or ty == 11 { return -1 }
+    if ty < 100 { if ty >= 1 and ty <= 10 { return 0 }; return -1 }
+    if depth >= 128 or bc_family(ctx, ty) != -1 { return -1 }
+    var node = ty - 100
+    if node < 40 or node >= len(ctx) { return -1 }
+    var state = get(memo, node)
+    if state == -3 or state == -2 { return -1 }
+    if state >= 0 {
+        if state > 128 - depth { return -1 }
+        return state
+    }
+    set(memo, node, -2)
+    set(memo, len(ctx) + 1, get(memo, len(ctx) + 1) + 1)
+    var height = 0; var i = 0
+    # Native enum field0 is the scalar discriminant.
+    while i < get(ctx, node + 2) {
+        var child = bc_payload_height(ctx, get(ctx, node + 6 + i * 3), depth + 1, memo)
+        if child < 0 { return -1 }
+        if child > height { height = child }
+        i = i + 1
+    }
+    height = height + 1
+    if height > 128 - depth { return -1 }
+    set(memo, node, height)
+    return height
+}
+def bc_payload_root(ctx: ints, ty: int) -> bool {
+    if bc_family(ctx, -1) != -1 { return false }
+    return bc_payload_height(ctx, ty, 0, bc_payload_memo(ctx)) >= 0
+}
+def bc_known_record(ctx: ints, ty: int, enumeration: bool) -> bool {
+    if len(ctx) < 40 or ty < 100 { return false }
+    var n = get(ctx, 19); var steps = 0; var found = false
+    while n >= 0 {
+        if n < 40 or n >= len(ctx) or len(ctx) - n <= 4 or steps >= len(ctx) { return false }
+        var count = get(ctx, n + 2)
+        if count < 0 or count > (len(ctx) - n - 5) / 3 { return false }
+        if n == ty - 100 { if found { return false }; found = true }
+        n = get(ctx, n); steps = steps + 1
+    }
+    if n != -1 or not found { return false }
+    return (be_enum_info(ctx, ty) >= 0) == enumeration
+}
+def bc_shape(source: buffer, tokens: ints, ctx: ints, n: int) -> bool {
+    if len(ctx) < 40 or n < 40 or n >= len(ctx) or len(ctx) - n <= 10 or get(ctx, 39) <= 0 { return false }
+    if bc_family(ctx, get(ctx, n + 1)) != n { return false }
+    var role = 1
+    while role <= 9 {
+        if role != 4 {
+            if not bc_known_record(ctx, get(ctx, n + role), role >= 5) { return false }
+        }
+        role = role + 1
+    }
+    var pair = get(ctx, n + 1); var sender = get(ctx, n + 2); var receiver = get(ctx, n + 3); var payload = get(ctx, n + 4)
+    if get(ctx, pair - 100 + 2) != 2 or get(ctx, sender - 100 + 2) != 1 or get(ctx, receiver - 100 + 2) != 1 { return false }
+    if not same(bh_token_text(source, tokens, get(ctx, pair - 100 + 5)), "__sender") or not same(bh_token_text(source, tokens, get(ctx, pair - 100 + 8)), "__receiver") { return false }
+    if get(ctx, pair - 100 + 6) != sender or get(ctx, pair - 100 + 9) != receiver { return false }
+    if not same(bh_token_text(source, tokens, get(ctx, sender - 100 + 5)), "__payload") or not same(bh_token_text(source, tokens, get(ctx, receiver - 100 + 5)), "__payload") { return false }
+    if get(ctx, sender - 100 + 6) != payload or get(ctx, receiver - 100 + 6) != payload { return false }
+    var method = get(ctx, 24)
+    while method >= 0 { if get(ctx, method + 7) == pair or get(ctx, method + 7) == sender or get(ctx, method + 7) == receiver { return false }; method = get(ctx, method) }
+    var sr = get(ctx, n + 5); var sf = get(ctx, n + 6); var sent = get(ctx, n + 7); var rr = get(ctx, n + 8); var re = get(ctx, n + 9)
+    if get(ctx, be_enum_info(ctx, sr) + 3) != 2 or get(ctx, be_enum_info(ctx, sf) + 3) != 2 or get(ctx, be_enum_info(ctx, sent) + 3) != 1 or get(ctx, be_enum_info(ctx, rr) + 3) != 2 or get(ctx, be_enum_info(ctx, re) + 3) != 2 { return false }
+    if bc_variant(source, tokens, ctx, sr, "ok", sent) < 0 or bc_variant(source, tokens, ctx, sr, "error", sf) < 0 or bc_variant(source, tokens, ctx, sf, "closed", payload) < 0 or bc_variant(source, tokens, ctx, sf, "full", payload) < 0 or bc_variant(source, tokens, ctx, sent, "sent", 0) < 0 or bc_variant(source, tokens, ctx, rr, "ok", payload) < 0 or bc_variant(source, tokens, ctx, rr, "error", re) < 0 or bc_variant(source, tokens, ctx, re, "closed", 0) < 0 or bc_variant(source, tokens, ctx, re, "empty", 0) < 0 { return false }
+    var factory = get(ctx, n + 10)
+    var function = get(ctx, 6); var found = false
+    while function >= 0 { if function == factory { found = true }; function = get(ctx, function) }
+    if not found or factory < 40 or factory >= len(ctx) or len(ctx) - factory <= 9 { return false }
+    if get(ctx, factory + 2) != pair or get(ctx, factory + 3) != 1 or get(ctx, factory + 9) != 1 or get(ctx, factory + 6) != 0 or get(ctx, factory + 7) != 0 or be_parameter_mode(ctx, factory, 0) != 0 { return false }
+    var i = get(ctx, factory + 4) + 1; var stop = get(ctx, factory + 5) - 1
+    while i < stop and (bh_token_kind(tokens, i) == 10 or bh_token_kind(tokens, i) == 59) { i = i + 1 }
+    if bh_token_kind(tokens, i) != 306 { return false }; i = i + 1
+    if not be_same_name(source, tokens, i, get(ctx, pair - 100 + 1)) or bh_token_kind(tokens, i + 1) != 40 or not be_same_name(source, tokens, i + 2, get(ctx, factory + 8)) or bh_token_kind(tokens, i + 3) != 41 { return false }
+    i = i + 4
+    while i < stop and (bh_token_kind(tokens, i) == 10 or bh_token_kind(tokens, i) == 59) { i = i + 1 }
+    return i == stop and bc_payload_root(ctx, payload)
+}
+def bc_bind(source: buffer, tokens: ints, ctx: ints, errors: ints, target: buffer, manifest: ints, required: bool) {
+    if not required { return }
+    if len(manifest) < 5 { bh_triple(errors, 223, 0, 0); return }
+    var count = get(manifest, 3)
+    if get(manifest, 0) != 1 or get(manifest, 1) <= 0 or get(manifest, 2) != len(source) or get(manifest, 4) != 21 or count < 0 or count > (len(manifest) - 5) / 21 or len(manifest) != 5 + count * 21 or not bc_target(target) { bh_triple(errors, 223, 0, 0); return }
+    set(ctx, 39, get(manifest, 1))
+    var used = ints(); var row = 0
+    while row < count {
+        var offset = 5 + row * 21; var values = ints(); var role = 0
+        # pair/sender/receiver records, then six typed result/status enums and factory.
+        var anchors = ints(); push(anchors, 0); push(anchors, 2); push(anchors, 4); push(anchors, 9); push(anchors, 11); push(anchors, 13); push(anchors, 15); push(anchors, 17); push(anchors, 19)
+        var i = 0
+        while i < 9 {
+            role = 0; if i >= 3 { role = 1 }; if i == 8 { role = 2 }
+            var at = offset + get(anchors, i)
+            var node = bc_anchor(tokens, ctx, get(manifest, at), get(manifest, at + 1), role)
+            if node < 0 { bh_triple(errors, 223, 0, 0); return }
+            var id = node + 100; if role == 2 { id = node }
+            var shared = i == 5 or i == 7; var earlier = 0
+            while earlier < len(used) {
+                if get(used, earlier) == node { if not shared or get(used, earlier + 1) != i { bh_triple(errors, 223, 0, 0); return } }
+                earlier = earlier + 2
+            }
+            push(used, node); push(used, i); push(values, id); i = i + 1
+        }
+        var payload = get(manifest, offset + 6)
+        if payload == -1 or payload == -2 {
+            role = 0; if payload == -2 { role = 1 }
+            var node = bc_anchor(tokens, ctx, get(manifest, offset + 7), get(manifest, offset + 8), role)
+            if node < 0 { bh_triple(errors, 223, 0, 0); return }; payload = node + 100
+        } else { if payload < 1 or payload > 10 or payload == 6 or get(manifest, offset + 7) != 0 or get(manifest, offset + 8) != 0 { bh_triple(errors, 223, 0, 0); return } }
+        var prior = get(ctx, 37)
+        while prior >= 0 { if get(ctx, prior + 4) == payload { bh_triple(errors, 223, 0, 0); return }; prior = get(ctx, prior) }
+        var n = len(ctx); push(ctx, get(ctx, 37)); push(ctx, get(values, 0)); push(ctx, get(values, 1)); push(ctx, get(values, 2)); push(ctx, payload)
+        i = 3; while i < 9 { push(ctx, get(values, i)); i = i + 1 }; set(ctx, 37, n)
+        row = row + 1
+    }
+    var n = get(ctx, 37)
+    while n >= 0 {
+        if not bc_shape(source, tokens, ctx, n) { bh_triple(errors, 223, 0, 0); return }
+        n = get(ctx, n)
+    }
+}
+def bc_signature(source: buffer, tokens: ints, ctx: ints, ty: int, name: int) -> int {
+    var family = bc_family(ctx, ty); if family < 0 { return -1 }
+    var word = bh_token_text(source, tokens, name); var operation = 0; var result = 0; var params = ints(); push(params, ty)
+    if get(ctx, family + 1) == ty {
+        if same(word, "sender") { operation = 1; result = get(ctx, family + 2) }
+        if same(word, "receiver") { operation = 2; result = get(ctx, family + 3) }
+    } else {
+        if same(word, "close") { operation = 7 }
+        if get(ctx, family + 2) == ty {
+            if same(word, "send") { operation = 3 }; if same(word, "try_send") { operation = 4 }
+            if operation == 3 or operation == 4 { result = get(ctx, family + 5); push(params, get(ctx, family + 4)) }
+        } else {
+            if same(word, "recv") { operation = 5 }; if same(word, "try_recv") { operation = 6 }
+            if operation == 5 or operation == 6 { result = get(ctx, family + 8) }
+        }
+    }
+    if operation == 0 { return -1 }
+    var sig = len(ctx); push(ctx, -1); push(ctx, name); push(ctx, result); push(ctx, len(params)); push(ctx, 0); push(ctx, 0); push(ctx, 0); push(ctx, ty)
+    var i = 0; while i < len(params) { push(ctx, name); push(ctx, get(params, i)); i = i + 1 }
+    var entry = len(ctx); push(ctx, get(ctx, 38)); push(ctx, sig); push(ctx, family); push(ctx, operation); set(ctx, 38, entry)
+    return sig
+}
+def bc_operation(ctx: ints, sig: int) -> int {
+    var n = get(ctx, 38)
+    while n >= 0 { if get(ctx, n + 1) == sig { return n }; n = get(ctx, n) }
+    return -1
+}
+def bc_symbol(ctx: ints, sig: int) -> buffer {
+    var entry = bc_operation(ctx, sig); if entry < 0 { return buffer() }
+    var f = get(ctx, entry + 2); var op = get(ctx, entry + 3); var ty = get(ctx, sig + 7)
+    var out = be_number("bhasa.channel.", get(ctx, f + 1))
+    if op == 1 { append(out, ".sender") }; if op == 2 { append(out, ".receiver") }
+    if op == 3 or op == 4 { out = be_number("bhasa.channel.sender.", ty); if op == 3 { append(out, ".send") } else { append(out, ".try_send") } }
+    if op == 5 or op == 6 { out = be_number("bhasa.channel.receiver.", ty); if op == 5 { append(out, ".recv") } else { append(out, ".try_recv") } }
+    if op == 7 { out = be_number("bhasa.channel.endpoint.", ty); append(out, ".close") }
+    return out
+}
+
+# LLVM templates reference $0..$9/$a..$z slots in one local substitution table.
+def bc_value(values: buffer, starts: ints, value: buffer) { push(starts, len(values)); push(starts, len(value)); append(values, value) }
+def bc_template(text: str, values: buffer, starts: ints) -> buffer {
+    var input = buffer(text); var out = buffer(); var i = 0
+    while i < len(input) {
+        if get(input, i) == 36 and i + 1 < len(input) {
+            var key = get(input, i + 1) - 48
+            if get(input, i + 1) >= 97 { key = get(input, i + 1) - 97 + 10 }
+            if key >= 0 and key * 2 + 1 < len(starts) { append(out, slice(values, get(starts, key * 2), get(starts, key * 2 + 1))); i = i + 2 } else { push(out, get(input, i)); i = i + 1 }
+        } else { push(out, get(input, i)); i = i + 1 }
+    }
+    return out
+}
+def bc_enum_literal(out: buffer, ctx: ints, ty: int, variant: int, prefix: buffer, value: buffer) {
+    append(out, "  %"); append(out, prefix); append(out, " = call ptr @bhasa.record."); append(out, to_buffer(ty)); append(out, ".new()\n  %"); append(out, prefix); append(out, ".tag = getelementptr %bhasa.record."); append(out, to_buffer(ty)); append(out, ", ptr %"); append(out, prefix); append(out, ", i32 0, i32 0\n  store i64 "); append(out, to_buffer(get(ctx, variant + 4))); append(out, ", ptr %"); append(out, prefix); append(out, ".tag\n")
+    if get(ctx, variant + 2) == 1 {
+        var field = get(ctx, variant + 3); var llvm = be_llvm_type(get(ctx, ty - 100 + 6 + field * 3))
+        append(out, "  %"); append(out, prefix); append(out, ".field = getelementptr %bhasa.record."); append(out, to_buffer(ty)); append(out, ", ptr %"); append(out, prefix); append(out, ", i32 0, i32 "); append(out, to_buffer(field)); append(out, "\n  store "); append(out, llvm); append(out, " "); append(out, value); append(out, ", ptr %"); append(out, prefix); append(out, ".field\n")
+    }
+}
+def bc_helpers(source: buffer, tokens: ints, ctx: ints, errors: ints, definitions: buffer, globals: buffer) {
+    var f = get(ctx, 37)
+    while f >= 0 {
+        if not bc_shape(source, tokens, ctx, f) { bh_triple(errors, 223, 0, 0); return }
+        var pair = get(ctx, f + 1); var sender = get(ctx, f + 2); var receiver = get(ctx, f + 3); var payload = get(ctx, f + 4)
+        var sr = get(ctx, f + 5); var failure = get(ctx, f + 6); var receipt = get(ctx, f + 7); var rr = get(ctx, f + 8); var reason = get(ctx, f + 9)
+        var values = buffer(); var starts = ints()
+        bc_value(values, starts, to_buffer(pair)); bc_value(values, starts, to_buffer(sender)); bc_value(values, starts, to_buffer(receiver)); bc_value(values, starts, be_llvm_type(payload))
+        var pack = be_number("@bhasa.channel.", pair); append(pack, ".pack_copy")
+        var drop = be_number("@bhasa.channel.", pair); append(drop, ".payload_drop")
+        var descriptor = be_number("@bhasa.channel.", pair); append(descriptor, ".descriptor")
+        bc_value(values, starts, pack); bc_value(values, starts, drop); bc_value(values, starts, descriptor)
+        append(globals, bc_template("$6 = internal constant { ptr, i64 } { ptr $5, i64 1 }\n", values, starts))
+        append(definitions, bc_template("define internal ptr $4($3 %value) {\nentry:\n", values, starts))
+        var copied = buffer("%value")
+        if be_owned(payload) { append(definitions, "  %copy = call ptr @"); append(definitions, be_owned_symbol(payload, true)); append(definitions, "(ptr %value)\n"); copied = buffer("%copy") }
+        append(definitions, bc_template("  %frame = call ptr @bhasa_rt_task_alloc(i64 ptrtoint (ptr getelementptr ($3, ptr null, i32 1) to i64))\n  store $3 ", values, starts)); append(definitions, copied); append(definitions, ", ptr %frame\n  ret ptr %frame\n}\n\n")
+        append(definitions, bc_template("define internal void $5(ptr %frame) {\nentry:\n", values, starts))
+        if be_owned(payload) { append(definitions, "  %value = load ptr, ptr %frame\n  call void @"); append(definitions, be_owned_symbol(payload, false)); append(definitions, "(ptr %value)\n") }
+        append(definitions, "  call void @bhasa_rt_task_free(ptr %frame)\n  ret void\n}\n\n")
+        var endpoint = 1
+        while endpoint <= 2 {
+            var ty = sender; if endpoint == 2 { ty = receiver }
+            var number = to_buffer(ty)
+            append(definitions, "define internal ptr @bhasa.record."); append(definitions, number); append(definitions, ".clone(ptr %endpoint) {\nentry:\n  %copy = call ptr @bhasa_rt_channel_clone(ptr %endpoint)\n  ret ptr %copy\n}\n\n")
+            append(definitions, "define internal void @bhasa.record."); append(definitions, number); append(definitions, ".free(ptr %endpoint) {\nentry:\n  call void @bhasa_rt_channel_drop(ptr %endpoint)\n  ret void\n}\n\n")
+            append(definitions, "define internal void @bhasa.channel.endpoint."); append(definitions, number); append(definitions, ".close(ptr %endpoint) {\nentry:\n  call void @bhasa_rt_channel_close(ptr %endpoint)\n  ret void\n}\n\n")
+            endpoint = endpoint + 1
+        }
+        append(definitions, bc_template("define internal ptr @bhasa.channel.$0.new(i64 %capacity) {\nentry:\n  %out = alloca ptr, align 8\n  %sender = call ptr @bhasa_rt_channel_new(ptr $6, i64 %capacity, ptr %out)\n  %receiver = load ptr, ptr %out\n  %pair = call ptr @bhasa.record.$0.new()\n  %sender.slot = getelementptr %bhasa.record.$0, ptr %pair, i32 0, i32 0\n  store ptr %sender, ptr %sender.slot\n  %receiver.slot = getelementptr %bhasa.record.$0, ptr %pair, i32 0, i32 1\n  store ptr %receiver, ptr %receiver.slot\n  ret ptr %pair\n}\n\n", values, starts))
+        endpoint = 0
+        while endpoint < 2 {
+            var name = buffer("sender"); if endpoint == 1 { name = buffer("receiver") }
+            append(definitions, "define internal ptr @bhasa.channel."); append(definitions, to_buffer(pair)); append(definitions, "."); append(definitions, name); append(definitions, "(ptr %pair) {\nentry:\n  %slot = getelementptr %bhasa.record."); append(definitions, to_buffer(pair)); append(definitions, ", ptr %pair, i32 0, i32 "); append(definitions, to_buffer(endpoint)); append(definitions, "\n  %endpoint = load ptr, ptr %slot\n  %copy = call ptr @bhasa_rt_channel_clone(ptr %endpoint)\n  ret ptr %copy\n}\n\n")
+            endpoint = endpoint + 1
+        }
+        var attempt = 0
+        while attempt < 2 {
+            var method = buffer("send"); if attempt == 1 { method = buffer("try_send") }
+            append(definitions, "define internal ptr @bhasa.channel.sender."); append(definitions, to_buffer(sender)); append(definitions, "."); append(definitions, method); append(definitions, "(ptr %endpoint, "); append(definitions, be_llvm_type(payload)); append(definitions, " %value) {\nentry:\n")
+            append(definitions, bc_template("  %frame = call ptr $4($3 %value)\n  %status = call i64 @bhasa_rt_channel_", values, starts)); append(definitions, method); append(definitions, bc_template("(ptr %endpoint, ptr $6, ptr %frame)\n  switch i64 %status, label %invalid [ i64 0, label %sent i64 1, label %closed i64 2, label %full ]\ninvalid:\n  call void @llvm.trap()\n  unreachable\nsent:\n", values, starts))
+            bc_enum_literal(definitions, ctx, receipt, bc_variant(source, tokens, ctx, receipt, "sent", 0), buffer("receipt"), buffer())
+            bc_enum_literal(definitions, ctx, sr, bc_variant(source, tokens, ctx, sr, "ok", receipt), buffer("success"), buffer("%receipt"))
+            append(definitions, "  ret ptr %success\n")
+            var refused = 0
+            while refused < 2 {
+                var label = buffer("closed"); var word = "closed"; if refused == 1 { label = buffer("full"); word = "full" }
+                append(definitions, label); append(definitions, ":\n  %"); append(definitions, label); append(definitions, ".value = load "); append(definitions, be_llvm_type(payload)); append(definitions, ", ptr %frame\n  call void @bhasa_rt_task_free(ptr %frame)\n")
+                var prefix = label; append(prefix, ".failure"); var value = buffer("%"); append(value, label); append(value, ".value")
+                bc_enum_literal(definitions, ctx, failure, bc_variant(source, tokens, ctx, failure, word, payload), prefix, value)
+                value = buffer("%"); append(value, prefix); prefix = label; append(prefix, ".result")
+                bc_enum_literal(definitions, ctx, sr, bc_variant(source, tokens, ctx, sr, "error", failure), prefix, value)
+                append(definitions, "  ret ptr %"); append(definitions, prefix); append(definitions, "\n"); refused = refused + 1
+            }
+            append(definitions, "}\n\n"); attempt = attempt + 1
+        }
+        attempt = 0
+        while attempt < 2 {
+            var method = buffer("recv"); if attempt == 1 { method = buffer("try_recv") }
+            append(definitions, "define internal ptr @bhasa.channel.receiver."); append(definitions, to_buffer(receiver)); append(definitions, "."); append(definitions, method); append(definitions, "(ptr %endpoint) {\nentry:\n  %out = alloca ptr, align 8\n  %status = call i64 @bhasa_rt_channel_"); append(definitions, method); append(definitions, bc_template("(ptr %endpoint, ptr $6, ptr %out)\n  switch i64 %status, label %invalid [ i64 0, label %value i64 1, label %closed i64 2, label %empty ]\ninvalid:\n  call void @llvm.trap()\n  unreachable\nvalue:\n  %frame = load ptr, ptr %out\n  %received = load $3, ptr %frame\n  call void @bhasa_rt_task_free(ptr %frame)\n", values, starts))
+            bc_enum_literal(definitions, ctx, rr, bc_variant(source, tokens, ctx, rr, "ok", payload), buffer("success"), buffer("%received")); append(definitions, "  ret ptr %success\n")
+            var refused = 0
+            while refused < 2 {
+                var label = buffer("closed"); var word = "closed"; if refused == 1 { label = buffer("empty"); word = "empty" }
+                append(definitions, label); append(definitions, ":\n")
+                var prefix = label; append(prefix, ".reason")
+                bc_enum_literal(definitions, ctx, reason, bc_variant(source, tokens, ctx, reason, word, 0), prefix, buffer())
+                var value = buffer("%"); append(value, prefix); prefix = label; append(prefix, ".result")
+                bc_enum_literal(definitions, ctx, rr, bc_variant(source, tokens, ctx, rr, "error", reason), prefix, value)
+                append(definitions, "  ret ptr %"); append(definitions, prefix); append(definitions, "\n"); refused = refused + 1
+            }
+            append(definitions, "}\n\n"); attempt = attempt + 1
+        }
+        f = get(ctx, f)
+    }
+    if get(ctx, 37) >= 0 { append(definitions, "declare ptr @bhasa_rt_channel_new(ptr, i64, ptr)\ndeclare ptr @bhasa_rt_channel_clone(ptr)\ndeclare void @bhasa_rt_channel_drop(ptr)\ndeclare void @bhasa_rt_channel_close(ptr)\ndeclare i64 @bhasa_rt_channel_send(ptr, ptr, ptr)\ndeclare i64 @bhasa_rt_channel_try_send(ptr, ptr, ptr)\ndeclare i64 @bhasa_rt_channel_recv(ptr, ptr, ptr)\ndeclare i64 @bhasa_rt_channel_try_recv(ptr, ptr, ptr)\n") }
 }

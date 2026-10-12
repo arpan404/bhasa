@@ -232,3 +232,7 @@ void *bhasa_rt_task_alloc(int64_t bytes) {
 }
 
 void bhasa_rt_task_free(void *frame) { free(frame); }
+
+void bhasa_rt_require_nonworker(const char *operation) {
+    if (in_worker) task_error(operation, 0);
+}

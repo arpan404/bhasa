@@ -1,0 +1,26 @@
+import "@std" as ch
+
+def receive(endpoint: ch.Receiver[buffer]) -> buffer {
+    match endpoint.try_recv() {
+        case ch.ReceiveResult[buffer].ok(value) { return value }
+        case ch.ReceiveResult[buffer].error(reason) { return buffer("empty") }
+    }
+}
+
+def main() {
+    let pair = ch.channel[buffer](2)
+    let sender = pair.sender()
+    let receiver = pair.receiver()
+    var message = buffer("Bhasa")
+
+    match sender.try_send(message) {
+        case ch.SendResult[buffer].ok(status) {}
+        case ch.SendResult[buffer].error(failure) { print("send failed") }
+    }
+    # The queued copy is independent of the caller's mutable buffer.
+    set(message, 0, 88)
+    var job = spawn(receive(receiver))
+    let received = join(job)
+    print(received)
+    sender.close()
+}

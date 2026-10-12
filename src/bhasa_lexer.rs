@@ -37,6 +37,15 @@ extern "C" {
         errors: *mut RawInts,
         target: *const RawBuffer,
     ) -> *mut RawBuffer;
+    #[cfg(feature = "bhasa-frontend")]
+    #[link_name = "bhasa.fn.bh_compile_channels"]
+    fn native_compile_channels(
+        source: *const RawBuffer,
+        tokens: *const RawInts,
+        errors: *mut RawInts,
+        target: *const RawBuffer,
+        channels: *const RawInts,
+    ) -> *mut RawBuffer;
 }
 
 struct Ints(NonNull<RawInts>);
@@ -358,10 +367,29 @@ pub(crate) fn compile(
     target: &str,
     boundaries: &[usize],
 ) -> Result<String, Vec<Diagnostic>> {
-    compile_inner(source, target, boundaries).unwrap_or_else(|message| {
+    compile_inner(source, target, boundaries, None).unwrap_or_else(|message| {
         Err(vec![Diagnostic::new(
             "H001",
             format!("Bhasa frontend integration failed: {message}"),
+            Span::default(),
+        )])
+    })
+}
+
+#[cfg(feature = "bhasa-frontend")]
+pub(crate) fn compile_with_channels(
+    source: &str,
+    target: &str,
+    boundaries: &[usize],
+    channels: &crate::channel_registry::NativeManifest,
+) -> Result<String, Vec<Diagnostic>> {
+    channels
+        .validate(source, boundaries)
+        .map_err(|error| vec![error])?;
+    compile_inner(source, target, boundaries, Some(channels)).unwrap_or_else(|message| {
+        Err(vec![Diagnostic::new(
+            "H001",
+            format!("Bhasa channel frontend integration failed: {message}"),
             Span::default(),
         )])
     })
@@ -372,6 +400,7 @@ fn compile_inner(
     source: &str,
     target: &str,
     boundaries: &[usize],
+    channels: Option<&crate::channel_registry::NativeManifest>,
 ) -> Result<Result<String, Vec<Diagnostic>>, String> {
     if target.is_empty()
         || !target
@@ -435,8 +464,28 @@ fn compile_inner(
         cap: merged.capacity() as i64,
         data: merged.as_mut_ptr(),
     };
-    let ir =
-        Buffer::own(unsafe { native_compile(&input, &merged_tokens, errors.0.as_ptr(), &target) })?;
+    let pointer = if let Some(channels) = channels {
+        let words = channels.words();
+        let manifest = RawInts {
+            len: i64::try_from(words.len()).map_err(|_| "channel manifest too large")?,
+            cap: words.len() as i64,
+            data: words.as_ptr().cast_mut(),
+        };
+        // Synchronous borrowed input. Native must never mutate, retain or free
+        // this descriptor/data; Rust retains exact source/context ownership.
+        unsafe {
+            native_compile_channels(
+                &input,
+                &merged_tokens,
+                errors.0.as_ptr(),
+                &target,
+                &manifest,
+            )
+        }
+    } else {
+        unsafe { native_compile(&input, &merged_tokens, errors.0.as_ptr(), &target) }
+    };
+    let ir = Buffer::own(pointer)?;
     let errors = table(&errors, source)?;
     if !errors.is_empty() {
         let diagnostics = errors
@@ -468,6 +517,8 @@ fn compile_inner(
         220 => "immutable binding cannot be reassigned",
                     221 => "result binding is pending; match, return or propagate it before discarding it",
                     222 => "invalid ownership transfer or use of a moved binding",
+                    223 => "invalid or stale compiler-issued channel manifest",
+                    224 => "blocking channel operation is reachable from a worker",
                     _ => return Err("frontend returned an unknown diagnostic code".to_owned()),
                 };
                 Ok(Diagnostic::new(
@@ -496,5 +547,229 @@ mod tests {
         assert!(span("x", -1, 0).is_err());
         assert!(fixed_token(300, "var").is_none());
         assert!(fixed_token(10, " ").is_none());
+    }
+
+    #[cfg(feature = "bhasa-frontend")]
+    mod native_channel_bridge {
+        use super::*;
+        use crate::project::{ModuleImport, SourceFile};
+
+        const TARGET: &str = "x86_64-unknown-linux-gnu";
+
+        fn graph(main: &str) -> Vec<SourceFile> {
+            let standard = std::fs::canonicalize(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("std/channels.bh"),
+            )
+            .unwrap();
+            let import = Span::new(0, main.find('\n').unwrap());
+            vec![
+                SourceFile {
+                    path: "native-channel-bridge-main.bh".into(),
+                    source: main.into(),
+                    base: 0,
+                    import_spans: vec![import],
+                    imports: vec![ModuleImport {
+                        path: "channels.bh".into(),
+                        alias: Some("ch".into()),
+                        span: import,
+                        target: standard.clone(),
+                    }],
+                },
+                SourceFile {
+                    source: std::fs::read_to_string(&standard).unwrap(),
+                    path: standard,
+                    base: main.len() + 1,
+                    import_spans: vec![],
+                    imports: vec![],
+                },
+            ]
+        }
+
+        fn expanded(
+            main: &str,
+        ) -> (
+            Vec<SourceFile>,
+            crate::ExpandedFiles,
+            crate::channel_registry::NativeManifest,
+        ) {
+            let files = graph(main);
+            let expanded = crate::expand_files(&files).unwrap();
+            // Deliberately skip ExpandedFiles::check: public channel compilation
+            // otherwise performs the shared member-privacy preflight first.
+            let manifest = expanded
+                .generics
+                .channels
+                .as_ref()
+                .unwrap()
+                .native_manifest(&expanded.source, &expanded.boundaries, TARGET)
+                .unwrap();
+            manifest
+                .validate(&expanded.source, &expanded.boundaries)
+                .unwrap();
+            (files, expanded, manifest)
+        }
+
+        fn original_error(main: &str, code: &str, marker: &str, width: usize) {
+            let (files, expanded, manifest) = expanded(main);
+            let errors = compile_inner(
+                &expanded.source,
+                TARGET,
+                &expanded.boundaries,
+                Some(&manifest),
+            )
+            .unwrap_or_else(|message| panic!("native bridge failure: {message}"))
+            .unwrap_err();
+            assert_eq!(errors.len(), 1, "{errors:?}");
+            assert_eq!(errors[0].code, code);
+            let start = main.rfind(marker).unwrap();
+            let expected = Span::new(start, start + width);
+            assert_ne!(errors[0].span, expected, "probe must exercise remapping");
+            let errors = expanded.map_diagnostics(errors);
+            assert_eq!(errors[0].span, expected);
+            let located = crate::project::locate(&files, &errors[0]);
+            assert_eq!(located.path, files[0].path);
+            assert_eq!(located.source, main);
+            assert_eq!(located.diagnostic.span, expected);
+            let line = main[..start].bytes().filter(|byte| *byte == b'\n').count() + 1;
+            let column = main[..start].rsplit('\n').next().unwrap().chars().count() + 1;
+            assert!(located
+                .diagnostic
+                .render(main, "native-channel-bridge-main.bh")
+                .starts_with(&format!(
+                    "native-channel-bridge-main.bh:{line}:{column}: error[{code}]:"
+                )));
+        }
+
+        #[test]
+        fn native_channels_report_transitive_blocking_workers_at_original_source() {
+            let helper = "import \"channels.bh\" as ch\n# α keeps byte and character locations distinct\ndef blocked(endpoint:ch.Receiver[int])->int{match endpoint.recv(){case ch.ReceiveResult[int].ok(value){return value}case ch.ReceiveResult[int].error(reason){return -1}}}\ndef forward(endpoint:ch.Receiver[int])->int{return blocked(endpoint)}\ndef worker(endpoint:ch.Receiver[int])->int{return forward(endpoint)}\ndef main(){let pair=ch.channel[int](1);var task=spawn(worker(pair.receiver()));let answer=join(task);print(answer)}\n";
+            original_error(helper, "BH224", "worker(", "worker".len());
+            let method = "import \"channels.bh\" as ch\nstruct Holder{endpoint:ch.Receiver[int];def read(self)->int{match self.endpoint.recv(){case ch.ReceiveResult[int].ok(value){return value}case ch.ReceiveResult[int].error(reason){return -1}}}}\ndef worker(holder:Holder)->int{return holder.read()}\ndef main(){let pair=ch.channel[int](1);var task=spawn(worker(Holder(pair.receiver())));let answer=join(task);print(answer)}\n";
+            original_error(method, "BH224", "worker(", "worker".len());
+        }
+
+        #[test]
+        fn native_channels_preserve_immutable_and_pending_result_diagnostics() {
+            for (binding, code) in [("let", "BH220"), ("var", "BH221")] {
+                let main = format!(
+                    "import \"channels.bh\" as ch\ndef main(){{let pair=ch.channel[int](1);{binding} pending=pair.sender().try_send(1);pending=pair.sender().try_send(2)}}\n"
+                );
+                original_error(&main, code, "pending=", "pending".len());
+            }
+            let main = "import \"channels.bh\" as ch\ndef main(){let pair=ch.channel[int](1);let pending=pair.receiver().try_recv()}\n";
+            original_error(main, "BH221", "}", 1);
+        }
+
+        const VALID: &str = "import \"channels.bh\" as ch\ndef main(){let pair=ch.channel[int](1);match pair.sender().try_send(42){case ch.SendResult[int].ok(status){}case ch.SendResult[int].error(failure){}}match pair.receiver().try_recv(){case ch.ReceiveResult[int].ok(value){print(value)}case ch.ReceiveResult[int].error(reason){print(-1)}}}\n";
+
+        #[test]
+        fn native_channels_emit_ir_without_host_semantic_preflight() {
+            let (_, expanded, manifest) = expanded(VALID);
+            let ir = compile_inner(
+                &expanded.source,
+                TARGET,
+                &expanded.boundaries,
+                Some(&manifest),
+            )
+            .unwrap()
+            .unwrap();
+            assert!(ir.contains("; bhasa runtime: channels"));
+            assert!(ir.contains("@bhasa_rt_channel_new"));
+            assert!(ir.contains("target triple = \"x86_64-unknown-linux-gnu\""));
+        }
+
+        fn raw_channel_call(
+            expanded: &crate::ExpandedFiles,
+            words: &mut [i64],
+        ) -> (String, Vec<i64>) {
+            let source = &expanded.source;
+            let input = RawBuffer {
+                len: source.len() as i64,
+                cap: source.len() as i64,
+                data: source.as_ptr().cast_mut(),
+            };
+            let target = RawBuffer {
+                len: TARGET.len() as i64,
+                cap: TARGET.len() as i64,
+                data: TARGET.as_ptr().cast_mut(),
+            };
+            let errors = Ints::own(unsafe { bhasa_rt_ints_new() }).unwrap();
+            let tokens = Ints::own(unsafe { scanner(&input, errors.0.as_ptr()) }).unwrap();
+            assert!(table(&errors, source).unwrap().is_empty());
+            let mut merged = Vec::new();
+            let mut next = 0;
+            for row in table(&tokens, source).unwrap().as_chunks::<3>().0 {
+                while next < expanded.boundaries.len()
+                    && expanded.boundaries[next] <= row[1] as usize
+                {
+                    let boundary = expanded.boundaries[next] as i64;
+                    merged.extend_from_slice(&[314, boundary, boundary]);
+                    next += 1;
+                }
+                merged.extend_from_slice(row);
+            }
+            assert_eq!(next, expanded.boundaries.len());
+            let merged_tokens = RawInts {
+                len: merged.len() as i64,
+                cap: merged.capacity() as i64,
+                data: merged.as_mut_ptr(),
+            };
+            let saved = words.to_vec();
+            let descriptor = RawInts {
+                len: words.len() as i64,
+                cap: words.len() as i64,
+                data: words.as_mut_ptr(),
+            };
+            // Stack descriptors and Rust-owned words remain borrowed for this
+            // synchronous call. Only native returned values enter the RAII owners.
+            let ir = Buffer::own(unsafe {
+                native_compile_channels(
+                    &input,
+                    &merged_tokens,
+                    errors.0.as_ptr(),
+                    &target,
+                    &descriptor,
+                )
+            })
+            .unwrap();
+            assert_eq!(descriptor.len, words.len() as i64);
+            assert_eq!(descriptor.cap, words.len() as i64);
+            assert_eq!(descriptor.data, words.as_mut_ptr());
+            assert_eq!(words, saved);
+            (ir.text().unwrap(), table(&errors, source).unwrap().to_vec())
+        }
+
+        #[test]
+        fn native_channels_refuse_corrupt_borrowed_manifest_rows() {
+            let (_, expanded, manifest) = expanded(VALID);
+            assert_eq!(manifest.words().len(), 26);
+            assert_eq!(manifest.words()[3], 1);
+            let (ir, errors) = raw_channel_call(&expanded, &mut manifest.words().to_vec());
+            assert!(errors.is_empty(), "{errors:?}");
+            assert!(ir.contains("; bhasa runtime: channels"));
+            // All mutations retain valid RawInts bounds and aligned allocated
+            // storage. They test logical manifest refusal, not invalid FFI pointers.
+            for mutation in 0..9 {
+                let mut words = manifest.words().to_vec();
+                match mutation {
+                    0 => words[0] = 2,
+                    1 => words[1] = 0,
+                    2 => words[2] += 1,
+                    3 => words[3] = i64::MAX,
+                    4 => words[4] = 20,
+                    5 => words[5] += 1,
+                    6 => {
+                        words[7] = words[5];
+                        words[8] = words[6];
+                    }
+                    7 => words[11] = 11,
+                    8 => words[12] = 1,
+                    _ => unreachable!(),
+                }
+                let (ir, errors) = raw_channel_call(&expanded, &mut words);
+                assert_eq!(errors, [223, 0, 0], "mutation {mutation}");
+                assert!(ir.is_empty(), "mutation {mutation}");
+            }
+        }
     }
 }
