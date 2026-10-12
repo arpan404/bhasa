@@ -3,7 +3,8 @@
 This increment follows the verified typed-task commit. It implements entries
 from `todo.md` under the user's full-backlog and local-commit authorization.
 Preserve `.bh`, lowercase `bhasa.toml`, deterministic no-GC ownership, both
-frontends, the Rust host and all caches. No SDK installs or publishing.
+frontends, the Rust host and all caches. No SDK installs or release publication. The later explicit GitHub request
+authorizes pushing completed progress commits.
 
 ## Integer and iteration contract
 
@@ -42,10 +43,14 @@ documents. Rename requires every edited file open and returns versioned
 documentChanges, without applying or writing edits. Validate every affected
 graph in memory, reject collisions and silent capture, preserve aliases,
 comments and strings, and reject reserved/invalid names. Check every edited
-document's version, including close/reopen, before returning or converting
-edits. Unsupported/synthetic/foreign ABI targets fail conservatively. UTF-16
+document's version, including close/reopen, before returning edits. The client
+also validates the complete open Bhasa document inventory before conversion,
+so a previously unedited importer cannot add a reference during the request.
+Unknown unsaved import graphs block global rename; unrelated broken standalone
+documents may remain open. Unsupported/synthetic/foreign ABI targets fail conservatively. UTF-16
 ranges must match complete identifier tokens; cancellation and output bounds
-remain enforced.
+remain enforced. Replacement names are bounded to 256 bytes; rebuilt checked
+graphs are bounded to 64 MiB and refactor locations to 65,536.
 
 ## Ownership and gates
 
@@ -64,5 +69,8 @@ diagnostics, worker/privacy graphs, O0/O2 ownership sanitizers, refactor capture
 and stale-version tests, Clippy/fmt, editor tests, refreshed releases, A/B/C and
 unchanged native/Rust cache reuse. Hardware/SDK limitations remain explicit.
 
-This contract is prepared; implementation begins only after typed-task
-integration is accepted and committed.
+Integrated after typed-task commit `cdd7a5b`. All lane implementations and
+acceptance criteria above are complete. The reference/full-hybrid suites pass
+433/445 tests, editor tests pass 80, both Clippy configurations and formatting
+pass, and releases, A/B/C and unchanged caches are verified. See integration.md
+for evidence and platform/language limits.

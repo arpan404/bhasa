@@ -105,7 +105,7 @@ the current protocol and data limits.
 
 | Available | Limit |
 | --- | --- |
-| `int`, `float`, `bool`, `str`, `void` | Signed 64-bit integers, binary64 floats, static UTF-8 strings; no narrow integers or f32 |
+| `int`, `float`, `bool`, `str`, `void` | Signed 64-bit integers with radix literals/bitwise/shifts, binary64 floats, static UTF-8 strings; no narrow integers or f32 |
 | `buffer`, `ints`, `List[T]`, `Map[K,V]` | Owned vectors and specialized typed collections; maps use int/str keys |
 | Named `struct` records, methods and nested fields | Borrowed `self` receivers and positional constructors; no inheritance or recursive layouts |
 | Explicit generic functions, records and enums | Compile-time specialization; no inferred type arguments, traits or method-specific parameters |
@@ -113,7 +113,7 @@ the current protocol and data limits.
 | `Text`, `StringList`, `StringIntMap`, `StringMap` | Local `std` package; concrete types, scalar UTF-8 indexing and linear map lookup |
 | JSON and HTTP/1.0/1.1 library helpers | Bounded input; optional TLS package; one request per connection; no chunking or keepalive |
 | Typed functions, forward calls and recursion | No overloads, closures or function values |
-| `var`, assignment, branches, `while`, `for`, `break`/`continue` | Half-open int ranges and owned List snapshots; see [iteration](docs/iteration.md) |
+| `var`, assignment, branches, `while`, `for`, `break`/`continue` | Half-open int ranges with signed steps and owned List snapshots; see [iteration](docs/iteration.md) |
 | File/console I/O, arguments and subprocesses | Native macOS/Linux; explicit status values |
 | `spawn(worker(value))`, `join(task)` | One typed input, typed result (including void), independently acquired owned data and mandatory lexical joins |
 | `async_spawn(worker(value))`, `await(task)` | Four fixed workers, 64 queued jobs and blocking backpressure; no coroutines or I/O reactor |
@@ -124,7 +124,7 @@ the current protocol and data limits.
 | Rust adapters and explicit native link inputs | Trusted C ABI with integer parameters and integer or void results |
 | Native boolean tests | Isolated processes, filters, deadlines and JSON; no coverage or parallel runner |
 | Native artifact cache | Reuses unchanged complete outputs; frontend work still runs |
-| Formatter, JSON diagnostics, `inspect` and LSP | Checked API/dependency inspection, symbols, definitions, completion and hover; see [tooling](docs/tooling.md) |
+| Formatter, JSON diagnostics, `inspect` and LSP | Checked API/dependency inspection, local definitions, references, versioned rename, completion and hover; see [tooling](docs/tooling.md) |
 | Native and cross-target LLVM/object output | Linking needs the target's libraries, SDK and linker |
 
 A target listed by `bhasa targets` is a code-generation candidate. Wasm support

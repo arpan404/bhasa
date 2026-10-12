@@ -40,7 +40,9 @@ extension or include a VSIX.
 - Diagnostics from the compiler as you type, including unsaved edits.
 - Format Document through the compiler's formatter.
 - Document symbols in the outline and Go to Symbol in Editor.
-- Go to Definition for checked functions, methods, fields and type references.
+- Go to Definition for checked functions, methods, fields, types and lexical locals.
+- Find References across loaded document graphs.
+- Rename Symbol with checked, versioned edits when every affected file is open.
 - Scoped completion, including module aliases and typed record/collection members.
 - Plaintext type and signature hover.
 
@@ -60,7 +62,7 @@ not change that style.
 The extension sends full document text. It passes UTF-16 positions between
 VS Code and the server, filters diagnostics for stale document versions, and
 discards formatting, completion and hover results if the text changes while the request is running.
-Imported module diagnostics and definitions follow the server's supported
+Rename checks the entire open Bhasa document inventory, including unchanged importers, secondary versions and close/reopen events. Imported module diagnostics, definitions and references follow the server's supported
 scope. Save files after changing import declarations so the server can refresh
 the import graph. The extension sends save notifications after synchronizing
 the current text. See the [tooling guide](../../docs/tooling.md) for the saved
@@ -74,7 +76,7 @@ timeout. Broken or oversized protocol messages close the connection.
 
 ## Limits
 
-There is no rename, workspace symbol search, semantic highlighting, debugger,
+There is no workspace symbol search, semantic highlighting, debugger,
 or build/run command in this extension. Completion is bounded to 128 items and
 uses the current module graph. Unknown receivers can produce no suggestions. Syntax colors
 are a TextMate grammar, so they do not prove code is valid. The server determines
@@ -88,6 +90,21 @@ compiler run on the remote host; configure the executable there. Incoming and
 outgoing LSP message bodies have a 4 MiB limit, matching the server's request
 limit. JSON framing fields and escaping count toward that limit. Most requests
 time out after 10 seconds and initialization after 30.
+
+Rename also requires all open Bhasa documents to fit within 128 documents and
+32 MiB of UTF-8 source, with URIs no larger than 16 KiB. It checks the encoded
+notification sizes and declines if any current version could not be queued for
+synchronization. Over-limit documents remain unsent and can be synchronized
+after other documents close. Notifications have no acknowledgement.
+
+Rename requires a fully checked graph and refuses unsupported or ambiguous
+symbols. It preserves comments, strings, import paths and unrelated bindings.
+Open all files receiving edits first. References may include saved files outside
+the open editors, but only within graphs rooted at open documents. The server
+does not crawl every project for unknown importers. Builtins, foreign ABI names,
+`main`, `self`, generated members and unproven generic references cannot be
+renamed. See the [tooling guide](../../docs/tooling.md#references-and-rename) for
+these limits.
 
 The client implements the fixed capabilities above. It does not implement
 general LSP dynamic registration or arbitrary server-to-client requests.
@@ -104,7 +121,7 @@ npm test
 Tests use Node's built-in test runner and streams. They exercise framing,
 Unicode byte lengths, cancellation, malformed server messages, document sync and saves,
 diagnostic version filtering, native provider conversion, stale formatting/completion/hover,
-workspace trust, restart, and graceful shutdown. The VS Code API is mocked in
+references, rename conversion and stale secondary-document rejection, workspace trust, restart, and graceful shutdown. The VS Code API is mocked in
 the provider tests. These tests do not replace trying the extension in a real
 VS Code Extension Development Host.
 

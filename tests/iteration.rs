@@ -328,7 +328,7 @@ fn loop_types_arity_scope_and_terminal_flow_are_checked() {
     let workspace = Workspace::new("iteration-diagnostics");
     for source in [
         "def main(){break}", "def main(){continue}",
-        "def main(){for x in range() {}}", "def main(){for x in range(1,2,3) {}}",
+        "def main(){for x in range() {}}", "def main(){for x in range(1,2,3,4) {}}",
         "def main(){for x in range(true) {}}", "def main(){for x in range(1.0) {}}",
         "def main(){for x in range(0,false) {}}", "def main(){for x in range(buffer()) {}}",
         "def main(){for x in 3 {}}", "def main(){for x in buffer() {}}",

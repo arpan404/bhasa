@@ -78,7 +78,7 @@ const INVALID: &[&str] = &[
     "def main(){for i in range(2){if true {break}else{continue};print(i)}}",
     "enum E{a;b} def main(){for i in range(2){match E.a(){case E.a{break}case E.b{continue}};print(i)}}",
     "def main()->int{for i in range(1){return 1}}",
-    "def main(){for i in range(){}}", "def main(){for i in range(1,2,3){}}",
+    "def main(){for i in range(){}}", "def main(){for i in range(1,2,3,4){}}",
     "def main(){for i in range(true){}}", "def main(){for i in range(1,2.0){}}",
     "def main(){for i in 3{}}", "def main(){for i in buffer(){}}",
     "def main(){for i in Map[str,int](){}}", "def main(){for i in ints(){}}",

@@ -184,9 +184,12 @@ impl Expansion {
                     } => {
                         *name_span = expansion.map_span(*name_span);
                         match source {
-                            ast::ForSource::Range { start, end } => {
+                            ast::ForSource::Range { start, end, step } => {
                                 expression(expansion, start);
                                 expression(expansion, end);
+                                if let Some(step) = step {
+                                    expression(expansion, step);
+                                }
                             }
                             ast::ForSource::List(value) => expression(expansion, value),
                         }

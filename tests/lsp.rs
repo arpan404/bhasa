@@ -627,7 +627,7 @@ fn symbols_and_definition_ranges_use_utf16_on_crlf_source() {
 }
 
 #[test]
-fn definition_ignores_strings_comments_and_local_names() {
+fn definition_ignores_strings_comments_and_resolves_local_names() {
     let source = "def answer() -> int { return 42 }\ndef main() {\n    print(\"answer()\")\n    # answer()\n    var answer = 3\n    print(answer)\n}\n";
     let mut messages = start();
     messages.push(open(URI, source, 1));
@@ -636,12 +636,15 @@ fn definition_ignores_strings_comments_and_local_names() {
     messages.push(definition(4, URI, 4, 9));
     messages.push(definition(5, URI, 5, 12));
     let output = exchange(messages);
-    for id in 2..=5 {
+    for id in 2..=3 {
         assert_eq!(
             result(&output, id),
             &Value::Null,
-            "definition linked non-call at request {id}"
+            "definition linked non-code at request {id}"
         );
+    }
+    for id in [4, 5] {
+        assert_selection(result(&output, id), URI, source, "var answer", "answer");
     }
 }
 
@@ -2097,4 +2100,598 @@ fn editor_midword_completion_replaces_suffix_and_generic_hover_keeps_template_ty
     assert_eq!(hover_text(result(&output, 3)), Some("parameter: T"));
     assert_eq!(hover_text(result(&output, 4)), Some("var local"));
     assert_eq!(hover_text(result(&output, 5)), Some("banana: int"));
+}
+
+fn refactor_at(
+    id: i64,
+    method: &str,
+    uri: &str,
+    source: &str,
+    needle: &str,
+    name: Option<&str>,
+) -> Value {
+    let mut params = BTreeMap::from([
+        ("textDocument".to_owned(), document(uri)),
+        (
+            "position".to_owned(),
+            source_position(source, source.find(needle).unwrap()),
+        ),
+    ]);
+    if method == "textDocument/references" {
+        params.insert(
+            "context".into(),
+            Value::object([("includeDeclaration", true.into())]),
+        );
+    }
+    if let Some(name) = name {
+        params.insert("newName".into(), name.into());
+    }
+    request(id, method, Value::Object(params))
+}
+fn apply_rename(source: &str, change: &Value) -> String {
+    fn byte(source: &str, pos: &Value) -> usize {
+        let line = pos.get("line").unwrap().as_i64().unwrap() as usize;
+        let character = pos.get("character").unwrap().as_i64().unwrap() as usize;
+        let start = source
+            .split_inclusive('\n')
+            .take(line)
+            .map(str::len)
+            .sum::<usize>();
+        let mut units = 0;
+        for (offset, ch) in source[start..].char_indices() {
+            if units == character {
+                return start + offset;
+            }
+            units += ch.len_utf16();
+        }
+        assert_eq!(units, character);
+        source.len()
+    }
+    let mut source = source.to_owned();
+    let mut edits = change
+        .get("edits")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|edit| {
+            let span = edit.get("range").unwrap();
+            (
+                byte(&source, span.get("start").unwrap()),
+                byte(&source, span.get("end").unwrap()),
+                edit.get("newText").unwrap().as_str().unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    edits.sort_by_key(|edit| edit.0);
+    for (start, end, text) in edits.into_iter().rev() {
+        source.replace_range(start..end, text);
+    }
+    source
+}
+use std::collections::BTreeMap;
+
+#[test]
+fn checked_local_navigation_and_references_follow_binding_identity() {
+    let source = "def work(input:int)->int { var value=input; value=value+1; if true { var value=value+10; print(value) }; return value }\ndef main(){print(work(1))}\n";
+    let mut messages = start();
+    messages.push(open(URI, source, 4));
+    messages.push(refactor_at(
+        2,
+        "textDocument/references",
+        URI,
+        source,
+        "value=input",
+        None,
+    ));
+    messages.push(definition_at(3, URI, source, "var value=value+10", "value"));
+    messages.push(definition_at(4, URI, source, "print(value)", "value"));
+    messages.push(refactor_at(
+        5,
+        "textDocument/references",
+        URI,
+        source,
+        "input:int",
+        None,
+    ));
+    let output = exchange(messages);
+    assert_eq!(result(&output, 2).as_array().unwrap().len(), 5); // declaration, write, two reads, return
+    assert_eq!(result(&output, 5).as_array().unwrap().len(), 2);
+    assert_selection(
+        result(&output, 3),
+        URI,
+        source,
+        "var value=value+10",
+        "value",
+    );
+    assert_selection(
+        result(&output, 4),
+        URI,
+        source,
+        "var value=value+10",
+        "value",
+    );
+}
+
+#[test]
+fn checked_rename_returns_versioned_utf16_edits_without_changing_comments_or_strings() {
+    let source = "# 🌍 value\r\ndef main(){print(\"🌍 value\"); var value=1; value=value+1; print(value)}\r\n";
+    let mut messages = start();
+    messages.push(open(URI, source, 8));
+    messages.push(refactor_at(
+        2,
+        "textDocument/prepareRename",
+        URI,
+        source,
+        "value=1",
+        None,
+    ));
+    messages.push(refactor_at(
+        3,
+        "textDocument/rename",
+        URI,
+        source,
+        "value=1",
+        Some("number"),
+    ));
+    let mut refs = refactor_at(4, "textDocument/references", URI, source, "value=1", None);
+    if let Value::Object(fields) = &mut refs {
+        if let Some(Value::Object(params)) = fields.get_mut("params") {
+            params.insert(
+                "context".into(),
+                Value::object([("includeDeclaration", false.into())]),
+            );
+        }
+    }
+    messages.push(refs);
+    let output = exchange(messages);
+    assert_eq!(
+        result(&output, 2).get("placeholder").unwrap().as_str(),
+        Some("value")
+    );
+    assert_eq!(result(&output, 4).as_array().unwrap().len(), 3);
+    let changes = result(&output, 3)
+        .get("documentChanges")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert_eq!(changes.len(), 1);
+    assert_eq!(
+        changes[0]
+            .get("textDocument")
+            .unwrap()
+            .get("version")
+            .unwrap()
+            .as_i64(),
+        Some(8)
+    );
+    let changed = apply_rename(source, &changes[0]);
+    assert_eq!(changed,"# 🌍 value\r\ndef main(){print(\"🌍 value\"); var number=1; number=number+1; print(number)}\r\n");
+    bhasa::check(&changed).unwrap();
+}
+
+#[test]
+fn rename_rejects_collisions_capture_reserved_names_and_unchecked_sources() {
+    for source in [
+        "def main(){var x=1;var y=2;print(x+y)}",
+        "def main(){var x=1;if true{var y=2;print(x);print(y)}}",
+        "def main(){var y=1;if true{var x=2;print(y);print(x)}}",
+    ] {
+        let mut messages = start();
+        messages.push(open(URI, source, 1));
+        messages.push(refactor_at(
+            2,
+            "textDocument/rename",
+            URI,
+            source,
+            "x=",
+            Some("y"),
+        ));
+        assert_eq!(
+            response(&exchange(messages), 2)
+                .get("error")
+                .unwrap()
+                .get("code")
+                .unwrap()
+                .as_i64(),
+            Some(-32803)
+        );
+    }
+    let source = "def main(){var value=1;print(value)}";
+    for name in [
+        "if",
+        "print",
+        "self",
+        "private",
+        "import",
+        "range",
+        "List",
+        "task",
+        "tcp_socket",
+        "__bhg_1",
+        "__bhm_2",
+        "bhasa_rt_value",
+        "bad name",
+        "name\n",
+        "🌍",
+        "",
+    ] {
+        let mut messages = start();
+        messages.push(open(URI, source, 1));
+        messages.push(refactor_at(
+            2,
+            "textDocument/rename",
+            URI,
+            source,
+            "value=",
+            Some(name),
+        ));
+        assert_eq!(
+            response(&exchange(messages), 2)
+                .get("error")
+                .unwrap()
+                .get("code")
+                .unwrap()
+                .as_i64(),
+            Some(-32602),
+            "{name}"
+        );
+    }
+    let broken = "def main(){var value=missing;print(value)}";
+    let mut messages = start();
+    messages.push(open(URI, broken, 1));
+    messages.push(refactor_at(
+        2,
+        "textDocument/prepareRename",
+        URI,
+        broken,
+        "value=",
+        None,
+    ));
+    messages.push(refactor_at(
+        3,
+        "textDocument/rename",
+        URI,
+        broken,
+        "value=",
+        Some("number"),
+    ));
+    let output = exchange(messages);
+    assert_eq!(result(&output, 2), &Value::Null);
+    assert!(response(&output, 3).get("error").is_some());
+}
+
+#[test]
+fn loaded_graph_rename_finds_importers_requires_open_targets_and_preserves_aliases() {
+    let ws = Workspace::new("rename-graphs");
+    let library = "def answer()->int{return 42}\n";
+    let source = "import \"library.bh\" as api\ndef main(){print(api.answer())}\n";
+    let library_path = ws.write("library.bh", library);
+    let main_path = ws.write("main.bh", source);
+    let lib = path_uri(&library_path);
+    let main = path_uri(&main_path);
+    let mut messages = start();
+    messages.push(open(&main, source, 2));
+    messages.push(refactor_at(
+        2,
+        "textDocument/references",
+        &main,
+        source,
+        "answer()",
+        None,
+    ));
+    messages.push(refactor_at(
+        3,
+        "textDocument/rename",
+        &main,
+        source,
+        "answer()",
+        Some("response"),
+    ));
+    messages.push(open(&lib, library, 7));
+    messages.push(refactor_at(
+        4,
+        "textDocument/rename",
+        &lib,
+        library,
+        "answer()",
+        Some("response"),
+    ));
+    messages.push(refactor_at(
+        5,
+        "textDocument/rename",
+        &main,
+        source,
+        "api\ndef",
+        Some("library"),
+    ));
+    let output = exchange(messages);
+    assert_eq!(result(&output, 2).as_array().unwrap().len(), 2);
+    assert!(response(&output, 3).get("error").is_some());
+    let changes = result(&output, 4)
+        .get("documentChanges")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert_eq!(changes.len(), 2);
+    for change in changes {
+        let doc = change.get("textDocument").unwrap();
+        let uri = doc.get("uri").unwrap().as_str().unwrap();
+        let original = if uri == lib { library } else { source };
+        let changed = apply_rename(original, change);
+        assert!(changed.contains("response()"));
+        if uri == main {
+            assert!(changed.contains("as api"));
+            assert!(changed.contains("api.response()"));
+        }
+    }
+    let alias = result(&output, 5)
+        .get("documentChanges")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert_eq!(alias.len(), 1);
+    assert_eq!(
+        apply_rename(source, &alias[0]),
+        source
+            .replace("as api", "as library")
+            .replace("api.answer", "library.answer")
+    );
+    assert_eq!(fs::read_to_string(library_path).unwrap(), library);
+    assert_eq!(fs::read_to_string(main_path).unwrap(), source);
+}
+
+#[test]
+fn generic_rename_deduplicates_instances_and_rejects_ambiguous_receiver_tokens() {
+    let source="def identity[T](value:T)->T{return value}\ndef main(){print(identity[int](1));print(identity[float](2.0))}\n";
+    let mut messages = start();
+    messages.push(open(URI, source, 1));
+    messages.push(refactor_at(
+        2,
+        "textDocument/rename",
+        URI,
+        source,
+        "identity[T]",
+        Some("keep"),
+    ));
+    messages.push(refactor_at(
+        3,
+        "textDocument/references",
+        URI,
+        source,
+        "value:T",
+        None,
+    ));
+    let output = exchange(messages);
+    assert_eq!(result(&output, 3).as_array().unwrap().len(), 2);
+    let changes = result(&output, 2)
+        .get("documentChanges")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert_eq!(
+        changes[0].get("edits").unwrap().as_array().unwrap().len(),
+        3
+    );
+    bhasa::check(&apply_rename(source, &changes[0])).unwrap();
+    let source="struct A{def value(self)->int{return 1}}\nstruct B{def value(self)->int{return 2}}\ndef read[T](item:T)->int{return item.value()}\ndef main(){print(read[A](A()));print(read[B](B()))}";
+    let mut messages = start();
+    messages.push(open(URI, source, 1));
+    messages.push(refactor_at(
+        2,
+        "textDocument/prepareRename",
+        URI,
+        source,
+        "value()",
+        None,
+    ));
+    messages.push(refactor_at(
+        3,
+        "textDocument/rename",
+        URI,
+        source,
+        "value(self)",
+        Some("number"),
+    ));
+    let output = exchange(messages);
+    assert_eq!(result(&output, 2), &Value::Null);
+    assert!(response(&output, 3).get("error").is_some());
+}
+
+#[test]
+fn stepped_loop_and_match_bindings_keep_sources_outside_the_new_scope() {
+    let source="enum E{value(n:int)}\ndef main(){var step=2;for step in range(0,6,step){print(step)};match E.value(step){case E.value(step){print(step)}};print(step)}";
+    let mut messages = start();
+    messages.push(open(URI, source, 1));
+    messages.push(refactor_at(
+        2,
+        "textDocument/references",
+        URI,
+        source,
+        "step=2",
+        None,
+    ));
+    messages.push(refactor_at(
+        3,
+        "textDocument/references",
+        URI,
+        source,
+        "step in",
+        None,
+    ));
+    messages.push(refactor_at(
+        4,
+        "textDocument/references",
+        URI,
+        source,
+        "step){print(step)}}",
+        None,
+    ));
+    let output = exchange(messages);
+    assert_eq!(result(&output, 2).as_array().unwrap().len(), 4);
+    assert_eq!(result(&output, 3).as_array().unwrap().len(), 2);
+    assert_eq!(result(&output, 4).as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn rename_refuses_an_open_importer_with_unsaved_unknown_import_paths() {
+    let ws = Workspace::new("rename-unsaved-import-path");
+    let library = "def answer()->int{return 42}\n";
+    let lib_path = ws.write("library.bh", library);
+    ws.write("other.bh", "def answer()->int{return 1}\n");
+    let saved = "import \"other.bh\" as api\ndef main(){}\n";
+    let edited = "import \"library.bh\" as api\ndef main(){print(api.answer())}\n";
+    let main = path_uri(&ws.write("main.bh", saved));
+    let lib = path_uri(&lib_path);
+    let mut messages = start();
+    messages.push(open(&lib, library, 1));
+    messages.push(open(&main, edited, 2));
+    messages.push(refactor_at(
+        2,
+        "textDocument/prepareRename",
+        &lib,
+        library,
+        "answer()",
+        None,
+    ));
+    messages.push(refactor_at(
+        3,
+        "textDocument/rename",
+        &lib,
+        library,
+        "answer()",
+        Some("response"),
+    ));
+    let output = exchange(messages);
+    assert_eq!(result(&output, 2), &Value::Null);
+    assert!(response(&output, 3).get("error").is_some());
+    assert_eq!(fs::read_to_string(lib_path).unwrap(), library);
+}
+
+#[test]
+fn rename_preserves_member_and_enum_identities_and_bounds_name_expansion() {
+    let source = "struct Item{private value:int;def read(self)->int{return self.value}}\nenum Choice{some(item:Item);none}\ndef main(){var item=Item(42);print(item.read());match Choice.some(item){case Choice.some(value){print(value.read())}case Choice.none{}}}\n";
+    for (needle, name) in [
+        ("Item{", "Entry"),
+        ("read(self)", "get"),
+        ("Choice{", "Result"),
+        ("some(item:", "present"),
+    ] {
+        let mut messages = start();
+        messages.push(open(URI, source, 1));
+        messages.push(refactor_at(
+            2,
+            "textDocument/rename",
+            URI,
+            source,
+            needle,
+            Some(name),
+        ));
+        let output = exchange(messages);
+        // Builtin names are rejected even for members; use a nonbuiltin below.
+        if name == "get" {
+            assert!(response(&output, 2).get("error").is_some());
+            continue;
+        }
+        let changes = result(&output, 2)
+            .get("documentChanges")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        bhasa::check(&apply_rename(source, &changes[0])).unwrap();
+    }
+    let source = "def main(){var value=1;print(value)}";
+    let mut messages = start();
+    messages.push(open(URI, source, 1));
+    messages.push(refactor_at(
+        2,
+        "textDocument/rename",
+        URI,
+        source,
+        "value=",
+        Some(&"n".repeat(257)),
+    ));
+    assert_eq!(
+        response(&exchange(messages), 2)
+            .get("error")
+            .unwrap()
+            .get("code")
+            .unwrap()
+            .as_i64(),
+        Some(-32602)
+    );
+}
+
+#[test]
+fn rename_accepts_existing_contextual_locals_and_builtin_named_members() {
+    for name in ["task", "private", "as", "import"] {
+        let source = format!("def main(){{var {name}=1;print({name})}}");
+        let mut messages = start();
+        messages.push(open(URI, &source, 1));
+        messages.push(refactor_at(
+            2,
+            "textDocument/rename",
+            URI,
+            &source,
+            &format!("{name}="),
+            Some("changed"),
+        ));
+        let output = exchange(messages);
+        let changes = result(&output, 2)
+            .get("documentChanges")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        assert_eq!(
+            changes[0].get("edits").unwrap().as_array().unwrap().len(),
+            2,
+            "{name}"
+        );
+        bhasa::check(&apply_rename(&source, &changes[0])).unwrap();
+    }
+    let source="def work(value:buffer)->buffer{return value}\ndef main(){var task=spawn(work(buffer()));var value=join(task);print(value)}";
+    let mut messages = start();
+    messages.push(open(URI, source, 1));
+    messages.push(refactor_at(
+        2,
+        "textDocument/rename",
+        URI,
+        source,
+        "task=spawn",
+        Some("job"),
+    ));
+    let output = exchange(messages);
+    let changes = result(&output, 2)
+        .get("documentChanges")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    bhasa::check(&apply_rename(source, &changes[0])).unwrap();
+    let source = "struct Item{def get(self)->int{return 42}}\ndef main(){print(Item().get())}";
+    let mut messages = start();
+    messages.push(open(URI, source, 1));
+    messages.push(refactor_at(
+        2,
+        "textDocument/rename",
+        URI,
+        source,
+        "get(self)",
+        Some("read"),
+    ));
+    messages.push(refactor_at(
+        3,
+        "textDocument/prepareRename",
+        URI,
+        source,
+        "self)",
+        None,
+    ));
+    let output = exchange(messages);
+    let changes = result(&output, 2)
+        .get("documentChanges")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    bhasa::check(&apply_rename(source, &changes[0])).unwrap();
+    assert_eq!(result(&output, 3), &Value::Null);
 }

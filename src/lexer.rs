@@ -40,6 +40,12 @@ pub enum TokenKind {
     And,
     Or,
     Not,
+    BitAnd,
+    BitOr,
+    BitXor,
+    BitNot,
+    ShiftLeft,
+    ShiftRight,
     LeftParen,
     RightParen,
     LeftBracket,
@@ -67,7 +73,7 @@ pub enum TokenKind {
     Eof,
 }
 
-/// Keep decimal spelling intact so the parser can recognize the signed minimum.
+/// Keep integer spelling intact so the parser can recognize the signed minimum.
 pub fn lex(source: &str) -> Result<Vec<Token>, Vec<Diagnostic>> {
     #[cfg(feature = "bhasa-lexer")]
     {
@@ -174,30 +180,20 @@ impl Lexer<'_> {
                 b'%' => self.single(TokenKind::Percent),
                 b'=' => self.pair(b'=', TokenKind::EqualEqual, TokenKind::Equal),
                 b'!' => self.pair(b'=', TokenKind::NotEqual, TokenKind::Not),
+                b'<' if self.source.as_bytes().get(self.offset + 1) == Some(&b'<') => {
+                    self.offset += 2;
+                    TokenKind::ShiftLeft
+                }
+                b'>' if self.source.as_bytes().get(self.offset + 1) == Some(&b'>') => {
+                    self.offset += 2;
+                    TokenKind::ShiftRight
+                }
                 b'<' => self.pair(b'=', TokenKind::LessEqual, TokenKind::Less),
                 b'>' => self.pair(b'=', TokenKind::GreaterEqual, TokenKind::Greater),
-                b'&' | b'|' => {
-                    self.offset += 1;
-                    if self.source.as_bytes().get(self.offset) == Some(&byte) {
-                        self.offset += 1;
-                        if byte == b'&' {
-                            TokenKind::And
-                        } else {
-                            TokenKind::Or
-                        }
-                    } else {
-                        self.error(
-                            "L001",
-                            format!(
-                                "unsupported operator '{}'; use '{}' for a boolean operation",
-                                char::from(byte),
-                                if byte == b'&' { "&&" } else { "||" }
-                            ),
-                            start,
-                        );
-                        continue;
-                    }
-                }
+                b'&' => self.pair(b'&', TokenKind::And, TokenKind::BitAnd),
+                b'|' => self.pair(b'|', TokenKind::Or, TokenKind::BitOr),
+                b'^' => self.single(TokenKind::BitXor),
+                b'~' => self.single(TokenKind::BitNot),
                 0 => {
                     self.offset += 1;
                     self.error("L006", "NUL bytes are not allowed in source", start);
@@ -315,6 +311,35 @@ impl Lexer<'_> {
     fn integer(&mut self) -> Option<TokenKind> {
         let start = self.offset;
         let bytes = self.source.as_bytes();
+        if bytes[start] == b'0' && matches!(bytes.get(start + 1), Some(b'x' | b'X' | b'b' | b'B')) {
+            let hexadecimal = matches!(bytes[start + 1], b'x' | b'X');
+            self.offset += 2;
+            let digits = self.offset;
+            while bytes
+                .get(self.offset)
+                .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            {
+                self.offset += 1;
+            }
+            let valid = self.offset > digits
+                && bytes[digits..self.offset].iter().all(|byte| {
+                    if hexadecimal {
+                        byte.is_ascii_hexdigit()
+                    } else {
+                        matches!(byte, b'0' | b'1')
+                    }
+                });
+            let spelling = &self.source[start..self.offset];
+            if !valid {
+                self.error(
+                    "L002",
+                    format!("invalid integer literal {spelling:?}; expected decimal, hexadecimal (0x), or binary (0b) digits without separators or suffixes"),
+                    start,
+                );
+                return None;
+            }
+            return Some(TokenKind::Int(spelling.to_owned()));
+        }
         while bytes.get(self.offset).is_some_and(u8::is_ascii_digit) {
             self.offset += 1;
         }
@@ -361,7 +386,7 @@ impl Lexer<'_> {
                 (
                     "L002",
                     format!(
-                        "invalid integer literal {spelling:?}; only decimal digits are allowed"
+                        "invalid integer literal {spelling:?}; expected decimal, hexadecimal (0x), or binary (0b) digits without separators or suffixes"
                     ),
                 )
             };
@@ -644,14 +669,14 @@ mod tests {
 
     #[test]
     fn reports_whole_malformed_integer_literals() {
-        let source = "123abc 1_000 0xff";
+        let source = "123abc 1_000 0xfg";
         let errors = lex(source).unwrap_err();
         assert_eq!(errors.len(), 3);
         let bad_literals: Vec<_> = errors
             .iter()
             .map(|error| &source[error.span.start..error.span.end])
             .collect();
-        assert_eq!(bad_literals, vec!["123abc", "1_000", "0xff"]);
+        assert_eq!(bad_literals, vec!["123abc", "1_000", "0xfg"]);
         assert!(errors
             .iter()
             .all(|error| error.message.contains("integer literal")));
@@ -659,7 +684,7 @@ mod tests {
 
     #[test]
     fn reports_unsupported_characters_at_character_boundaries() {
-        let source = "é @ & |";
+        let source = "é @ $ ?";
         let errors = lex(source).unwrap_err();
         assert_eq!(errors.len(), 4);
         assert_eq!(errors[0].span, Span::new(0, 2));

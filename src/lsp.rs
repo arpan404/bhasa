@@ -224,6 +224,11 @@ impl Server {
                                 ("documentFormattingProvider", true.into()),
                                 ("documentSymbolProvider", true.into()),
                                 ("definitionProvider", true.into()),
+                                ("referencesProvider", true.into()),
+                                (
+                                    "renameProvider",
+                                    Value::object([("prepareProvider", true.into())]),
+                                ),
                                 ("hoverProvider", true.into()),
                                 (
                                     "completionProvider",
@@ -251,6 +256,9 @@ impl Server {
                 "textDocument/formatting"
                 | "textDocument/documentSymbol"
                 | "textDocument/definition"
+                | "textDocument/references"
+                | "textDocument/prepareRename"
+                | "textDocument/rename"
                 | "textDocument/completion"
                 | "textDocument/hover" => self.document_request(method, params),
                 _ => Err((-32601, format!("unsupported method '{method}'"))),
@@ -392,6 +400,14 @@ impl Server {
                     ));
                 }
                 let analysis = self.analyze(uri, doc);
+                if matches!(
+                    method,
+                    "textDocument/references"
+                        | "textDocument/prepareRename"
+                        | "textDocument/rename"
+                ) {
+                    return self.refactor(method, params, uri, offset, analysis);
+                }
                 if let Some(symbol) = declaration_at(&analysis.symbols, uri, offset) {
                     return Ok(symbol.location());
                 }
@@ -555,10 +571,12 @@ impl Server {
             analysis.files = loaded.files.clone();
             match check_files(&loaded.files) {
                 Ok(checked) => {
-                    analysis.references =
-                        checked_references(&checked.program, &loaded.files, |path| {
-                            self.file_uri(path)
-                        });
+                    analysis.references = checked_references(
+                        &checked.program,
+                        &loaded.files,
+                        |path| self.file_uri(path),
+                        &mut analysis.symbols,
+                    );
                     analysis.program = Some(checked.program);
                 }
                 Err(errors) => {
@@ -632,10 +650,12 @@ impl Server {
                         import_spans: imports.iter().map(|import| import.span).collect(),
                         imports: Vec::new(),
                     };
-                    analysis.references =
-                        checked_references(&checked.program, std::slice::from_ref(&file), |_| {
-                            uri.to_owned()
-                        });
+                    analysis.references = checked_references(
+                        &checked.program,
+                        std::slice::from_ref(&file),
+                        |_| uri.to_owned(),
+                        &mut analysis.symbols,
+                    );
                     analysis.files = vec![file];
                     analysis.program = Some(checked.program);
                     None
@@ -683,6 +703,528 @@ impl Server {
             .find(|(_, doc)| doc.path.as_deref() == Some(path))
             .map(|(uri, _)| uri.clone())
             .unwrap_or_else(|| path_uri(path))
+    }
+}
+
+// Refactors use checked declaration anchors, never the completion recovery tree.
+// A name is not an identity: two equal spellings in nested scopes stay distinct.
+type Anchor = (String, usize, usize);
+type ReferenceIdentity = (Anchor, Anchor);
+type RenameEdits = BTreeMap<String, Vec<Span>>;
+
+fn anchor(symbol: &Symbol) -> Anchor {
+    (
+        symbol.uri.clone(),
+        symbol.selection_span.start,
+        symbol.selection_span.end,
+    )
+}
+fn rename_error(message: impl Into<String>) -> (i64, String) {
+    (-32803, message.into())
+}
+fn valid_rename_name(name: &str) -> bool {
+    if name.len() > 256 {
+        return false;
+    }
+    let Ok(tokens) = crate::lexer::lex(name) else {
+        return false;
+    };
+    matches!(tokens.as_slice(), [Token { kind: TokenKind::Ident(value), span }, Token { kind: TokenKind::Eof, .. }] if value == name && span.start == 0 && span.end == name.len())
+        && !crate::builtins::is_builtin(name)
+        && !matches!(
+            name,
+            "private"
+                | "import"
+                | "as"
+                | "self"
+                | "print"
+                | "spawn"
+                | "join"
+                | "range"
+                | "List"
+                | "Map"
+                | "task"
+                | "tcp_socket"
+                | "tcp_listener"
+                | "tls_socket"
+        )
+        && !["bhasa_rt_", "__bhg_", "__bhm_"]
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+}
+fn bounded_refactor(value: Value) -> Result<Value, (i64, String)> {
+    if value.to_string().len() > MAX_MESSAGE / 2 {
+        Err(rename_error("Reference result exceeds the response limit"))
+    } else {
+        Ok(value)
+    }
+}
+fn reference_identities(analysis: &Analysis) -> BTreeSet<ReferenceIdentity> {
+    analysis
+        .references
+        .iter()
+        .filter_map(|reference| {
+            let target = find_symbol(&analysis.symbols, &reference.target)?;
+            Some((
+                (
+                    reference.uri.clone(),
+                    reference.span.start,
+                    reference.span.end,
+                ),
+                anchor(target),
+            ))
+        })
+        .collect()
+}
+fn rename_offsets(edits: &RenameEdits, replacement: &str) -> BTreeMap<String, Vec<(usize, isize)>> {
+    edits
+        .iter()
+        .map(|(uri, changes)| {
+            let mut delta = 0;
+            let offsets = changes
+                .iter()
+                .map(|change| {
+                    delta += replacement.len() as isize - (change.end - change.start) as isize;
+                    (change.end, delta)
+                })
+                .collect();
+            (uri.clone(), offsets)
+        })
+        .collect()
+}
+fn moved_anchor(value: &Anchor, offsets: &BTreeMap<String, Vec<(usize, isize)>>) -> Anchor {
+    let move_offset = |position: usize| {
+        let delta = offsets
+            .get(&value.0)
+            .and_then(|changes| {
+                changes
+                    .partition_point(|(end, _)| *end <= position)
+                    .checked_sub(1)
+                    .map(|index| changes[index].1)
+            })
+            .unwrap_or(0);
+        (position as isize + delta) as usize
+    };
+    (value.0.clone(), move_offset(value.1), move_offset(value.2))
+}
+
+impl Server {
+    fn refactor(
+        &self,
+        method: &str,
+        params: &Value,
+        uri: &str,
+        offset: usize,
+        current: Analysis,
+    ) -> Result<Value, (i64, String)> {
+        let empty = || {
+            if method == "textDocument/references" {
+                Value::Array(Vec::new())
+            } else {
+                Value::Null
+            }
+        };
+        if current.program.is_none() {
+            return if method == "textDocument/rename" {
+                Err(rename_error(
+                    "Rename requires a completely checked document graph",
+                ))
+            } else {
+                Ok(empty())
+            };
+        }
+        let keys: BTreeSet<_> = current
+            .references
+            .iter()
+            .filter(|reference| {
+                reference.uri == uri
+                    && reference.span.start <= offset
+                    && offset < reference.span.end
+            })
+            .map(|reference| reference.target.clone())
+            .collect();
+        if keys.len() != 1 {
+            return if method == "textDocument/rename" {
+                Err(rename_error(
+                    "No unambiguous checked symbol at this position",
+                ))
+            } else {
+                Ok(empty())
+            };
+        }
+        let Some(target) = find_symbol(&current.symbols, keys.iter().next().unwrap()).cloned()
+        else {
+            return Ok(empty());
+        };
+        let target_anchor = anchor(&target);
+        // All open roots participate, including importers of an open library.
+        // Unrelated broken graphs do not disable refactoring this graph.
+        let mut graphs = vec![current];
+        let mut total = graphs[0]
+            .files
+            .iter()
+            .map(|file| file.source.len())
+            .sum::<usize>();
+        for (other_uri, doc) in &self.documents {
+            if other_uri == uri {
+                continue;
+            }
+            let analysis = self.analyze(other_uri, doc);
+            let unresolved_imports = analysis.program.is_none()
+                && imports(&doc.source).is_ok_and(|imports| !imports.is_empty())
+                && (analysis.files.is_empty()
+                    || analysis.files.iter().any(|file| {
+                        file.imports
+                            .iter()
+                            .any(|import| import.target.as_os_str().is_empty())
+                    }));
+            if method != "textDocument/references" && target.kind != 13 && unresolved_imports {
+                return if method == "textDocument/prepareRename" {
+                    Ok(Value::Null)
+                } else {
+                    Err(rename_error(
+                        "Save and check all open import graphs before renaming a declaration",
+                    ))
+                };
+            }
+            let contains = analysis
+                .files
+                .iter()
+                .any(|file| self.file_uri(&file.path) == target.uri)
+                || analysis
+                    .symbols
+                    .iter()
+                    .any(|symbol| symbol.uri == target.uri);
+            if !contains {
+                continue;
+            }
+            if analysis.program.is_none() {
+                return Err(rename_error(
+                    "An open importing graph is not completely checked",
+                ));
+            }
+            total += analysis
+                .files
+                .iter()
+                .map(|file| file.source.len())
+                .sum::<usize>();
+            if total > 64 * 1024 * 1024 {
+                return Err(rename_error(
+                    "Open reference graphs exceed the 64 MiB analysis limit",
+                ));
+            }
+            graphs.push(analysis);
+        }
+        let identities: BTreeSet<_> = graphs.iter().flat_map(reference_identities).collect();
+        if identities.len() > 65_536 {
+            return Err(rename_error(
+                "Reference graph exceeds the 65536-location limit",
+            ));
+        }
+        let mut targets_by_site = BTreeMap::new();
+        let mut ambiguous = BTreeSet::new();
+        for (site, declaration) in &identities {
+            if targets_by_site
+                .insert(site.clone(), declaration)
+                .is_some_and(|previous| previous != declaration)
+            {
+                ambiguous.insert(site.clone());
+            }
+        }
+        let sites: BTreeSet<_> = identities
+            .iter()
+            .filter(|(_, declaration)| declaration == &target_anchor)
+            .map(|(site, _)| site.clone())
+            .collect();
+        let source_at = |file_uri: &str| -> Option<&str> {
+            if let Some(doc) = self.documents.get(file_uri) {
+                return Some(&doc.source);
+            }
+            graphs
+                .iter()
+                .flat_map(|graph| &graph.files)
+                .find(|file| self.file_uri(&file.path) == file_uri)
+                .map(|file| file.source.as_str())
+        };
+        if method == "textDocument/references" {
+            let include = match params
+                .get("context")
+                .and_then(|value| value.get("includeDeclaration"))
+            {
+                Some(Value::Bool(value)) => *value,
+                _ => return Err((-32602, "expected context.includeDeclaration".into())),
+            };
+            return bounded_refactor(Value::Array(
+                sites
+                    .iter()
+                    .filter(|site| include || *site != &target_anchor)
+                    .filter_map(|site| {
+                        Some(Value::object([
+                            ("uri", site.0.clone().into()),
+                            (
+                                "range",
+                                range(source_at(&site.0)?, Span::new(site.1, site.2)),
+                            ),
+                        ]))
+                    })
+                    .collect(),
+            ));
+        }
+        // Library ABI names, synthetic names and uninstantiated templates cannot
+        // be safely renamed using this checked graph alone.
+        let foreign = graphs.iter().any(|graph| {
+            graph.program.as_ref().is_some_and(|program| {
+                program.functions.iter().any(|function| {
+                    function.body.is_none()
+                        && graph.files.iter().any(|file| {
+                            let file_uri = if file.path.as_os_str().is_empty() {
+                                graph.uri.clone()
+                            } else {
+                                self.file_uri(&file.path)
+                            };
+                            file_uri == target.uri
+                                && function.span.start <= file.base + target.selection_span.start
+                                && file.base + target.selection_span.end <= function.span.end
+                        })
+                })
+            })
+        });
+        // Existing legal spellings can include contextual type names (a local
+        // `task`) or builtin-like member names. Restrictions on a proposed new
+        // name must not prevent renaming those checked declarations away.
+        let unsupported = (target.kind == 13 && target.name == "self")
+            || (target.kind == 12 && target.name == "main")
+            || foreign
+            || sites.is_empty()
+            || sites.iter().any(|site| ambiguous.contains(site));
+        if unsupported {
+            return if method == "textDocument/prepareRename" {
+                Ok(Value::Null)
+            } else {
+                Err(rename_error("This symbol has no safe unambiguous rename"))
+            };
+        }
+        let mut edits: RenameEdits = BTreeMap::new();
+        for (file_uri, start, end) in &sites {
+            let Some(doc) = self.documents.get(file_uri) else {
+                return if method == "textDocument/prepareRename" {
+                    Ok(Value::Null)
+                } else {
+                    Err(rename_error(format!(
+                        "Open every affected file before renaming: {file_uri}"
+                    )))
+                };
+            };
+            if doc.source.get(*start..*end) != Some(target.name.as_str()) {
+                return Err(rename_error(
+                    "A reference does not map to a complete original identifier",
+                ));
+            }
+            if let Some(path) = &doc.path {
+                if self
+                    .documents
+                    .values()
+                    .filter(|other| other.path.as_ref() == Some(path))
+                    .count()
+                    != 1
+                {
+                    return Err(rename_error(
+                        "Multiple open documents refer to the same file",
+                    ));
+                }
+            }
+            edits
+                .entry(file_uri.clone())
+                .or_default()
+                .push(Span::new(*start, *end));
+        }
+        // Conservative completeness check. In particular, an unused generic
+        // body or nested generic type spelling must never be silently missed.
+        for graph in &graphs {
+            for file in &graph.files {
+                let file_uri = if file.path.as_os_str().is_empty() {
+                    graph.uri.clone()
+                } else {
+                    self.file_uri(&file.path)
+                };
+                for token in crate::lexer::lex(&file.source).unwrap_or_default() {
+                    if matches!(&token.kind, TokenKind::Ident(name) if name == &target.name)
+                        && !targets_by_site.contains_key(&(
+                            file_uri.clone(),
+                            token.span.start,
+                            token.span.end,
+                        ))
+                    {
+                        return if method == "textDocument/prepareRename" {
+                            Ok(Value::Null)
+                        } else {
+                            Err(rename_error(
+                                "Some matching identifiers have no proven checked identity",
+                            ))
+                        };
+                    }
+                }
+            }
+        }
+        if method == "textDocument/prepareRename" {
+            let site = sites
+                .iter()
+                .find(|site| site.0 == uri && site.1 <= offset && offset < site.2)
+                .unwrap();
+            return Ok(Value::object([
+                (
+                    "range",
+                    range(source_at(uri).unwrap(), Span::new(site.1, site.2)),
+                ),
+                ("placeholder", target.name.into()),
+            ]));
+        }
+        let name = text(params, "newName").ok_or((-32602, "expected newName".into()))?;
+        if !valid_rename_name(name) {
+            return Err((
+                -32602,
+                "newName must be a nonreserved Bhasa identifier".into(),
+            ));
+        }
+        for changes in edits.values_mut() {
+            changes.sort_by_key(|span| span.start);
+            if changes.windows(2).any(|pair| pair[0].end > pair[1].start) {
+                return Err(rename_error("Overlapping rename edits"));
+            }
+        }
+        let offsets = rename_offsets(&edits, name);
+        for graph in &graphs {
+            let mut files = graph.files.clone();
+            let mut base = 0;
+            for file in &mut files {
+                let file_uri = if file.path.as_os_str().is_empty() {
+                    graph.uri.clone()
+                } else {
+                    self.file_uri(&file.path)
+                };
+                if let Some(changes) = edits.get(&file_uri) {
+                    let removed = changes
+                        .iter()
+                        .map(|span| span.end - span.start)
+                        .sum::<usize>();
+                    let length = name
+                        .len()
+                        .checked_mul(changes.len())
+                        .and_then(|added| {
+                            file.source.len().checked_sub(removed)?.checked_add(added)
+                        })
+                        .filter(|length| *length <= 64 * 1024 * 1024)
+                        .ok_or_else(|| rename_error("Renamed source exceeds the 64 MiB limit"))?;
+                    let mut updated = String::with_capacity(length);
+                    let mut cursor = 0;
+                    for span in changes {
+                        updated.push_str(&file.source[cursor..span.start]);
+                        updated.push_str(name);
+                        cursor = span.end;
+                    }
+                    updated.push_str(&file.source[cursor..]);
+                    file.source = updated;
+                }
+                let mut imports = imports(&file.source)
+                    .map_err(|_| rename_error("Rename damaged an import declaration"))?;
+                if imports.len() != file.imports.len() {
+                    return Err(rename_error("Rename changed the import graph"));
+                }
+                for (new, old) in imports.iter_mut().zip(&file.imports) {
+                    if new.path != old.path {
+                        return Err(rename_error("Rename changed an import path"));
+                    }
+                    new.target = old.target.clone();
+                }
+                file.import_spans = imports.iter().map(|import| import.span).collect();
+                file.imports = imports;
+                file.base = base;
+                base += file.source.len() + 1;
+                if base > 64 * 1024 * 1024 {
+                    return Err(rename_error("Renamed graph exceeds the 64 MiB limit"));
+                }
+            }
+            let checked = check_files(&files).map_err(|errors| {
+                rename_error(format!(
+                    "Rename would fail checking: {}",
+                    errors
+                        .first()
+                        .map_or("unknown error", |error| error.message.as_str())
+                ))
+            })?;
+            let mut after = Analysis {
+                uri: graph.uri.clone(),
+                ..Analysis::default()
+            };
+            for file in &files {
+                let file_uri = if file.path.as_os_str().is_empty() {
+                    graph.uri.clone()
+                } else {
+                    self.file_uri(&file.path)
+                };
+                after.symbols.extend(local_symbols(&file_uri, &file.source));
+            }
+            after.references = checked_references(
+                &checked.program,
+                &files,
+                |path| {
+                    if path.as_os_str().is_empty() {
+                        graph.uri.clone()
+                    } else {
+                        self.file_uri(path)
+                    }
+                },
+                &mut after.symbols,
+            );
+            let expected: BTreeSet<_> = reference_identities(graph)
+                .iter()
+                .map(|(site, declaration)| {
+                    (
+                        moved_anchor(site, &offsets),
+                        moved_anchor(declaration, &offsets),
+                    )
+                })
+                .collect();
+            if expected != reference_identities(&after) {
+                return Err(rename_error(
+                    "Rename would capture or change a symbol binding",
+                ));
+            }
+        }
+        bounded_refactor(Value::object([(
+            "documentChanges",
+            Value::Array(
+                edits
+                    .into_iter()
+                    .map(|(file_uri, changes)| {
+                        let doc = &self.documents[&file_uri];
+                        Value::object([
+                            (
+                                "textDocument",
+                                Value::object([
+                                    ("uri", file_uri.into()),
+                                    ("version", doc.version.into()),
+                                ]),
+                            ),
+                            (
+                                "edits",
+                                Value::Array(
+                                    changes
+                                        .into_iter()
+                                        .map(|span| {
+                                            Value::object([
+                                                ("range", range(&doc.source, span)),
+                                                ("newText", name.into()),
+                                            ])
+                                        })
+                                        .collect(),
+                                ),
+                            ),
+                        ])
+                    })
+                    .collect(),
+            ),
+        )]))
     }
 }
 
@@ -1108,7 +1650,9 @@ impl Server {
         let mut values: Vec<_> = analysis
             .symbols
             .iter()
-            .filter(|symbol| symbol.uri == uri && (local || !symbol.private))
+            .filter(|symbol| {
+                symbol.uri == uri && !matches!(symbol.kind, 3 | 13) && (local || !symbol.private)
+            })
             .collect();
         for import in &file.imports {
             if import.alias.is_some() {
@@ -1295,7 +1839,7 @@ fn editor_builtins() -> [(&'static str, &'static str); 13] {
         ),
         (
             "range",
-            "range(start: int, end: int), half-open for-loop source",
+            "range(end: int) | range(start: int, end: int, step: int = 1)",
         ),
         ("spawn", "spawn(worker(value)) -> inferred task"),
         ("async_spawn", "async_spawn(worker(value)) -> inferred task"),
@@ -1355,9 +1899,12 @@ fn visit_expressions<'a>(block: &'a Block, visit: &mut impl FnMut(&'a Expr)) {
             }
             StmtKind::For { source, body, .. } => {
                 match source {
-                    ForSource::Range { start, end } => {
+                    ForSource::Range { start, end, step } => {
                         expr(start, visit);
                         expr(end, visit);
+                        if let Some(step) = step {
+                            expr(step, visit);
+                        }
                     }
                     ForSource::List(value) => expr(value, visit),
                 };
@@ -1578,7 +2125,9 @@ fn lexical_bindings(
                     body,
                 } => {
                     let start = match source {
-                        ForSource::Range { end, .. } => end.span.end,
+                        ForSource::Range { end, step, .. } => {
+                            step.as_ref().map_or(end.span.end, |step| step.span.end)
+                        }
                         ForSource::List(value) => value.span.end,
                     };
                     if let Some(first) = body_scope(start, statement.span.end) {
@@ -1937,6 +2486,7 @@ fn check_files(files: &[SourceFile]) -> Result<ast::CheckedProgram, Vec<Diagnost
     crate::check_files(files)
 }
 
+#[derive(Clone)]
 struct DefinitionReference {
     uri: String,
     span: Span,
@@ -1946,6 +2496,7 @@ struct ReferenceFile {
     uri: String,
     base: usize,
     tokens: Vec<Token>,
+    source: String,
 }
 struct ReferenceIndex<'a> {
     program: &'a Program,
@@ -1953,6 +2504,8 @@ struct ReferenceIndex<'a> {
     files: Vec<ReferenceFile>,
     references: Vec<DefinitionReference>,
     targets: BTreeMap<String, String>,
+    locals: Vec<Symbol>,
+    scopes: Vec<BTreeMap<String, String>>,
 }
 #[derive(Clone, Copy)]
 enum NameContext {
@@ -1967,6 +2520,7 @@ fn checked_references(
     program: &Program,
     files: &[SourceFile],
     uri: impl Fn(&Path) -> String,
+    symbols: &mut Vec<Symbol>,
 ) -> Vec<DefinitionReference> {
     let mut index = ReferenceIndex {
         program,
@@ -1983,11 +2537,14 @@ fn checked_references(
                     uri: uri(&file.path),
                     base: file.base,
                     tokens,
+                    source: file.source.clone(),
                 }
             })
             .collect(),
         references: Vec::new(),
         targets: BTreeMap::new(),
+        locals: Vec::new(),
+        scopes: Vec::new(),
     };
     for function in &program.functions {
         index.target(&function.name, function.span);
@@ -2023,7 +2580,7 @@ fn checked_references(
         }
         index.type_reference(function.return_type, function.span, TokenKind::Arrow);
         if let Some(body) = &function.body {
-            index.block(body);
+            index.function(&function.params, body);
         }
     }
     for record in &program.records {
@@ -2057,7 +2614,7 @@ fn checked_references(
             }
             index.type_reference(method.return_type, method.span, TokenKind::Arrow);
             if let Some(body) = &method.body {
-                index.block(body);
+                index.function(&method.params, body);
             }
         }
     }
@@ -2068,9 +2625,165 @@ fn checked_references(
             }
         }
     }
+    fn declarations(
+        symbols: &[Symbol],
+        targets: &BTreeMap<String, String>,
+        refs: &mut Vec<DefinitionReference>,
+    ) {
+        for symbol in symbols {
+            if targets.values().any(|target| target == &symbol.key) {
+                refs.push(DefinitionReference {
+                    uri: symbol.uri.clone(),
+                    span: symbol.selection_span,
+                    target: symbol.key.clone(),
+                });
+            }
+            declarations(&symbol.children, targets, refs);
+        }
+    }
+    declarations(symbols, &index.targets, &mut index.references);
+    for local in index.locals {
+        if !symbols.iter().any(|symbol| symbol.key == local.key) {
+            symbols.push(local);
+        }
+    }
+    for file in files {
+        let file_uri = uri(&file.path);
+        let tokens = crate::lexer::lex(&file.source).unwrap_or_default();
+        for import in &file.imports {
+            let Some(alias) = &import.alias else { continue };
+            let Some(declaration) = tokens.iter().rev().find(|token| {
+                token.span.start >= import.span.start
+                    && token.span.end <= import.span.end
+                    && matches!(&token.kind, TokenKind::Ident(name) if name == alias)
+            }) else {
+                continue;
+            };
+            let key = format!("{file_uri}#alias:{}", declaration.span.start);
+            symbols.push(Symbol {
+                name: alias.clone(),
+                key: key.clone(),
+                uri: file_uri.clone(),
+                kind: 3,
+                range: range(&file.source, import.span),
+                selection: range(&file.source, declaration.span),
+                selection_span: declaration.span,
+                children: Vec::new(),
+                detail: format!("module {alias}"),
+                private: false,
+            });
+            index.references.push(DefinitionReference {
+                uri: file_uri.clone(),
+                span: declaration.span,
+                target: key.clone(),
+            });
+            for pair in tokens.windows(3) {
+                if !matches!(&pair[0].kind, TokenKind::Ident(name) if name == alias)
+                    || pair[1].kind != TokenKind::Dot
+                {
+                    continue;
+                }
+                if index
+                    .references
+                    .iter()
+                    .any(|reference| reference.uri == file_uri && reference.span == pair[0].span)
+                {
+                    continue;
+                }
+                // Checked member/type occurrences prove that this prefix resolved
+                // as a module, rather than an unresolved receiver in a template.
+                if index
+                    .references
+                    .iter()
+                    .any(|reference| reference.uri == file_uri && reference.span == pair[2].span)
+                {
+                    index.references.push(DefinitionReference {
+                        uri: file_uri.clone(),
+                        span: pair[0].span,
+                        target: key.clone(),
+                    });
+                }
+            }
+        }
+    }
     index.references
 }
 impl ReferenceIndex<'_> {
+    fn function(&mut self, params: &[ast::Param], body: &Block) {
+        self.scopes.clear();
+        self.scopes.push(BTreeMap::new());
+        for param in params {
+            self.local_declaration(&param.name, param.span);
+        }
+        self.block(body);
+        self.scopes.clear();
+    }
+    fn scoped_block(&mut self, body: &Block) {
+        self.scopes.push(BTreeMap::new());
+        self.block(body);
+        self.scopes.pop();
+    }
+    fn local_token(&self, name: &str, span: Span) -> Option<(usize, Span)> {
+        let index = self
+            .files
+            .partition_point(|file| file.base <= span.start)
+            .checked_sub(1)?;
+        let file = &self.files[index];
+        let token = file.tokens.iter().find(|token| {
+            token.span.start >= span.start
+                && token.span.end <= span.end
+                && matches!(&token.kind, TokenKind::Ident(value) if value == name)
+        })?;
+        Some((
+            index,
+            Span::new(token.span.start - file.base, token.span.end - file.base),
+        ))
+    }
+    fn local_declaration(&mut self, name: &str, span: Span) {
+        let Some((index, span)) = self.local_token(name, span) else {
+            return;
+        };
+        let file = &self.files[index];
+        let key = format!("{}#local:{}", file.uri, span.start);
+        self.locals.push(Symbol {
+            name: name.into(),
+            key: key.clone(),
+            uri: file.uri.clone(),
+            kind: 13,
+            range: range(&file.source, span),
+            selection: range(&file.source, span),
+            selection_span: span,
+            children: Vec::new(),
+            detail: format!("var {name}"),
+            private: false,
+        });
+        self.references.push(DefinitionReference {
+            uri: file.uri.clone(),
+            span,
+            target: key.clone(),
+        });
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.insert(name.into(), key);
+        }
+    }
+    fn local_use(&mut self, name: &str, span: Span) {
+        let Some(target) = self
+            .scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(name))
+            .cloned()
+        else {
+            return;
+        };
+        if let Some((index, span)) = self.local_token(name, span) {
+            self.references.push(DefinitionReference {
+                uri: self.files[index].uri.clone(),
+                span,
+                target,
+            });
+        }
+    }
     fn type_reference(&mut self, ty: Type, span: Span, separator: TokenKind) {
         if !matches!(ty, Type::Record(_) | Type::Enum(_)) {
             return;
@@ -2166,7 +2879,9 @@ impl ReferenceIndex<'_> {
         for statement in block {
             match &statement.kind {
                 StmtKind::Var {
-                    annotation, value, ..
+                    name,
+                    annotation,
+                    value,
                 } => {
                     if let Some(ty) = annotation {
                         self.type_reference(
@@ -2176,8 +2891,13 @@ impl ReferenceIndex<'_> {
                         );
                     }
                     self.expression(value);
+                    self.local_declaration(name, Span::new(statement.span.start, value.span.start));
                 }
-                StmtKind::Assign { value, .. } | StmtKind::Expr(value) => self.expression(value),
+                StmtKind::Assign { name, value } => {
+                    self.local_use(name, Span::new(statement.span.start, value.span.start));
+                    self.expression(value);
+                }
+                StmtKind::Expr(value) => self.expression(value),
                 StmtKind::FieldAssign { target, value } => {
                     self.expression(target);
                     self.expression(value);
@@ -2193,24 +2913,36 @@ impl ReferenceIndex<'_> {
                     else_block,
                 } => {
                     self.expression(condition);
-                    self.block(then_block);
+                    self.scoped_block(then_block);
                     if let Some(block) = else_block {
-                        self.block(block);
+                        self.scoped_block(block);
                     }
                 }
                 StmtKind::While { condition, body } => {
                     self.expression(condition);
-                    self.block(body);
+                    self.scoped_block(body);
                 }
-                StmtKind::For { source, body, .. } => {
+                StmtKind::For {
+                    name,
+                    name_span,
+                    source,
+                    body,
+                    ..
+                } => {
                     match source {
-                        ForSource::Range { start, end } => {
+                        ForSource::Range { start, end, step } => {
                             self.expression(start);
                             self.expression(end);
+                            if let Some(step) = step {
+                                self.expression(step);
+                            }
                         }
                         ForSource::List(value) => self.expression(value),
                     }
+                    self.scopes.push(BTreeMap::new());
+                    self.local_declaration(name, *name_span);
                     self.block(body);
+                    self.scopes.pop();
                 }
                 StmtKind::Break | StmtKind::Continue => {}
                 StmtKind::Match { value, arms } => {
@@ -2219,11 +2951,23 @@ impl ReferenceIndex<'_> {
                         self.name(
                             arm.span,
                             arm.span.start,
+                            &arm.enum_name,
+                            &arm.enum_name,
+                            NameContext::Type,
+                        );
+                        self.name(
+                            arm.span,
+                            arm.span.start,
                             &arm.variant,
                             &ast::method_key(&arm.enum_name, &arm.variant),
                             NameContext::Pattern,
                         );
+                        self.scopes.push(BTreeMap::new());
+                        for binding in &arm.bindings {
+                            self.local_declaration(&binding.name, binding.span);
+                        }
                         self.block(&arm.body);
+                        self.scopes.pop();
                     }
                 }
             }
@@ -2239,6 +2983,7 @@ impl ReferenceIndex<'_> {
                         .iter()
                         .any(|declaration| declaration.name == owner)
                     {
+                        self.name(expr.span, expr.span.start, owner, owner, NameContext::Type);
                         self.name(
                             expr.span,
                             expr.span.start,
@@ -2289,11 +3034,8 @@ impl ReferenceIndex<'_> {
                 self.expression(left);
                 self.expression(right);
             }
-            ExprKind::Int(_)
-            | ExprKind::Float(_)
-            | ExprKind::Bool(_)
-            | ExprKind::Str(_)
-            | ExprKind::Name(_) => {}
+            ExprKind::Name(name) => self.local_use(name, expr.span),
+            ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) => {}
         }
     }
 }

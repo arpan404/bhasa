@@ -2,16 +2,17 @@
 
 ## Full backlog implementation, October 11, 2026
 
-The latest user request authorizes implementation of the full `todo.md` backlog,
+The user request authorizes implementation of the full `todo.md` backlog,
 parallel internal agents and local progress commits. Earlier no-commit notes are
-historical and superseded; installation/publication/cache cleaning remain outside
-this request. Initial baseline commit: `62afd47`. The old heartbeat remains paused.
+historical and superseded. SDK installation/cache cleaning remain outside this
+request. A later explicit request authorized the completed GitHub push below.
+Initial baseline commit: `62afd47`. The old heartbeat remains paused.
 
-Current increment: typed structured tasks and read-only checked agent inspection.
+Completed initial increment: typed structured tasks and checked agent inspection.
 Contract: typed-tasks-milestone.md. packages owns Rust checking/emission;
 frontend_parity owns Bhasa parity; rust_cache owns C task runtime and independent
 review. Root owns integration, inspection, guides, verification and commits.
-All worker sources are frozen. Focused checks passed runtime stress/guards,
+Worker sources were frozen for acceptance. Focused checks passed runtime stress/guards,
 both typed frontends, atomic ownership counters, O0/O2 sanitizers, imported
 generics and TCP/TLS error-handle transfer. Independent review repaired malformed
 extern rejection fixtures and an inspection privacy false positive.
@@ -24,15 +25,41 @@ two unchanged hybrid builds with zero compilations. The default sandbox
 prevented a loopback HTTP startup; both complete suites pass with loopback
 permission. Sources are accepted for the typed-task integration commit.
 
-Read-only preparation is complete for the next increment: packages owns Rust
+Typed tasks are committed as `cdd7a5b`. The user subsequently authorized setting
+origin to https://github.com/arpan404/bhasa.git and pushing completed commits.
+The three baseline/inspection/typed-task commits are pushed to main through
+`cdd7a5b`; unfinished source changes were preserved.
+
+Implementation started for the next increment: packages owns Rust
 bitwise/radix integers and stepped ranges; frontend_parity owns matching native
 scanner/checker/emitter work; rust_cache owns checked references/local definitions
 and rename. Ratified contracts use Python operator precedence, checked shift
 counts, signed-i64 literal bounds, zero-step traps, overflow-ending cursors and
 versioned rename edits only when every affected document is open. These lanes
-remain idle until the typed-task integration commit. Contract:
+are active after the typed-task integration commit. Contract:
 systems-tooling-milestone.md. Root owns host traversals/formatter/bridge/grammar,
 independent acceptance, guides and final validation.
+
+The systems/tooling increment is integrated and verified. Complete reference
+passes 433 tests; complete full hybrid passes 445. Editor gates pass 56 LSP and
+80 Node tests. Both Clippy configurations and formatting pass. Refreshed release
+compilers execute new/previous examples and five package tests. A/B/C passes at
+run.xQ1qwOVL with new numeric/range examples and typed workers. Release smoke
+records 26 native hits; four unchanged Rust adapter runs and two unchanged
+hybrid builds perform zero compilations. Fresh archive key:
+e1056ba67083f8c895adfeacf64eff9ff00162057017d1ae7f9ed44432dfcc81.
+Archive source exactly matches the frozen scanner/emitter.
+
+Independent review repaired importer completeness, stale unedited importers,
+response amplification, repeated offset scans, contextual-name eligibility,
+synchronization admission limits and retained closed-document URI history.
+A first hybrid run exposed a test assumption about diagnostic tokens; original
+mapping was correct. Exact per-frontend token/code/location checks and the full
+hybrid rerun pass. No implementation or acceptance criteria remain open within
+this increment. integration.md records evidence and platform/language limits.
+The broader backlog remains open. Collections snapshot iteration is the next
+prepared contract; no implementation assignment has started. All worker lanes
+are completed; no extra app chats or monitoring loops were created.
 
 ## Completed iteration and editor milestone
 

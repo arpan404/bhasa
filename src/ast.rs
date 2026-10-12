@@ -240,9 +240,12 @@ fn remap_block(block: &mut Block, ids: &[usize]) {
                 ..
             } => {
                 match source {
-                    ForSource::Range { start, end } => {
+                    ForSource::Range { start, end, step } => {
                         remap_expression(start, ids);
                         remap_expression(end, ids);
+                        if let Some(step) = step {
+                            remap_expression(step, ids);
+                        }
                     }
                     ForSource::List(value) => remap_expression(value, ids),
                 }
@@ -371,8 +374,12 @@ pub enum StmtKind {
 }
 #[derive(Debug, Clone)]
 pub enum ForSource {
-    /// An ascending, half-open range. Both bounds run once before the loop.
-    Range { start: Box<Expr>, end: Box<Expr> },
+    /// A half-open range. Bounds and optional signed step run once, in order.
+    Range {
+        start: Box<Expr>,
+        end: Box<Expr>,
+        step: Option<Box<Expr>>,
+    },
     /// The loop owns a deep snapshot of this List and each yielded element.
     List(Box<Expr>),
 }
@@ -425,6 +432,7 @@ pub enum ExprKind {
 pub enum UnaryOp {
     Neg,
     Not,
+    BitNot,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOp {
@@ -441,6 +449,11 @@ pub enum BinaryOp {
     Ge,
     And,
     Or,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionSig {
@@ -519,9 +532,12 @@ mod tests {
                         visit(ty);
                     }
                     match source {
-                        ForSource::Range { start, end } => {
+                        ForSource::Range { start, end, step } => {
                             expression_types(start, visit);
                             expression_types(end, visit);
+                            if let Some(step) = step {
+                                expression_types(step, visit);
+                            }
                         }
                         ForSource::List(value) => expression_types(value, visit),
                     }

@@ -1,7 +1,8 @@
 # Bhasa-written scanner. Token and error tables contain triples.
 # Tokens: kind, byte start, byte end. Errors: L-code number, start, end.
 # Kinds: 0 EOF, 1 identifier, 2 integer, 3 string, 4 float; ASCII punctuation.
-# Compound kinds: 256 ==, 257 !=, 258 <=, 259 >=, 260 and, 261 or, 262 ->.
+# Compound kinds: 256 ==, 257 !=, 258 <=, 259 >=, 260 and, 261 or, 262 ->,
+# 263 <<, 264 >>. Single-byte bitwise symbols use ASCII 38/124/94/126.
 # Keywords: 300 def, 301 extern, 302 var, 303 if, 304 else, 305 while,
 # 306 return, 307 true, 308 false, 309 int, 310 bool, 311 str, 312 void, 313 struct.
 # 314 is a host-inserted file boundary, 315 enum, 316 match, 317 case, 318 float.
@@ -25,6 +26,12 @@ def bh_triple(values: ints, first: int, second: int, third: int) {
 }
 
 def bh_digit(byte: int) -> bool { return byte >= 48 and byte <= 57 }
+def bh_radix_digit(byte: int) -> int {
+    if bh_digit(byte) { return byte - 48 }
+    if byte >= 65 and byte <= 70 { return byte - 55 }
+    if byte >= 97 and byte <= 102 { return byte - 87 }
+    return -1
+}
 def bh_alpha(byte: int) -> bool {
     return (byte >= 65 and byte <= 90) or (byte >= 97 and byte <= 122) or byte == 95
 }
@@ -101,6 +108,9 @@ def bh_symbol(first: int, second: int) -> int {
     if first == 38 and second == 38 { return 260 }
     if first == 124 and second == 124 { return 261 }
     if first == 45 and second == 62 { return 262 }
+    if first == 60 and second == 60 { return 263 }
+    if first == 62 and second == 62 { return 264 }
+    if first == 38 or first == 124 or first == 94 or first == 126 { return first }
     if first == 33 or first == 40 or first == 41 or first == 42 or first == 43 or first == 44 or first == 45 { return first }
     if first == 46 or first == 47 or first == 37 or first == 58 or first == 59 or first == 60 or first == 61 or first == 62 { return first }
     if first == 91 or first == 93 or first == 123 or first == 125 { return first }
@@ -214,32 +224,48 @@ def bh_lex(source: buffer, errors: ints) -> ints {
                         kind = bh_keyword(slice(source, start, cursor - start))
                     } else {
                         if bh_digit(byte) {
-                            cursor = cursor + 1
-                            while bh_digit(bh_peek(source, cursor)) { cursor = cursor + 1 }
-                            kind = 2
-                            if bh_peek(source, cursor) == 46 and bh_digit(bh_peek(source, cursor + 1)) {
-                                kind = 4
+                            var radix = 10
+                            if byte == 48 and (next == 120 or next == 88) { radix = 16 }
+                            if byte == 48 and (next == 98 or next == 66) { radix = 2 }
+                            if radix != 10 {
+                                cursor = cursor + 2
+                                var first_digit = cursor; var invalid = false
+                                while bh_ident_byte(bh_peek(source, cursor)) {
+                                    var digit = bh_radix_digit(get(source, cursor))
+                                    if digit < 0 or digit >= radix { invalid = true }
+                                    cursor = cursor + 1
+                                }
+                                if cursor == first_digit or invalid {
+                                    bh_triple(errors, 2, start, cursor)
+                                } else { kind = 2 }
+                            } else {
                                 cursor = cursor + 1
                                 while bh_digit(bh_peek(source, cursor)) { cursor = cursor + 1 }
-                            }
-                            var invalid = false
-                            if bh_peek(source, cursor) == 69 or bh_peek(source, cursor) == 101 {
-                                kind = 4
-                                cursor = cursor + 1
-                                if bh_peek(source, cursor) == 43 or bh_peek(source, cursor) == 45 { cursor = cursor + 1 }
-                                var exponent = cursor
-                                while bh_digit(bh_peek(source, cursor)) { cursor = cursor + 1 }
-                                if cursor == exponent { invalid = true }
-                            }
-                            if bh_alpha(bh_peek(source, cursor)) {
-                                invalid = true
-                                while bh_ident_byte(bh_peek(source, cursor)) { cursor = cursor + 1 }
-                            }
-                            if invalid {
-                                var code = 2
-                                if kind == 4 { code = 8 }
-                                bh_triple(errors, code, start, cursor)
-                                kind = -1
+                                kind = 2
+                                if bh_peek(source, cursor) == 46 and bh_digit(bh_peek(source, cursor + 1)) {
+                                    kind = 4
+                                    cursor = cursor + 1
+                                    while bh_digit(bh_peek(source, cursor)) { cursor = cursor + 1 }
+                                }
+                                var invalid = false
+                                if bh_peek(source, cursor) == 69 or bh_peek(source, cursor) == 101 {
+                                    kind = 4
+                                    cursor = cursor + 1
+                                    if bh_peek(source, cursor) == 43 or bh_peek(source, cursor) == 45 { cursor = cursor + 1 }
+                                    var exponent = cursor
+                                    while bh_digit(bh_peek(source, cursor)) { cursor = cursor + 1 }
+                                    if cursor == exponent { invalid = true }
+                                }
+                                if bh_alpha(bh_peek(source, cursor)) {
+                                    invalid = true
+                                    while bh_ident_byte(bh_peek(source, cursor)) { cursor = cursor + 1 }
+                                }
+                                if invalid {
+                                    var code = 2
+                                    if kind == 4 { code = 8 }
+                                    bh_triple(errors, code, start, cursor)
+                                    kind = -1
+                                }
                             }
                         } else {
                             if byte == 34 {

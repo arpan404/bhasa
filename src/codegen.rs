@@ -1516,8 +1516,8 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
         // The private scope holds the iteration snapshot through every continue.
         // Return drops it with all locals; break drops it at the common exit.
         self.scopes.push(BTreeMap::new());
-        let (start, end, list) = match source {
-            ForSource::Range { start, end } => {
+        let (start, end, list, step) = match source {
+            ForSource::Range { start, end, step } => {
                 let start = self.expression(start)?;
                 start.require(Type::Int, span)?;
                 let end = self.expression(end)?;
@@ -1525,7 +1525,21 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
                 if element_type != Some(Type::Int) {
                     return Err(error("invalid range binding type in checked AST", span));
                 }
-                (start.operand, end.operand, None)
+                let step = if let Some(step) = step {
+                    let step = self.expression(step)?;
+                    step.require(Type::Int, span)?;
+                    // Validate before checking either direction, even for an
+                    // empty range. Operand evaluation follows start/end/step.
+                    let zero = self.fresh();
+                    self.instruction(format!("{zero} = icmp eq i64 {}, 0", step.operand));
+                    self.trap_if(&zero);
+                    let ascending = self.fresh();
+                    self.instruction(format!("{ascending} = icmp sgt i64 {}, 0", step.operand));
+                    Some((step.operand, ascending))
+                } else {
+                    None
+                };
+                (start.operand, end.operand, None, step)
             }
             ForSource::List(value) => {
                 let value = self.expression(value)?;
@@ -1548,7 +1562,7 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
                     "{end} = call i64 @bhasa.method.{id}.count(ptr {})",
                     value.operand
                 ));
-                ("0".into(), end, Some((id, value.operand, ty)))
+                ("0".into(), end, Some((id, value.operand, ty)), None)
             }
         };
         let cursor = self.fresh();
@@ -1564,7 +1578,17 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
         let index = self.fresh();
         self.instruction(format!("{index} = load i64, ptr {cursor}"));
         let valid = self.fresh();
-        self.instruction(format!("{valid} = icmp slt i64 {index}, {end}"));
+        if let Some((_, ascending)) = &step {
+            let below = self.fresh();
+            let above = self.fresh();
+            self.instruction(format!("{below} = icmp slt i64 {index}, {end}"));
+            self.instruction(format!("{above} = icmp sgt i64 {index}, {end}"));
+            self.instruction(format!(
+                "{valid} = select i1 {ascending}, i1 {below}, i1 {above}"
+            ));
+        } else {
+            self.instruction(format!("{valid} = icmp slt i64 {index}, {end}"));
+        }
         self.terminate(format!("br i1 {valid}, label %{iteration}, label %{exit}"));
         self.start_block(&iteration);
         self.loops.push(LoopTarget {
@@ -1595,8 +1619,21 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
         let previous = self.fresh();
         let next = self.fresh();
         self.instruction(format!("{previous} = load i64, ptr {cursor}"));
-        // index < end <= INT64_MAX, so the hidden increment cannot overflow.
-        self.instruction(format!("{next} = add nsw i64 {previous}, 1"));
+        if let Some((step, _)) = step {
+            self.module.intrinsics.insert("sadd");
+            let pair = self.fresh();
+            let overflow = self.fresh();
+            let store = self.label();
+            self.instruction(format!("{pair} = call {{ i64, i1 }} @llvm.sadd.with.overflow.i64(i64 {previous}, i64 {step})"));
+            self.instruction(format!("{next} = extractvalue {{ i64, i1 }} {pair}, 0"));
+            self.instruction(format!("{overflow} = extractvalue {{ i64, i1 }} {pair}, 1"));
+            // An out-of-range cursor ends iteration; user arithmetic still traps.
+            self.terminate(format!("br i1 {overflow}, label %{exit}, label %{store}"));
+            self.start_block(&store);
+        } else {
+            // Unit ranges and List indices satisfy index < end <= INT64_MAX.
+            self.instruction(format!("{next} = add nsw i64 {previous}, 1"));
+        }
         self.instruction(format!("store i64 {next}, ptr {cursor}"));
         self.terminate(format!("br label %{condition}"));
         self.start_block(&exit);
@@ -1671,6 +1708,12 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
                         let result = self.fresh();
                         self.instruction(format!("{result} = xor i1 {}, true", operand.operand));
                         Value::new(Type::Bool, result)
+                    }
+                    UnaryOp::BitNot => {
+                        operand.require(Type::Int, expression.span)?;
+                        let result = self.fresh();
+                        self.instruction(format!("{result} = xor i64 {}, -1", operand.operand));
+                        Value::new(Type::Int, result)
                     }
                 }
             }
@@ -1786,6 +1829,32 @@ impl<'a, 'b> FunctionEmitter<'a, 'b> {
             BinaryOp::Add => Ok(self.overflow("sadd", &left.operand, &right.operand)),
             BinaryOp::Sub => Ok(self.overflow("ssub", &left.operand, &right.operand)),
             BinaryOp::Mul => Ok(self.overflow("smul", &left.operand, &right.operand)),
+            BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::Shl
+            | BinaryOp::Shr => {
+                if matches!(op, BinaryOp::Shl | BinaryOp::Shr) {
+                    let invalid = self.fresh();
+                    // The unsigned comparison also catches negative counts.
+                    self.instruction(format!("{invalid} = icmp ugt i64 {}, 63", right.operand));
+                    self.trap_if(&invalid);
+                }
+                let instruction = match op {
+                    BinaryOp::BitAnd => "and",
+                    BinaryOp::BitOr => "or",
+                    BinaryOp::BitXor => "xor",
+                    BinaryOp::Shl => "shl",
+                    BinaryOp::Shr => "ashr",
+                    _ => unreachable!(),
+                };
+                let result = self.fresh();
+                self.instruction(format!(
+                    "{result} = {instruction} i64 {}, {}",
+                    left.operand, right.operand
+                ));
+                Ok(Value::new(Type::Int, result))
+            }
             BinaryOp::Div | BinaryOp::Rem => {
                 let zero = self.fresh();
                 let minimum = self.fresh();

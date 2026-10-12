@@ -114,9 +114,9 @@ headers, libraries, SDKs and linkers. The compiler does not download them.
 
 ## Loop control and snapshots
 
-The checked AST retains range bounds or a typed List source, plus the inferred
+The checked AST retains range bounds and an optional step, or a typed List source, plus the inferred
 loop binding type. Module/generic source maps visit the source, binder and body.
-The worker call graph visits both bounds and List expressions. Checker flow
+The worker call graph visits both bounds, the step and List expressions. Checker flow
 tracks fallthrough, return and loop exits separately; loops cannot establish a
 function return. Task exits check exactly the scopes left by break/continue.
 
@@ -126,6 +126,8 @@ List snapshot across continue; each iteration binds an owned element snapshot.
 Nearest-loop targets record their retained scopes. Exits clean inner scopes and
 branch to the condition, increment or common exit as appropriate. The common
 exit drops the List snapshot, and function returns drop it with all locals.
+Stepped ranges check zero before entering, select their signed comparison once
+from the step direction, and end at the common exit if cursor addition overflows.
 
 ## Verification and remaining work
 

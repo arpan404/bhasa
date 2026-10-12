@@ -18,7 +18,7 @@ code --extensionDevelopmentPath="$PWD/editors/vscode" "$PWD"
 Open a `.bh` file in the development window. The extension starts `bhasa lsp`
 and provides compiler diagnostics, Format Document, an outline of functions and
 records with nested fields and methods, enums with nested variants, and Go to Definition for checked calls
-and field accesses, scoped completion, and type/signature hover. The extension README covers local
+and field accesses, local definitions, Find References, checked Rename Symbol, scoped completion, and type/signature hover. The extension README covers local
 installation, workspace trust, restart, and validation.
 
 For another LSP client, configure the executable and arguments separately:
@@ -39,14 +39,17 @@ advertises those choices during `initialize`.
 
 | Method | Behavior |
 | --- | --- |
-| `initialize`, `initialized` | Advertise full sync, UTF-16, formatting, symbols, definitions, completion and hover |
+| `initialize`, `initialized` | Advertise full sync, UTF-16, formatting, symbols, definitions, references, rename, completion and hover |
 | `textDocument/didOpen` | Keep source and version in memory and publish diagnostics |
 | `textDocument/didChange` | Replace source with each newer full-content update and republish diagnostics |
 | `textDocument/didSave` | Reload saved module information and republish diagnostics |
 | `textDocument/didClose` | Drop the editor buffer and clear diagnostics no longer needed by open roots |
 | `textDocument/formatting` | Return a whole-document edit from `format_source`, or no edits if unchanged |
 | `textDocument/documentSymbol` | Return functions, records with fields/methods, and enums with variants in source order |
-| `textDocument/definition` | Resolve declarations, global/method calls, record/enum constructors, case variants, and checked field accesses |
+| `textDocument/definition` | Resolve checked local bindings, declarations, global/method calls, record/enum constructors, case variants, and field accesses |
+| `textDocument/references` | Return checked declaration/use locations across loaded graphs rooted at open documents; honor `includeDeclaration` |
+| `textDocument/prepareRename` | Return the complete identifier range and placeholder for a supported checked target |
+| `textDocument/rename` | Return versioned `documentChanges` after in-memory checking and binding comparison; every edited file must be open |
 | `textDocument/completion` | Return up to 128 sorted visible names or accessible members with UTF-16 replacement edits |
 | `textDocument/hover` | Return a plaintext type or declaration signature and the identifier range |
 | `shutdown`, `exit` | Respond to shutdown, then exit successfully after the exit notification |
@@ -55,8 +58,8 @@ Diagnostics include compiler codes, source `bhasa`, severity, document version
 when open, and UTF-16 ranges. Selection ranges cover declaration names; symbol
 ranges cover whole declarations. The outline uses LSP Struct, Field, Method,
 Function, Enum and EnumMember kinds, with fields/methods and variants inside their enclosing type. Definitions do not link words inside
-comments or strings, or ordinary local-variable references. Builtins have no
-source definition. The current server does not provide rename, workspace symbols or local-variable definitions. Qualified type annotations
+comments or strings. Locals include parameters, assignment targets, loop bindings and match payloads. Builtins have no
+source definition. The current server does not provide workspace symbols. Qualified type annotations
 navigate to their checked nominal declarations.
 
 The server processes messages in order. It ignores unsupported notifications,
@@ -64,6 +67,48 @@ including cancellation, and returns MethodNotFound for unsupported requests.
 It does not advertise incremental edits. Ranged changes, malformed document
 notifications, and stale versions leave the current document unchanged.
 Formatting failures return RequestFailed without editing the document.
+
+## References and rename
+
+Find References uses checked declaration identity, including shadowed local
+variables, imported declarations and concrete generic specializations. Its scope
+is the loaded graphs rooted at open documents. It does not search unopened
+projects or unknown importers. References may point to saved files that are not
+open. Repeated generic instances produce one location per original token.
+
+Rename Symbol requires every file receiving edits to be open. The server returns
+integer document versions and UTF-16 ranges without applying edits or writing
+files. It checks the proposed sources in memory and compares reference bindings
+before and after, rejecting collisions and silent name capture even when the
+renamed program would type-check. Comments, strings and import paths remain
+unchanged. Renaming an imported declaration preserves its import alias; a checked
+alias can be renamed separately.
+
+The editor validates every open Bhasa document, including importers receiving no
+edits, before converting the response to native edits. It drops responses if
+any document changes, closes, reopens, or is added during the request, or after
+cancellation or server restart. Files outside the returned edits
+are not modified.
+
+Before requesting rename, the editor checks that every open Bhasa document fits
+the server's synchronization limits: 128 documents, 32 MiB of UTF-8 source in
+total, 16 KiB per URI, and 4 MiB per JSON notification including escaping.
+Every document needs an integer version and a successfully queued open or change
+notification. Over-limit documents and failed sends block rename; they are
+retried after capacity becomes available. Notifications have no acknowledgement.
+
+Refactors require completely checked affected graphs. Incomplete-source
+completion recovery never authorizes rename. Builtins, generated collection
+members, foreign ABI names, `main`, the `self` receiver, generic type parameters,
+and ambiguous generic receiver members are unsupported. If any matching token
+has no proven checked identity, rename is refused. This includes some nested
+generic type arguments and uninstantiated generic bodies. Keyword, builtin,
+reserved-prefix and invalid replacement names are rejected. Rename identifiers
+are limited to 256 ASCII bytes. Analysis and rebuilt source graphs are bounded
+to 64 MiB, with at most 65,536 indexed reference locations and a 2 MiB result.
+Oversized operations fail instead of returning partial edits. Global renames
+also refuse open documents with unresolved import graphs because their callers
+cannot be proven complete. Save changed import paths before refactoring.
 
 ## Imports and unsaved source
 

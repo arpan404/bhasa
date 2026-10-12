@@ -1,17 +1,22 @@
 # Iteration
 
-Use a half-open ascending integer range for counted loops:
+Use a half-open integer range for counted loops:
 
 ```bhasa
 for number in range(5) { print(number) }       # 0 through 4
 for number in range(-2, 2) { print(number) }   # -2 through 1
+for number in range(6, 0, -2) { print(number) } # 6, 4, 2
 ```
 
 `range(end)` starts at zero. `range(start, end)` starts at the first bound.
-Both bounds must be `int`; they evaluate once, left to right, before iteration.
-Equal or reversed bounds perform no iterations. There is no step argument,
-descending range or first-class range value. The internal cursor advances
-independently of changes to the loop binding and cannot overflow.
+Both forms use a step of one. `range(start, end, step)` selects a signed step.
+All arguments must be `int`; they evaluate once, left to right, before iteration.
+A positive step visits values less than end; a negative step visits values
+greater than end. Equal bounds or bounds facing away from the step are empty.
+Zero step traps even for an empty range. The internal cursor advances
+independently of changes to the loop binding. Advancement that would overflow
+ends iteration, allowing a final step past the signed limit. There is no
+first-class range value.
 
 Use `for value in list` with `List[T]`:
 
@@ -46,7 +51,7 @@ normal completion. Nested branches and enum matches follow the same cleanup.
 Task handles created in an exited scope must already have been consumed with
 `join` or `await` in their creation block. Exiting a loop does not leave the
 surrounding scope, so an outer task can remain live and be joined afterward.
-Worker calls inside bounds, list sources and bodies retain the normal transitive
+Worker calls inside bounds, steps, list sources and bodies retain the normal transitive
 extern and pooled-task restrictions.
 
 The compiler rejects `break` or `continue` outside a loop and statements after

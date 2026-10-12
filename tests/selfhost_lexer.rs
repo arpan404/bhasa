@@ -58,6 +58,12 @@ fn token_code(kind: &TokenKind) -> i64 {
         Star => 42,
         Slash => 47,
         Percent => 37,
+        BitAnd => 38,
+        BitOr => 124,
+        BitXor => 94,
+        BitNot => 126,
+        ShiftLeft => 263,
+        ShiftRight => 264,
         Equal => 61,
         EqualEqual => 256,
         NotEqual => 257,
@@ -115,6 +121,7 @@ fn bhasa_scanner_matches_bootstrap_tokens_spans_and_decoded_strings() {
         "0 9223372036854775808 9999999999999999999999999999999999999".into(),
         "# unicode: भाषा 😀\n// comment\r\n)\n12".into(),
         "0.1 1e3 1E+3 25e-2 0002.500 1.0e0 1.member".into(),
+        "& | ^ ~ << >> && || < > <= >= 0xFf 0XABC 0b101 0B001 0x0 0x1e2 -0x8000000000000000".into(),
         scanner.clone(),
     ];
     for name in [
@@ -129,13 +136,13 @@ fn bhasa_scanner_matches_bootstrap_tokens_spans_and_decoded_strings() {
         valid.push(fs::read_to_string(fixture(name)).unwrap());
     }
     let invalid = [
-        "0xFF 12suffix 12_3",
+        "0x 0b 0Xg 0b102 0x1_2 0B1tail 0xFFsuffix 12suffix 12_3",
         "1e 1e+ 1e- 1.0e 1e3f 1.0_1 1e+2_3",
         "\"bad\\q\"",
         "\"unterminated",
         "\"raw\nline\r\nbreak\"",
         "\"escaped\\\nline\\\r\nbreak\"",
-        "& | é 😀",
+        "é 😀",
         "\0#\0comment\n\"\0\\\0\"",
     ];
     for release in [false, true] {

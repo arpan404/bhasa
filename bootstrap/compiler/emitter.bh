@@ -319,8 +319,45 @@ def be_string(globals: buffer, ctx: ints, text: buffer) -> buffer {
     append(globals, "\\00\", align 1\n")
     return symbol
 }
+# Accumulate only after the complete radix magnitude has passed its limit.
+# Negative accumulation represents directly-negated INT64_MIN without overflow.
+def be_radix_literal(text: buffer, tokens: ints, ctx: ints, errors: ints, negative: bool) -> buffer {
+    var radix = 16
+    var limit = buffer("7fffffffffffffff")
+    if negative { limit = buffer("8000000000000000") }
+    if get(text, 1) == 98 or get(text, 1) == 66 {
+        radix = 2
+        limit = buffer("111111111111111111111111111111111111111111111111111111111111111")
+        if negative { limit = buffer("1000000000000000000000000000000000000000000000000000000000000000") }
+    }
+    var first = 2
+    while first + 1 < len(text) and get(text, first) == 48 { first = first + 1 }
+    var count = len(text) - first
+    var too_big = count > len(limit)
+    if count == len(limit) {
+        var i = 0; var decided = false
+        while i < count and not decided {
+            var digit = bh_radix_digit(get(text, first + i)); var maximum = bh_radix_digit(get(limit, i))
+            if digit > maximum { too_big = true; decided = true }
+            if digit < maximum { decided = true }
+            i = i + 1
+        }
+    }
+    if too_big { be_error(tokens, ctx, errors, 206); be_next(ctx); be_meta(ctx, 1, 0); return buffer("0") }
+    var value = 0
+    while first < len(text) {
+        value = value * radix - bh_radix_digit(get(text, first))
+        first = first + 1
+    }
+    if not negative { value = -value }
+    be_next(ctx); be_meta(ctx, 1, 0)
+    return to_buffer(value)
+}
 def be_literal(source: buffer, tokens: ints, ctx: ints, errors: ints, negative: bool) -> buffer {
     var text = bh_token_text(source, tokens, get(ctx, 0))
+    if len(text) > 2 and get(text, 0) == 48 and (get(text, 1) == 120 or get(text, 1) == 88 or get(text, 1) == 98 or get(text, 1) == 66) {
+        return be_radix_literal(text, tokens, ctx, errors, negative)
+    }
     var first = 0
     while first + 1 < len(text) and get(text, first) == 48 { first = first + 1 }
     text = slice(text, first, len(text) - first)
@@ -448,8 +485,12 @@ def be_precedence(kind: int) -> int {
     if kind == 260 { return 2 }
     if kind == 256 or kind == 257 { return 3 }
     if kind == 60 or kind == 62 or kind == 258 or kind == 259 { return 4 }
-    if kind == 43 or kind == 45 { return 5 }
-    if kind == 42 or kind == 47 or kind == 37 { return 6 }
+    if kind == 124 { return 5 }
+    if kind == 94 { return 6 }
+    if kind == 38 { return 7 }
+    if kind == 263 or kind == 264 { return 8 }
+    if kind == 43 or kind == 45 { return 9 }
+    if kind == 42 or kind == 47 or kind == 37 { return 10 }
     return 0
 }
 def be_checked(body: buffer, ctx: ints, operation: str, left: buffer, right: buffer) -> buffer {
@@ -480,6 +521,15 @@ def be_binary(body: buffer, ctx: ints, operation: int, left: buffer, right: buff
         line = buffer(); append(line, invalid); append(line, " = or i1 "); append(line, zero); append(line, ", "); append(line, overflow); be_line(body, line)
         be_trap(body, ctx, invalid)
         if operation == 47 { append(instruction, "sdiv ") } else { append(instruction, "srem ") }
+    }
+    if operation == 38 { append(instruction, "and ") }
+    if operation == 124 { append(instruction, "or ") }
+    if operation == 94 { append(instruction, "xor ") }
+    if operation == 263 or operation == 264 {
+        var invalid = be_reg(ctx)
+        var guard = buffer(); append(guard, invalid); append(guard, " = icmp uge i64 "); append(guard, right); append(guard, ", 64"); be_line(body, guard)
+        be_trap(body, ctx, invalid)
+        if operation == 263 { append(instruction, "shl ") } else { append(instruction, "ashr ") }
     }
     if operation == 256 { append(instruction, "icmp eq ") }
     if operation == 257 { append(instruction, "icmp ne ") }
@@ -1056,7 +1106,7 @@ def be_postfix(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: b
 }
 def be_unary(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buffer, allocations: buffer, body: buffer) -> buffer {
     var kind = be_kind(tokens, ctx)
-    if kind != 45 and kind != 33 { return be_postfix(source, tokens, ctx, errors, globals, allocations, body) }
+    if kind != 45 and kind != 33 and kind != 126 { return be_postfix(source, tokens, ctx, errors, globals, allocations, body) }
     be_next(ctx)
     if kind == 45 and be_kind(tokens, ctx) == 2 { return be_literal(source, tokens, ctx, errors, true) }
     if get(ctx, 9) + get(ctx, 8) >= 128 { be_error(tokens, ctx, errors, 204); return buffer("0") }
@@ -1076,7 +1126,10 @@ def be_unary(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buf
         } else { result = be_checked(body, ctx, "ssub", buffer("0"), operand) }
     } else {
         result = be_reg(ctx)
-        var line = buffer(); append(line, result); append(line, " = xor i1 "); append(line, operand); append(line, ", true"); be_line(body, line)
+        var line = buffer(); append(line, result); if kind == 126 {
+            append(line, " = xor i64 "); append(line, operand); append(line, ", -1")
+        } else { append(line, " = xor i1 "); append(line, operand); append(line, ", true") }
+        be_line(body, line)
     }
     be_meta(ctx, expected, 0); set(ctx, 13, 0); set(ctx, 23, tree_depth)
     return result
@@ -1121,7 +1174,8 @@ def be_expression(source: buffer, tokens: ints, ctx: ints, errors: ints, globals
                 if (left_type != 1 and left_type != 2 and left_type != 10) or left_type != right_type { be_error(tokens, ctx, errors, 201) }
                 result_type = 2
             } else {
-                if (left_type != 1 and left_type != 10) or right_type != left_type or (operation == 37 and left_type != 1) { be_error(tokens, ctx, errors, 201) }
+                var integer_only = operation == 37 or operation == 38 or operation == 124 or operation == 94 or operation == 263 or operation == 264
+                if (left_type != 1 and left_type != 10) or right_type != left_type or (integer_only and left_type != 1) { be_error(tokens, ctx, errors, 201) }
                 if operation == 60 or operation == 62 or operation == 258 or operation == 259 { result_type = 2 }
             }
             left = be_binary(body, ctx, operation, left, right, left_type)
@@ -1222,7 +1276,7 @@ def be_for(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buffe
     be_expect(tokens, ctx, errors, 320)
     if get(ctx, 8) >= 128 { be_error_at(tokens, errors, 204, for_token); return }
     var saved = get(ctx, 7)
-    var start = buffer("0"); var end = buffer(); var snapshot = buffer()
+    var start = buffer("0"); var end = buffer(); var step = buffer("1"); var snapshot = buffer()
     var element_type = 1; var list_type = 0
     be_statement_expression(tokens, ctx, 0)
     var lookahead = get(ctx, 0); var parentheses = 0
@@ -1242,7 +1296,15 @@ def be_for(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buffe
                 end = be_expression(source, tokens, ctx, errors, globals, allocations, body, 1)
                 if get(ctx, 14) != 1 { be_error(tokens, ctx, errors, 201) }
                 if get(ctx, 23) + get(ctx, 8) + 1 > 128 { be_error(tokens, ctx, errors, 204) }
-                if be_kind(tokens, ctx) == 44 { be_next(ctx) }
+                if be_kind(tokens, ctx) == 44 {
+                    be_next(ctx)
+                    if be_kind(tokens, ctx) != 41 {
+                        step = be_expression(source, tokens, ctx, errors, globals, allocations, body, 1)
+                        if get(ctx, 14) != 1 { be_error(tokens, ctx, errors, 201) }
+                        if get(ctx, 23) + get(ctx, 8) + 1 > 128 { be_error(tokens, ctx, errors, 204) }
+                        if be_kind(tokens, ctx) == 44 { be_next(ctx) }
+                    }
+                }
             }
         }
         be_expect(tokens, ctx, errors, 41)
@@ -1262,6 +1324,11 @@ def be_for(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buffe
     }
     if len(errors) != 0 { return }
     var retained = get(ctx, 7)
+    if list_type == 0 {
+        var zero_step = be_reg(ctx)
+        var guard = buffer(); append(guard, zero_step); append(guard, " = icmp eq i64 "); append(guard, step); append(guard, ", 0"); be_line(body, guard)
+        be_trap(body, ctx, zero_step)
+    }
     var counter = be_reg(ctx)
     var line = buffer(); append(line, counter); append(line, " = alloca i64"); be_line(allocations, line)
     line = buffer("store i64 "); append(line, start); append(line, ", ptr "); append(line, counter); be_line(body, line)
@@ -1270,7 +1337,15 @@ def be_for(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buffe
     var index = be_reg(ctx)
     line = buffer(); append(line, index); append(line, " = load i64, ptr "); append(line, counter); be_line(body, line)
     var condition = be_reg(ctx)
-    line = buffer(); append(line, condition); append(line, " = icmp slt i64 "); append(line, index); append(line, ", "); append(line, end); be_line(body, line)
+    if list_type != 0 {
+        line = buffer(); append(line, condition); append(line, " = icmp slt i64 "); append(line, index); append(line, ", "); append(line, end); be_line(body, line)
+    } else {
+        var ascending = be_reg(ctx); var descending = be_reg(ctx); var positive = be_reg(ctx)
+        line = buffer(); append(line, ascending); append(line, " = icmp slt i64 "); append(line, index); append(line, ", "); append(line, end); be_line(body, line)
+        line = buffer(); append(line, descending); append(line, " = icmp sgt i64 "); append(line, index); append(line, ", "); append(line, end); be_line(body, line)
+        line = buffer(); append(line, positive); append(line, " = icmp sgt i64 "); append(line, step); append(line, ", 0"); be_line(body, line)
+        line = buffer(); append(line, condition); append(line, " = select i1 "); append(line, positive); append(line, ", i1 "); append(line, ascending); append(line, ", i1 "); append(line, descending); be_line(body, line)
+    }
     be_branch(body, ctx, condition, loop_label, exit_label); be_start(body, ctx, loop_label)
     var value = index; var owns = 0
     if list_type != 0 {
@@ -1289,9 +1364,19 @@ def be_for(source: buffer, tokens: ints, ctx: ints, errors: ints, globals: buffe
     }
     set(ctx, 7, retained); set(ctx, 8, get(ctx, 8) - 1); set(ctx, 29, get(ctx, loop))
     be_start(body, ctx, step_label)
-    # index < end <= INT64_MAX ensures this addition is representable.
     var next = be_reg(ctx)
-    line = buffer(); append(line, next); append(line, " = add i64 "); append(line, index); append(line, ", 1"); be_line(body, line)
+    if list_type != 0 {
+        # List length bounds make index + 1 representable.
+        line = buffer(); append(line, next); append(line, " = add i64 "); append(line, index); append(line, ", 1"); be_line(body, line)
+    } else {
+        # Advancing beyond the signed domain necessarily crosses the end bound.
+        # Exit without trapping or wrapping the cursor back into the range.
+        var pair = be_reg(ctx); var overflow = be_reg(ctx); var advance_label = be_label(ctx)
+        line = buffer(); append(line, pair); append(line, " = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 "); append(line, index); append(line, ", i64 "); append(line, step); append(line, ")"); be_line(body, line)
+        line = buffer(); append(line, next); append(line, " = extractvalue { i64, i1 } "); append(line, pair); append(line, ", 0"); be_line(body, line)
+        line = buffer(); append(line, overflow); append(line, " = extractvalue { i64, i1 } "); append(line, pair); append(line, ", 1"); be_line(body, line)
+        be_branch(body, ctx, overflow, exit_label, advance_label); be_start(body, ctx, advance_label)
+    }
     line = buffer("store i64 "); append(line, next); append(line, ", ptr "); append(line, counter); be_line(body, line)
     be_jump(body, ctx, condition_label)
     be_start(body, ctx, exit_label)

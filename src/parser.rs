@@ -398,19 +398,20 @@ impl Parser {
                 let value = self.expression(depth)?;
                 let source = match value.kind {
                     ExprKind::Call { name, mut args } if name == "range" => {
-                        if args.is_empty() || args.len() > 2 {
+                        if args.is_empty() || args.len() > 3 {
                             return Err(Diagnostic::new(
                                 "P006",
-                                "range requires one or two int bounds",
+                                "range requires one, two, or three int arguments",
                                 value.span,
                             ));
                         }
+                        let step = (args.len() == 3).then(|| Box::new(args.pop().unwrap()));
                         let end = Box::new(args.pop().unwrap());
                         let start = Box::new(
                             args.pop()
                                 .unwrap_or_else(|| Expr::new(ExprKind::Int(0), value.span)),
                         );
-                        ForSource::Range { start, end }
+                        ForSource::Range { start, end, step }
                     }
                     kind => ForSource::List(Box::new(Expr { kind, ..value })),
                 };
@@ -521,6 +522,7 @@ impl Parser {
         let op = match self.current().kind {
             TokenKind::Minus => UnaryOp::Neg,
             TokenKind::Not => UnaryOp::Not,
+            TokenKind::BitNot => UnaryOp::BitNot,
             _ => return self.postfix(depth),
         };
         let start = self.advance().span;
@@ -528,7 +530,7 @@ impl Parser {
         // the complete signed literal, while ordinary negation remains an op.
         if op == UnaryOp::Neg {
             if let TokenKind::Int(digits) = &self.current().kind {
-                if digits.parse::<u64>() == Ok(1u64 << 63) {
+                if integer_magnitude(digits) == Ok(1u64 << 63) {
                     let end = self.advance().span;
                     return Ok((Expr::new(ExprKind::Int(i64::MIN), start.join(end)), 1));
                 }
@@ -608,7 +610,7 @@ impl Parser {
     fn primary(&mut self, depth: usize) -> ParseResult<(Expr, usize)> {
         let token = self.advance();
         let kind = match token.kind {
-            TokenKind::Int(digits) => ExprKind::Int(digits.parse::<i64>().map_err(|_| {
+            TokenKind::Int(digits) => ExprKind::Int(integer_magnitude(&digits).ok().and_then(|value| i64::try_from(value).ok()).ok_or_else(|| {
                 Diagnostic::new(
                     "P002",
                     "integer literal is outside the signed 64-bit range (-9223372036854775808 through 9223372036854775807)",
@@ -663,11 +665,16 @@ impl Parser {
             TokenKind::LessEqual => (BinaryOp::Le, 4),
             TokenKind::Greater => (BinaryOp::Gt, 4),
             TokenKind::GreaterEqual => (BinaryOp::Ge, 4),
-            TokenKind::Plus => (BinaryOp::Add, 5),
-            TokenKind::Minus => (BinaryOp::Sub, 5),
-            TokenKind::Star => (BinaryOp::Mul, 6),
-            TokenKind::Slash => (BinaryOp::Div, 6),
-            TokenKind::Percent => (BinaryOp::Rem, 6),
+            TokenKind::BitOr => (BinaryOp::BitOr, 5),
+            TokenKind::BitXor => (BinaryOp::BitXor, 6),
+            TokenKind::BitAnd => (BinaryOp::BitAnd, 7),
+            TokenKind::ShiftLeft => (BinaryOp::Shl, 8),
+            TokenKind::ShiftRight => (BinaryOp::Shr, 8),
+            TokenKind::Plus => (BinaryOp::Add, 9),
+            TokenKind::Minus => (BinaryOp::Sub, 9),
+            TokenKind::Star => (BinaryOp::Mul, 10),
+            TokenKind::Slash => (BinaryOp::Div, 10),
+            TokenKind::Percent => (BinaryOp::Rem, 10),
             _ => return None,
         })
     }
@@ -825,6 +832,22 @@ impl Parser {
     }
 }
 
+fn integer_magnitude(spelling: &str) -> Result<u64, std::num::ParseIntError> {
+    if let Some(digits) = spelling
+        .strip_prefix("0x")
+        .or_else(|| spelling.strip_prefix("0X"))
+    {
+        u64::from_str_radix(digits, 16)
+    } else if let Some(digits) = spelling
+        .strip_prefix("0b")
+        .or_else(|| spelling.strip_prefix("0B"))
+    {
+        u64::from_str_radix(digits, 2)
+    } else {
+        spelling.parse()
+    }
+}
+
 fn describe(kind: &TokenKind) -> String {
     let spelling = match kind {
         TokenKind::Ident(name) => return format!("identifier '{name}'"),
@@ -858,6 +881,12 @@ fn describe(kind: &TokenKind) -> String {
         TokenKind::And => "and",
         TokenKind::Or => "or",
         TokenKind::Not => "not",
+        TokenKind::BitAnd => "&",
+        TokenKind::BitOr => "|",
+        TokenKind::BitXor => "^",
+        TokenKind::BitNot => "~",
+        TokenKind::ShiftLeft => "<<",
+        TokenKind::ShiftRight => ">>",
         TokenKind::LeftParen => "(",
         TokenKind::RightParen => ")",
         TokenKind::LeftBracket => "[",

@@ -44,7 +44,7 @@ The bootstrap limits syntax nesting and combined block/expression tree depth to 
 | A declared enum name | Owned tagged value containing one variant's payload |
 | `tcp_listener`, `tcp_socket` | Owned native TCP handles; a copied handle owns a duplicated descriptor for the same endpoint |
 | `tls_socket` | Owned native TLS handle; copies retain the same refcounted session with serialized I/O |
-| `task` | Inferred linear scalar task handle; no explicit annotation; consume once with `join` or `await` in its lexical block |
+| `task` | Inferred linear typed task handle; no explicit annotation; consume once with `join` or `await` in its lexical block |
 | `void` | No returned value; valid only as a function return type |
 
 There are no implicit conversions. A condition must be `bool`; integers do not act as booleans.
@@ -273,9 +273,13 @@ Operators below run from highest to lowest precedence. Binary operators within o
 
 | Operators | Operands and result |
 | --- | --- |
-| Unary `-`, `not`, `!` | `-` takes `int` or `float`; `not` and `!` take `bool` |
+| Unary `-`, `~`, `not`, `!` | `-` takes `int` or `float`; `~` takes `int`; `not` and `!` take `bool` |
 | `*`, `/`, `%` | `*` and `/` take equal `int` or `float` operands and return that type; `%` takes only `int` |
 | `+`, `-` | Equal `int` or `float` operands; return that type |
+| `<<`, `>>` | `int` operands and result; count must be 0 through 63 |
+| `&` | `int` operands and result |
+| `^` | `int` operands and result |
+| `\|` | `int` operands and result |
 | `<`, `<=`, `>`, `>=` | Equal `int` or `float` operands, `bool` result |
 | `==`, `!=` | Two equal numeric types or two `bool` operands, `bool` result |
 | `and`, `&&` | `bool` operands, `bool` result |
@@ -300,8 +304,16 @@ The division is skipped in this example. Short-circuiting does not skip type che
 
 Integer division truncates toward zero. Remainder follows the sign of the dividend. Integer arithmetic does not wrap. Overflow in addition, subtraction, multiplication or negation traps at runtime. Division or remainder by zero also traps, as do both `INT64_MIN / -1` and `INT64_MIN % -1`. A trap terminates execution; there is no exception handler or recovery mechanism. These checks apply in development and release builds.
 
-Integer literals use decimal digits. A decimal fraction or exponent spelling
-denotes `float`. Hexadecimal notation and digit separators are unsupported. Literals outside the supported signed range produce diagnostics rather than silently wrapping. The signed minimum literal `-9223372036854775808` is accepted.
+Bitwise operators use 64-bit two's-complement bits. Left shift wraps the bit
+pattern; right shift extends its sign. Invalid shift counts trap before the
+operation. Bitwise operations bind more tightly than comparisons:
+`flags & mask != 0` tests whether any masked bit is set.
+
+Integer literals use decimal digits, hexadecimal `0x`/`0X` or binary `0b`/`0B`
+digits. Separators and suffixes are unsupported. Positive spellings must fit
+signed i64; directly negated magnitude 2^63 is accepted, including
+`-0x8000000000000000`. A positive high-bit literal is a range error. A decimal
+fraction or exponent spelling denotes `float`.
 
 ## Branches and loops
 
@@ -334,8 +346,10 @@ for value in values { print(value) }
 ```
 
 `range(end)` starts at zero; `range(start, end)` uses explicit int bounds. The
-upper bound is exclusive, both bounds run once, and reversed ranges are empty.
-There is no step argument or first-class range value. List iteration owns one
+end is exclusive and the default step is one. `range(start, end, step)` supports
+positive or negative steps. Arguments run once, left to right. Zero step traps;
+an overflow in cursor advancement ends iteration. There is no first-class
+range value. List iteration owns one
 deep source snapshot and a separate element snapshot per iteration. Mutating or
 replacing the source or binding cannot invalidate the internal cursor. Loop
 bindings are mutable and body-local. Other collection kinds cannot yet be

@@ -17,6 +17,7 @@ function environment(t, options = {}) {
   const children = [];
   const diagnostics = new Map();
   const errors = [];
+  const weakKeys = { writes: 0 };
   const uri = (value) => ({ scheme: value.split(":")[0], fsPath: "/tmp/test", toString: () => value });
   const document = {
     uri: uri(options.documentUri || "file:///tmp/test/main.bh"), languageId: "bhasa", version: 1,
@@ -49,7 +50,9 @@ function environment(t, options = {}) {
       registerDocumentSymbolProvider: provider("symbols"),
       registerDefinitionProvider: provider("definition"),
       registerCompletionItemProvider: provider("completion"),
-      registerHoverProvider: provider("hover")
+      registerHoverProvider: provider("hover"),
+      registerReferenceProvider: provider("references"),
+      registerRenameProvider: provider("rename")
     },
     commands: { registerCommand: (_, callback) => { events.restart = callback; return disposable; } },
     Uri: { parse: uri }, DiagnosticSeverity: { Error: 0 }, SymbolKind: { Function: 11 },
@@ -59,6 +62,7 @@ function environment(t, options = {}) {
     CompletionList: class { constructor(items, isIncomplete) { Object.assign(this, { items, isIncomplete }); } },
     MarkdownString: class { constructor() { this.value = ""; } appendText(value) { this.value += value; return this; } },
     Hover: class { constructor(contents, range) { Object.assign(this, { contents, range }); } },
+    WorkspaceEdit: class { constructor() { this.entries = new Map(); } set(uri, edits) { this.entries.set(uri.toString(), edits); } },
     TextEdit: class { constructor(range, newText) { Object.assign(this, { range, newText }); } },
     Location: class { constructor(uri, range) { Object.assign(this, { uri, range }); } },
     DocumentSymbol: class { constructor(name, detail, kind, range, selectionRange) { Object.assign(this, { name, detail, kind, range, selectionRange }); } },
@@ -84,7 +88,7 @@ function environment(t, options = {}) {
         if (message.method === "initialize") {
           child.send({ id: message.id, result: { capabilities: {
             textDocumentSync: { openClose: true, change: 1, save: options.save ?? true }, positionEncoding: "utf-16",
-            documentFormattingProvider: true, documentSymbolProvider: true, definitionProvider: true, completionProvider: { triggerCharacters: ["."] }, hoverProvider: true
+            documentFormattingProvider: true, documentSymbolProvider: true, definitionProvider: true, referencesProvider: true, renameProvider: { prepareProvider: true }, completionProvider: { triggerCharacters: ["."] }, hoverProvider: true
           } } });
         } else if (message.method === "shutdown") child.send({ id: message.id, result: null });
         else if (message.method === "exit") { child.exitCode = 0; child.stdout.end(); child.emit("close", 0, null); }
@@ -98,6 +102,12 @@ function environment(t, options = {}) {
           child.send({ id: message.id, result: options.completion || { isIncomplete: true, items: [{ label: "count", detail: "def count() -> int", kind: 2, textEdit: { range: locationRange, newText: "count" } }] } });
         } else if (message.method === "textDocument/hover" && !options.delayHover) {
           child.send({ id: message.id, result: options.hover || { contents: { kind: "plaintext", value: "var text: buffer [command:unsafe]" }, range: locationRange } });
+        } else if (message.method === "textDocument/references") {
+          child.send({ id: message.id, result: [{ uri: document.uri.toString(), range: locationRange }] });
+        } else if (message.method === "textDocument/prepareRename") {
+          child.send({ id: message.id, result: { range: locationRange, placeholder: "main" } });
+        } else if (message.method === "textDocument/rename" && !options.delayRename) {
+          child.send({ id: message.id, result: options.rename || { documentChanges: [{ textDocument: { uri: document.uri.toString(), version: document.version }, edits: [{ range: locationRange, newText: message.params.newName }] }] } });
         } else if (message.method === "textDocument/definition") {
           child.send({ id: message.id, result: options.definition || { uri: document.uri.toString(), range: locationRange } });
         }
@@ -108,13 +118,20 @@ function environment(t, options = {}) {
   };
   const module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../extension.js"), "utf8"), {
-    require: (name) => name === "vscode" ? vscode : name === "node:child_process" ? { spawn } : require("../transport"),
-    module, process, setTimeout, clearTimeout
+    require: (name) => name === "vscode" ? vscode : name === "node:child_process" ? { spawn } : name === "node:buffer" ? require("node:buffer") : require("../transport"),
+    module, process, setTimeout, clearTimeout,
+    WeakMap: class extends WeakMap {
+      set(key, value) {
+        assert.equal(typeof key, "object");
+        weakKeys.writes++;
+        return super.set(key, value);
+      }
+    }
   });
   module.exports.activate({ subscriptions: [] });
   t.after(() => module.exports.deactivate());
   const token = { isCancellationRequested: false, onCancellationRequested: () => disposable };
-  return { document, events, providers, vscode, children, diagnostics, errors, token, deactivate: module.exports.deactivate };
+  return { document, events, providers, vscode, children, diagnostics, errors, token, weakKeys, deactivate: module.exports.deactivate };
 }
 
 test("initializes then syncs open/change/close with full unsaved text", async (t) => {
@@ -343,4 +360,226 @@ test("completion and hover discard stale responses", async (t) => {
       else assert.equal(result, null);
     });
   }
+});
+
+test("references and prepareRename use native providers with exact UTF-16 positions", async (t) => {
+  const env = environment(t); await tick();
+  const refs = await env.providers.references.provideReferences(env.document, { line: 0, character: 5 }, { includeDeclaration: false }, env.token);
+  assert.equal(refs.length, 1);
+  assert.equal(env.children[0].messages.at(-1).params.context.includeDeclaration, false);
+  const prepared = await env.providers.rename.prepareRename(env.document, { line: 0, character: 5 }, env.token);
+  assert.equal(prepared.placeholder, "main");
+  assert.deepEqual(prepared.range.start, locationRange.start);
+});
+
+function renameResponse(documents, name = "renamed") {
+  return { documentChanges: documents.map((document) => ({
+    textDocument: { uri: document.uri.toString(), version: document.version },
+    edits: [{ range: locationRange, newText: name }]
+  })) };
+}
+function secondaryDocument(env) {
+  const secondary = { ...env.document, uri: env.vscode.Uri.parse("file:///tmp/test/library.bh"), version: 7 };
+  env.vscode.workspace.textDocuments.push(secondary);
+  env.events.open(secondary);
+  return secondary;
+}
+
+test("rename validates and converts every versioned document without applying edits", async (t) => {
+  const env = environment(t, { delayRename: true }); await tick();
+  const other = secondaryDocument(env);
+  const pending = env.providers.rename.provideRenameEdits(env.document, { line: 0, character: 5 }, "renamed", env.token);
+  await tick();
+  const request = env.children[0].messages.at(-1);
+  assert.equal(request.method, "textDocument/rename");
+  env.children[0].send({ id: request.id, result: renameResponse([env.document, other]) });
+  const edit = await pending;
+  assert.equal(edit.entries.size, 2);
+  assert.equal(edit.entries.get(other.uri.toString())[0].newText, "renamed");
+  assert.equal(other.version, 7);
+  assert.equal(env.document.text, 'def main() { print("🌍") }');
+});
+
+test("rename discards stale secondary files, close/reopen, cancellation and restart", async (t) => {
+  for (const action of ["changed", "closed", "reopened", "same-object-reopened", "canceled", "restart"]) {
+    await t.test(action, async (t) => {
+      const env = environment(t, { delayRename: true }); await tick();
+      const other = secondaryDocument(env); await tick();
+      const response = renameResponse([env.document, other]);
+      const pending = env.providers.rename.provideRenameEdits(env.document, { line: 0, character: 5 }, "renamed", env.token);
+      await tick();
+      const child = env.children[0]; const request = child.messages.at(-1);
+      if (action === "changed") { other.version++; other.text += "\n"; env.events.change({ document: other, contentChanges: [{}] }); }
+      if (["closed", "reopened", "same-object-reopened"].includes(action)) {
+        other.isClosed = true; env.events.close(other);
+        if (action !== "closed") {
+          const reopened = action === "same-object-reopened" ? other : { ...other };
+          reopened.isClosed = false;
+          env.vscode.workspace.textDocuments[1] = reopened;
+          env.events.open(reopened);
+        }
+      }
+      if (action === "canceled") env.token.isCancellationRequested = true;
+      if (action === "restart") await env.events.restart();
+      else child.send({ id: request.id, result: response });
+      assert.equal(await pending, null);
+    });
+  }
+});
+
+test("rename rejects malformed, partial, overlapping, unopened and unversioned edits", async (t) => {
+  for (const invalid of ["missing-version", "wrong-version", "unopened", "overlap", "partial", "out-of-range", "replacement", "resource", "duplicate", "legacy-changes"]) {
+    await t.test(invalid, async (t) => {
+      const env = environment(t, { delayRename: true }); await tick();
+      const response = renameResponse([env.document]); const change = response.documentChanges[0];
+      if (invalid === "missing-version") change.textDocument.version = null;
+      if (invalid === "wrong-version") change.textDocument.version++;
+      if (invalid === "unopened") change.textDocument.uri = "file:///tmp/closed.bh";
+      if (invalid === "overlap") change.edits.push({ ...change.edits[0] });
+      if (invalid === "partial") change.edits[0].range = { start: { line: 0, character: 5 }, end: { line: 0, character: 8 } };
+      if (invalid === "out-of-range") change.edits[0].range = { start: { line: 999, character: 0 }, end: { line: 999, character: 4 } };
+      if (invalid === "replacement") change.edits[0].newText = "malicious";
+      if (invalid === "resource") change.kind = "delete";
+      if (invalid === "duplicate") response.documentChanges.push({ ...change });
+      if (invalid === "legacy-changes") response.changes = {};
+      const pending = env.providers.rename.provideRenameEdits(env.document, { line: 0, character: 5 }, "renamed", env.token);
+      await tick();const request = env.children[0].messages.at(-1);
+      env.children[0].send({ id: request.id, result: response });
+      assert.equal(await pending, null);
+    });
+  }
+});
+
+test("rename rejects changes to a previously unedited importer or the open inventory", async (t) => {
+  for (const action of ["changed-unedited", "closed-unedited", "reopened-unedited", "new-open"]) {
+    await t.test(action, async (t) => {
+      const env = environment(t, { delayRename: true }); await tick();
+      const other = action === "new-open" ? null : secondaryDocument(env); await tick();
+      const pending = env.providers.rename.provideRenameEdits(env.document, { line: 0, character: 5 }, "renamed", env.token);
+      await tick(); const request = env.children[0].messages.at(-1);
+      if (action === "changed-unedited") { other.text += "\nfoo()"; other.version++; env.events.change({ document: other, contentChanges: [{}] }); }
+      if (action === "closed-unedited" || action === "reopened-unedited") {
+        other.isClosed = true; env.events.close(other);
+        if (action === "reopened-unedited") { other.isClosed = false; env.events.open(other); }
+      }
+      if (action === "new-open") secondaryDocument(env);
+      env.children[0].send({ id: request.id, result: renameResponse([env.document]) });
+      assert.equal(await pending, null);
+    });
+  }
+});
+
+test("rename maps UTF-16 line positions once per document for CRLF and CR sources", async (t) => {
+  for (const ending of ["\r\n", "\r"]) {
+    await t.test(JSON.stringify(ending), async (t) => {
+      const line = 'def main(){print("🌍");var value=1;print(value)}';
+      const env = environment(t, { delayRename: true, documentText: `# header${ending}${line}` }); await tick();
+      const ranges = [line.indexOf("value"), line.lastIndexOf("value")].map((character) => ({ start: { line: 1, character }, end: { line: 1, character: character + 5 } }));
+      const pending = env.providers.rename.provideRenameEdits(env.document, ranges[0].start, "number", env.token);
+      await tick(); const request = env.children[0].messages.at(-1);
+      env.children[0].send({ id: request.id, result: { documentChanges: [{ textDocument: { uri: env.document.uri.toString(), version: 1 }, edits: ranges.map((range) => ({ range, newText: "number" })) }] } });
+      const edit = await pending;
+      assert.equal(edit.entries.get(env.document.uri.toString()).length, 2);
+      assert.equal(edit.entries.get(env.document.uri.toString())[0].range.start.character, line.indexOf("value"));
+    });
+  }
+});
+
+test("rename refuses snapshots exceeding server count, UTF-8, URI or framed JSON limits", async (t) => {
+  for (const limit of ["count", "utf8-total", "escaped-message", "unicode-message", "uri", "version"]) {
+    await t.test(limit, async (t) => {
+      const env = environment(t, { delayRename: true }); await tick();
+      const count = limit === "count" ? 128 : limit === "utf8-total" ? 33 : 1;
+      const source = limit === "utf8-total" ? "🌍".repeat(256 * 1024)
+        : limit === "escaped-message" ? '"'.repeat(2 * 1024 * 1024)
+        : limit === "unicode-message" ? "🌍".repeat(1024 * 1024) : "def main(){}";
+      for (let index = 0; index < count; index++) {
+        env.vscode.workspace.textDocuments.push({ ...env.document,
+          uri: env.vscode.Uri.parse(`file:///tmp/test/${limit === "uri" ? "x".repeat(16 * 1024) : index}.bh`),
+          text: source, version: limit === "version" ? NaN : 1
+        });
+      }
+      const result = await env.providers.rename.provideRenameEdits(env.document, { line: 0, character: 5 }, "renamed", env.token);
+      assert.equal(result, null);
+      assert.equal(env.children[0].messages.some((message) => message.method === "textDocument/rename"), false);
+      assert.equal(env.children[0].messages.filter((message) => message.method === "textDocument/didOpen").length, 1);
+    });
+  }
+});
+
+test("over-limit documents are never marked sent and synchronize once capacity is available", async (t) => {
+  const env = environment(t, { delayRename: true }); await tick();
+  for (let index = 0; index < 128; index++) {
+    const document = { ...env.document, uri: env.vscode.Uri.parse(`file:///tmp/test/extra${index}.bh`) };
+    env.vscode.workspace.textDocuments.push(document);
+    env.events.open(document);
+  }
+  await tick();
+  const child = env.children[0], last = env.vscode.workspace.textDocuments.at(-1);
+  const opens = () => child.messages.filter((message) => message.method === "textDocument/didOpen");
+  assert.equal(opens().length, 128);
+  assert.equal(opens().some((message) => message.params.textDocument.uri === last.uri.toString()), false);
+  const closed = env.vscode.workspace.textDocuments[1];
+  closed.isClosed = true; env.events.close(closed);
+  const pending = env.providers.rename.provideRenameEdits(env.document, { line: 0, character: 5 }, "renamed", env.token);
+  await tick();
+  assert.equal(opens().filter((message) => message.params.textDocument.uri === last.uri.toString()).length, 1);
+  const request = child.messages.at(-1); assert.equal(request.method, "textDocument/rename");
+  child.send({ id: request.id, result: renameResponse([env.document, last]) });
+  assert.equal((await pending).entries.size, 2);
+});
+
+test("rename rejects failed notification enqueue and retries unsent open or changed versions", async (t) => {
+  for (const method of ["didOpen", "didChange"]) {
+    for (const failure of ["queue-limit", "write-error"]) {
+      await t.test(`${method}/${failure}`, async (t) => {
+        const env = environment(t, { delayRename: true }); await tick();
+        const other = { ...env.document, uri: env.vscode.Uri.parse("file:///tmp/test/library.bh") };
+        env.vscode.workspace.textDocuments.push(other);
+        if (method === "didChange") { env.events.open(other); await tick(); other.version++; other.text += "\n"; }
+        const child = env.children[0];
+        const sent = () => child.messages.filter((message) => message.method === `textDocument/${method}` && message.params.textDocument.uri === other.uri.toString()).length;
+        const before = sent();
+        const write = child.stdin.write;
+        if (failure === "queue-limit") Object.defineProperty(child.stdin, "writableLength", { configurable: true, value: 8 * 1024 * 1024 });
+        else child.stdin.write = () => { throw new Error("Simulated notification enqueue failure"); };
+        const rejected = await env.providers.rename.provideRenameEdits(env.document, { line: 0, character: 5 }, "renamed", env.token);
+        assert.equal(rejected, null);
+        assert.equal(sent(), before);
+        assert.equal(child.messages.some((message) => message.method === "textDocument/rename"), false);
+        if (failure === "queue-limit") delete child.stdin.writableLength;
+        else child.stdin.write = write;
+        const pending = env.providers.rename.provideRenameEdits(env.document, { line: 0, character: 5 }, "renamed", env.token);
+        await tick();
+        assert.equal(sent(), before + 1);
+        const request = child.messages.at(-1); assert.equal(request.method, "textDocument/rename");
+        child.send({ id: request.id, result: renameResponse([env.document, other]) });
+        assert.equal((await pending).entries.size, 2);
+      });
+    }
+  }
+});
+
+test("close history uses weak document keys and ignores plaintext or absent sessions", async (t) => {
+  const env = environment(t, { trusted: false, delayRename: true }); await tick();
+  const closeHistory = (languageId) => {
+    for (let index = 0; index < 256; index++) {
+      env.events.close({ ...env.document, languageId, isClosed: true,
+        uri: env.vscode.Uri.parse(`file:///tmp/test/history${index}.${languageId === "bhasa" ? "bh" : "txt"}`) });
+    }
+  };
+  closeHistory("plaintext"); closeHistory("bhasa");
+  assert.equal(env.children.length, 0);
+  assert.equal(env.weakKeys.writes, 0);
+  env.vscode.workspace.isTrusted = true; await env.events.trust();
+  closeHistory("plaintext");
+  assert.equal(env.weakKeys.writes, 0);
+  const pending = env.providers.rename.provideRenameEdits(env.document, { line: 0, character: 5 }, "renamed", env.token);
+  await tick(); const child = env.children[0], request = child.messages.at(-1);
+  assert.equal(request.method, "textDocument/rename");
+  env.document.isClosed = true; env.events.close(env.document);
+  assert.equal(env.weakKeys.writes, 1);
+  env.document.isClosed = false; env.events.open(env.document);
+  child.send({ id: request.id, result: renameResponse([env.document]) });
+  assert.equal(await pending, null);
 });

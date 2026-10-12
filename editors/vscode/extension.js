@@ -2,6 +2,7 @@
 
 const vscode = require("vscode");
 const { spawn } = require("node:child_process");
+const { Buffer } = require("node:buffer");
 const { RpcConnection } = require("./transport");
 
 const selector = [{ language: "bhasa", scheme: "file" }, { language: "bhasa", scheme: "untitled" }];
@@ -17,6 +18,7 @@ class LanguageTools {
     this.disabled = false;
     this.disposed = false;
     this.restartQueue = Promise.resolve();
+    this.documentEpochs = new WeakMap();
     context.subscriptions.push(this.output, this.diagnostics,
       vscode.workspace.onDidOpenTextDocument((document) => this.sync(document)),
       vscode.workspace.onDidChangeTextDocument((event) => {
@@ -73,6 +75,34 @@ class LanguageTools {
           return new vscode.Hover(content, result.range ? range(result.range) : undefined);
         }
       }),
+      vscode.languages.registerReferenceProvider(selector, {
+        provideReferences: async (document, position, context, token) => {
+          const result = await this.query(document, "textDocument/references", {
+            position: { line: position.line, character: position.character },
+            context: { includeDeclaration: context.includeDeclaration === true }
+          }, token);
+          return Array.isArray(result) ? result.map((item) => new vscode.Location(vscode.Uri.parse(item.uri), range(item.range))) : [];
+        }
+      }),
+      vscode.languages.registerRenameProvider(selector, {
+        prepareRename: async (document, position, token) => {
+          const result = await this.query(document, "textDocument/prepareRename", {
+            position: { line: position.line, character: position.character }
+          }, token);
+          return result ? { range: range(result.range), placeholder: result.placeholder } : null;
+        },
+        provideRenameEdits: async (document, position, newName, token) => {
+          const result = await this.query(document, "textDocument/rename", {
+            position: { line: position.line, character: position.character }, newName
+          }, token);
+          if (!result) return null;
+          const edit = new vscode.WorkspaceEdit();
+          for (const change of result.documentChanges) {
+            edit.set(vscode.Uri.parse(change.textDocument.uri), change.edits.map((item) => new vscode.TextEdit(range(item.range), item.newText)));
+          }
+          return edit;
+        }
+      }),
       vscode.languages.registerDefinitionProvider(selector, {
         provideDefinition: async (document, position, token) => {
           const result = await this.query(document, "textDocument/definition", {
@@ -114,7 +144,7 @@ class LanguageTools {
         shell: false
       });
       const rpc = new RpcConnection(child.stdout, child.stdin);
-      session = { child, rpc, ready: false, stopping: false, documents: new Map() };
+      session = { child, rpc, ready: false, stopping: false, documents: new Map(), documentBytes: new Map() };
       this.session = session;
       child.stderr.setEncoding("utf8");
       child.stderr.on("data", (data) => { if (!this.disposed) this.output.append(data); });
@@ -140,6 +170,8 @@ class LanguageTools {
             definition: { linkSupport: true },
             completion: { completionItem: { snippetSupport: false } },
             hover: { contentFormat: ["plaintext"] },
+            references: { dynamicRegistration: false },
+            rename: { dynamicRegistration: false, prepareSupport: true },
             formatting: { dynamicRegistration: false }
           }
         }
@@ -194,27 +226,36 @@ class LanguageTools {
   }
 
   sendDocument(session, document) {
-    if (!session.ready || session.stopping || document.isClosed || !isBhasa(document)) return;
+    if (!session.ready || session.stopping || document.isClosed || !isBhasa(document)) return false;
     const uri = document.uri.toString();
     const previous = session.documents.get(uri);
-    if (previous === document.version) return;
+    if (previous === document.version) return true;
+    if (!Number.isSafeInteger(document.version) || (previous !== undefined && previous >= document.version)) return false;
+    const source = document.getText();
+    const bytes = Buffer.byteLength(source, "utf8");
+    const total = Array.from(session.documentBytes.values()).reduce((sum, size) => sum + size, 0) - (session.documentBytes.get(uri) || 0) + bytes;
+    if ((previous === undefined && session.documents.size >= 128) || total > 32 * 1024 * 1024 || !syncFits(document, source)) return false;
     if (previous === undefined) {
       session.rpc.notify("textDocument/didOpen", {
-        textDocument: { uri, languageId: "bhasa", version: document.version, text: document.getText() }
+        textDocument: { uri, languageId: "bhasa", version: document.version, text: source }
       });
     } else {
       session.rpc.notify("textDocument/didChange", {
         textDocument: { uri, version: document.version },
-        contentChanges: [{ text: document.getText() }]
+        contentChanges: [{ text: source }]
       });
     }
     session.documents.set(uri, document.version);
+    session.documentBytes.set(uri, bytes);
+    return true;
   }
 
   closeDocument(document) {
     const session = this.session;
     const uri = document.uri.toString();
+    if (session && isBhasa(document)) this.documentEpochs.set(document, (this.documentEpochs.get(document) || 0) + 1);
     this.diagnostics.delete(document.uri);
+    session?.documentBytes.delete(uri);
     if (!session?.documents.delete(uri)) return;
     try { session.rpc.notify("textDocument/didClose", { textDocument: { uri } }); }
     catch (error) { this.failed(session, error); }
@@ -225,7 +266,7 @@ class LanguageTools {
     const session = await this.start();
     if (!session) return;
     try {
-      this.sendDocument(session, document);
+      if (!this.sendDocument(session, document)) return;
       const uri = document.uri.toString();
       const save = session.capabilities.textDocumentSync?.save;
       if (!save || session.stopping || session !== this.session || document.isClosed || !session.documents.has(uri)) return;
@@ -258,18 +299,36 @@ class LanguageTools {
       "textDocument/formatting": "documentFormattingProvider",
       "textDocument/documentSymbol": "documentSymbolProvider",
       "textDocument/definition": "definitionProvider",
+      "textDocument/references": "referencesProvider",
+      "textDocument/prepareRename": "renameProvider",
+      "textDocument/rename": "renameProvider",
       "textDocument/completion": "completionProvider",
       "textDocument/hover": "hoverProvider"
     }[method];
     if (!session.capabilities[capability]) return null;
     const version = document.version;
     try {
-      this.sendDocument(session, document);
+      if (!this.sendDocument(session, document)) return null;
+      const rename = method === "textDocument/rename";
+      const snapshots = new Map();
+      if (rename) {
+        const documents = vscode.workspace.textDocuments.filter((open) => isBhasa(open) && !open.isClosed);
+        validateRenameDocuments(documents);
+        for (const open of documents) {
+          if (!this.sendDocument(session, open)) throw new Error("A rename input could not be synchronized.");
+          const uri = open.uri.toString();
+          snapshots.set(uri, { document: open, version: open.version, epoch: this.documentEpochs.get(open) || 0 });
+        }
+      }
       const result = await session.rpc.request(method, {
         textDocument: { uri: document.uri.toString() }, ...extra
       }, token);
       // In particular, never apply a formatter response to text edited meanwhile.
-      return document.version === version && !document.isClosed && session === this.session ? result : null;
+      if (document.version !== version || document.isClosed || session !== this.session || token.isCancellationRequested) return null;
+      if (rename && result) {
+        validateRename(result, extra.newName, snapshots, this.documentEpochs);
+      }
+      return result;
     } catch (error) {
       if (error.code !== -32800 && !session.stopping) this.log(`${method}: ${error.message}`);
       return null;
@@ -310,6 +369,85 @@ class LanguageTools {
       session.child.once("close", () => { clearTimeout(timeout); resolve(); });
     });
   }
+}
+
+// These are the server's admission limits. Notifications have no response:
+// never mark an over-limit document as sent and infer an acknowledgement.
+function syncFits(document, source) {
+  const uri = document.uri.toString();
+  if (Buffer.byteLength(uri, "utf8") > 16 * 1024 || !Number.isSafeInteger(document.version)) return false;
+  const messages = [
+    { jsonrpc: "2.0", method: "textDocument/didOpen", params: { textDocument: { uri, languageId: "bhasa", version: document.version, text: source } } },
+    { jsonrpc: "2.0", method: "textDocument/didChange", params: { textDocument: { uri, version: document.version }, contentChanges: [{ text: source }] } }
+  ];
+  return messages.every((message) => Buffer.byteLength(JSON.stringify(message), "utf8") <= 4 * 1024 * 1024);
+}
+function validateRenameDocuments(documents) {
+  if (documents.length > 128) throw new Error("Rename exceeds the server's 128-document limit.");
+  let bytes = 0;
+  const seen = new Set();
+  for (const document of documents) {
+    const uri = document.uri.toString(), source = document.getText();
+    bytes += Buffer.byteLength(source, "utf8");
+    if (seen.has(uri) || bytes > 32 * 1024 * 1024 || !syncFits(document, source)) throw new Error("Rename inputs exceed synchronization limits.");
+    seen.add(uri);
+  }
+}
+
+// LSP carries versions; native WorkspaceEdit does not. Validate every target
+// before converting, without applying edits or opening/writing any file.
+function validateRename(result, newName, snapshots, epochs) {
+  if (!Array.isArray(result.documentChanges) || result.changes || result.documentChanges.length > 128) throw new Error("Invalid versioned rename result.");
+  const open = vscode.workspace.textDocuments.filter((document) => isBhasa(document) && !document.isClosed);
+  if (open.length !== snapshots.size || open.some((document) => {
+    const uri = document.uri.toString();
+    const snapshot = snapshots.get(uri);
+    return !snapshot || document !== snapshot.document || document.version !== snapshot.version || (epochs.get(document) || 0) !== snapshot.epoch;
+  })) throw new Error("Open document graphs changed during rename.");
+  const seen = new Set();
+  for (const change of result.documentChanges) {
+    const uri = change?.textDocument?.uri;
+    const snapshot = snapshots.get(uri);
+    const current = vscode.workspace.textDocuments.find((document) => document.uri.toString() === uri);
+    if (!snapshot || seen.has(uri) || current !== snapshot.document || current.isClosed ||
+        !Number.isSafeInteger(change.textDocument.version) || change.textDocument.version !== snapshot.version ||
+        current.version !== snapshot.version || (epochs.get(current) || 0) !== snapshot.epoch ||
+        !Array.isArray(change.edits) || !change.edits.length || change.kind) throw new Error("Rename targets changed or are not open.");
+    seen.add(uri);
+    const source = current.getText();
+    const lines = renameLines(source);
+    const spans = change.edits.map((edit) => {
+      if (edit.newText !== newName) throw new Error("Invalid rename replacement.");
+      const start = checkedOffset(source, lines, edit.range?.start);
+      const end = checkedOffset(source, lines, edit.range?.end);
+      if (start >= end || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(source.slice(start, end))) throw new Error("Rename must replace a complete identifier.");
+      if (/[A-Za-z0-9_]/.test(source[start - 1] || "") || /[A-Za-z0-9_]/.test(source[end] || "")) throw new Error("Partial identifier rename.");
+      return { start, end };
+    }).sort((left, right) => left.start - right.start);
+    if (spans.some((span, index) => index && span.start < spans[index - 1].end)) throw new Error("Overlapping rename edits.");
+  }
+}
+function renameLines(source) {
+  const starts = [0], ends = [];
+  for (let index = 0; index < source.length; index++) {
+    const code = source.charCodeAt(index);
+    if (code === 10 || code === 13) {
+      ends.push(index);
+      if (code === 13 && source.charCodeAt(index + 1) === 10) index++;
+      starts.push(index + 1);
+    }
+  }
+  ends.push(source.length);
+  return { starts, ends };
+}
+function checkedOffset(source, lines, position) {
+  if (!Number.isSafeInteger(position?.line) || position.line < 0 || !Number.isSafeInteger(position?.character) || position.character < 0) throw new Error("Invalid rename position.");
+  if (position.line >= lines.starts.length) throw new Error("Rename position exceeds document.");
+  const start = lines.starts[position.line];
+  if (position.character > lines.ends[position.line] - start) throw new Error("Rename position exceeds line.");
+  const at = start + position.character;
+  if (at > start && at < lines.ends[position.line] && source.charCodeAt(at - 1) >= 0xd800 && source.charCodeAt(at - 1) <= 0xdbff && source.charCodeAt(at) >= 0xdc00 && source.charCodeAt(at) <= 0xdfff) throw new Error("Rename position splits a surrogate pair.");
+  return at;
 }
 
 function range(value) {

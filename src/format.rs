@@ -158,6 +158,7 @@ pub fn format_source(source: &str) -> Result<String, Vec<Diagnostic>> {
                             | TokenKind::RightBracket
                             | TokenKind::LeftParen
                             | TokenKind::Not
+                            | TokenKind::BitNot
                     )
                 );
                 output.word(spelling, separated);
@@ -167,6 +168,11 @@ pub fn format_source(source: &str) -> Result<String, Vec<Diagnostic>> {
             | TokenKind::Star
             | TokenKind::Slash
             | TokenKind::Percent
+            | TokenKind::BitAnd
+            | TokenKind::BitOr
+            | TokenKind::BitXor
+            | TokenKind::ShiftLeft
+            | TokenKind::ShiftRight
             | TokenKind::Equal
             | TokenKind::EqualEqual
             | TokenKind::NotEqual
@@ -180,7 +186,7 @@ pub fn format_source(source: &str) -> Result<String, Vec<Diagnostic>> {
                 output.word(spelling, true);
                 output.space();
             }
-            TokenKind::Not => {
+            TokenKind::Not | TokenKind::BitNot => {
                 output.word(spelling, !matches!(previous, Some(TokenKind::LeftParen)));
                 if spelling == "not" {
                     output.space();
@@ -191,7 +197,8 @@ pub fn format_source(source: &str) -> Result<String, Vec<Diagnostic>> {
                 !matches!(
                     previous,
                     Some(TokenKind::LeftParen | TokenKind::LeftBracket | TokenKind::Dot)
-                ) && !(previous == Some(&TokenKind::Not) && output.line.ends_with('!')),
+                ) && !matches!(previous, Some(TokenKind::BitNot))
+                    && !(previous == Some(&TokenKind::Not) && output.line.ends_with('!')),
             ),
         }
         previous = Some(kind);

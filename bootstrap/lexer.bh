@@ -45,6 +45,8 @@ def kind_greater_equal() -> int { return 259 }
 def kind_and() -> int { return 260 }
 def kind_or() -> int { return 261 }
 def kind_arrow() -> int { return 262 }
+def kind_shift_left() -> int { return 263 }
+def kind_shift_right() -> int { return 264 }
 
 # Reserved keyword codes shared with the complete compiler scanner.
 def kind_for() -> int { return 319 }
@@ -70,19 +72,21 @@ def symbol_kind(first: int, second: int) -> int {
     }
     if first == 60 {
         if second == 61 { return kind_less_equal() }
+        if second == 60 { return kind_shift_left() }
         return 60
     }
     if first == 62 {
         if second == 61 { return kind_greater_equal() }
+        if second == 62 { return kind_shift_right() }
         return 62
     }
     if first == 38 {
         if second == 38 { return kind_and() }
-        return 0
+        return 38
     }
     if first == 124 {
         if second == 124 { return kind_or() }
-        return 0
+        return 124
     }
     if first == 45 {
         if second == 62 { return kind_arrow() }
@@ -94,7 +98,7 @@ def symbol_kind(first: int, second: int) -> int {
     if first == 44 or first == 58 or first == 59 {
         return first
     }
-    if first == 43 or first == 42 or first == 47 or first == 37 {
+    if first == 43 or first == 42 or first == 47 or first == 37 or first == 94 or first == 126 {
         return first
     }
     return 0
@@ -103,7 +107,7 @@ def symbol_kind(first: int, second: int) -> int {
 # The spelling width of a punctuation token from symbol_kind. Word aliases
 # and/or/not will need their actual source spans when keyword scanning exists.
 def symbol_width(kind: int) -> int {
-    if kind >= kind_equal() and kind <= kind_arrow() {
+    if kind >= kind_equal() and kind <= kind_shift_right() {
         return 2
     }
     if kind == 61 or kind == 33 or kind == 60 or kind == 62 or kind == 45 {
@@ -115,7 +119,7 @@ def symbol_width(kind: int) -> int {
     if kind == 44 or kind == 58 or kind == 59 {
         return 1
     }
-    if kind == 43 or kind == 42 or kind == 47 or kind == 37 {
+    if kind == 43 or kind == 42 or kind == 47 or kind == 37 or kind == 38 or kind == 124 or kind == 94 or kind == 126 {
         return 1
     }
     return 0
@@ -131,8 +135,12 @@ def binary_precedence(kind: int) -> int {
     if kind == 60 or kind == 62 or kind == kind_less_equal() or kind == kind_greater_equal() {
         return 4
     }
-    if kind == 43 or kind == 45 { return 5 }
-    if kind == 42 or kind == 47 or kind == 37 { return 6 }
+    if kind == 124 { return 5 }
+    if kind == 94 { return 6 }
+    if kind == 38 { return 7 }
+    if kind == kind_shift_left() or kind == kind_shift_right() { return 8 }
+    if kind == 43 or kind == 45 { return 9 }
+    if kind == 42 or kind == 47 or kind == 37 { return 10 }
     return 0
 }
 
@@ -141,5 +149,5 @@ def is_binary_operator(kind: int) -> bool {
 }
 
 def is_unary_operator(kind: int) -> bool {
-    return kind == 45 or kind == 33
+    return kind == 45 or kind == 33 or kind == 126
 }

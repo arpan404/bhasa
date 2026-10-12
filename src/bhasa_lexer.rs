@@ -146,13 +146,10 @@ fn diagnostic(source: &str, row: &[i64], tokens: &[i64]) -> Result<Diagnostic, S
     let first = text.chars().next();
     let message = match row[0] {
         1 => match first {
-            Some(character @ ('&' | '|')) => format!(
-                "unsupported operator '{character}'; use '{character}{character}' for a boolean operation"
-            ),
             Some(character) => format!("unsupported character {character:?}"),
             None => return Err("empty unsupported-character diagnostic".into()),
         },
-        2 => format!("invalid integer literal {text:?}; only decimal digits are allowed"),
+        2 => format!("invalid integer literal {text:?}; expected decimal, hexadecimal (0x), or binary (0b) digits without separators or suffixes"),
         3 => "unterminated string literal".into(),
         8 => format!("invalid float literal {text:?}; expected decimal digits and an optional signed exponent"),
         4 => {
@@ -224,6 +221,12 @@ fn fixed_token(code: i64, text: &str) -> Option<TokenKind> {
         (42, "*") => Some(Star),
         (47, "/") => Some(Slash),
         (37, "%") => Some(Percent),
+        (38, "&") => Some(BitAnd),
+        (124, "|") => Some(BitOr),
+        (94, "^") => Some(BitXor),
+        (126, "~") => Some(BitNot),
+        (263, "<<") => Some(ShiftLeft),
+        (264, ">>") => Some(ShiftRight),
         (61, "=") => Some(Equal),
         (256, "==") => Some(EqualEqual),
         (257, "!=") => Some(NotEqual),
@@ -287,7 +290,20 @@ fn translate(source: &str) -> Result<Result<Vec<Token>, Vec<Diagnostic>>, String
             {
                 TokenKind::Ident(text.into())
             }
-            2 if !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit()) => {
+            2 if matches!(
+                crate::lexer::lex_rust(text).as_deref(),
+                Ok([
+                    Token {
+                        kind: TokenKind::Int(_),
+                        ..
+                    },
+                    Token {
+                        kind: TokenKind::Eof,
+                        ..
+                    }
+                ])
+            ) =>
+            {
                 TokenKind::Int(text.into())
             }
             4 if matches!(

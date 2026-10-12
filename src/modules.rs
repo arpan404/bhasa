@@ -1205,9 +1205,12 @@ pub(crate) fn visit_program_spans(program: &mut ast::Program, map: &impl Fn(Span
                 } => {
                     *name_span = map(*name_span);
                     match source {
-                        ast::ForSource::Range { start, end } => {
+                        ast::ForSource::Range { start, end, step } => {
                             expr(start, map);
                             expr(end, map);
+                            if let Some(step) = step {
+                                expr(step, map);
+                            }
                         }
                         ast::ForSource::List(value) => expr(value, map),
                     }
@@ -1315,9 +1318,12 @@ fn visit_program_expressions(program: &ast::Program, visit: &mut impl FnMut(&ast
                 }
                 ast::StmtKind::For { source, body, .. } => {
                     match source {
-                        ast::ForSource::Range { start, end } => {
+                        ast::ForSource::Range { start, end, step } => {
                             expr(start, visit);
                             expr(end, visit);
+                            if let Some(step) = step {
+                                expr(step, visit);
+                            }
                         }
                         ast::ForSource::List(value) => expr(value, visit),
                     }

@@ -79,13 +79,15 @@ def test_symbols() -> int {
     failures = failures + check_symbol(38, 38, 260, 2)
     failures = failures + check_symbol(124, 124, 261, 2)
     failures = failures + check_symbol(45, 62, 262, 2)
+    failures = failures + check_symbol(60, 60, 263, 2)
+    failures = failures + check_symbol(62, 62, 264, 2)
     failures = failures + check_symbol(61, -1, 61, 1)
     failures = failures + check_symbol(33, -1, 33, 1)
     failures = failures + check_symbol(60, -1, 60, 1)
     failures = failures + check_symbol(62, -1, 62, 1)
     failures = failures + check_symbol(45, -1, 45, 1)
-    failures = failures + check_symbol(38, -1, 0, 0)
-    failures = failures + check_symbol(124, -1, 0, 0)
+    failures = failures + check_symbol(38, -1, 38, 1)
+    failures = failures + check_symbol(124, -1, 124, 1)
     failures = failures + check_symbol(47, 47, 0, 0)
     failures = failures + check_symbol(35, -1, 0, 0)
     failures = failures + check_symbol(45, 45, 45, 1)
@@ -103,14 +105,14 @@ def test_symbols() -> int {
         if byte >= 43 and byte <= 45 { expected = byte }
         if byte == 47 or byte == 58 or byte == 59 { expected = byte }
         if byte >= 60 and byte <= 62 { expected = byte }
-        if byte == 123 or byte == 125 { expected = byte }
+        if byte == 123 or byte == 125 or byte == 38 or byte == 124 or byte == 94 or byte == 126 { expected = byte }
         var width = 0
         if expected > 0 { width = 1 }
         failures = failures + check_symbol(byte, -1, expected, width)
         byte = byte + 1
     }
 
-    # Explore every byte pair. There are exactly seven two-byte symbols,
+    # Explore every byte pair. There are exactly nine two-byte symbols,
     # and comment recognition must win over punctuation recognition.
     var first = -1
     var double_symbols = 0
@@ -122,7 +124,7 @@ def test_symbols() -> int {
             failures = failures + expect_bool("comment start", first, starts_line_comment(first, second), comment)
             var kind = symbol_kind(first, second)
             # The preceding sweep verified every EOF fallback. Only these
-            # seven pairs and the two comment prefixes may change it.
+            # nine pairs and the two comment prefixes may change it.
             var expected_kind = symbol_kind(first, -1)
             if first == 61 and second == 61 { expected_kind = 256 }
             if first == 33 and second == 61 { expected_kind = 257 }
@@ -131,6 +133,8 @@ def test_symbols() -> int {
             if first == 38 and second == 38 { expected_kind = 260 }
             if first == 124 and second == 124 { expected_kind = 261 }
             if first == 45 and second == 62 { expected_kind = 262 }
+            if first == 60 and second == 60 { expected_kind = 263 }
+            if first == 62 and second == 62 { expected_kind = 264 }
             if comment { expected_kind = 0 }
             var pair_failures = expect_int("symbol pair: first, actual, expected", first, kind, expected_kind)
             if pair_failures > 0 {
@@ -147,7 +151,7 @@ def test_symbols() -> int {
         }
         first = first + 1
     }
-    failures = failures + expect_int("two-byte symbol count", 0, double_symbols, 7)
+    failures = failures + expect_int("two-byte symbol count", 0, double_symbols, 9)
     failures = failures + expect_int("comment prefix count", 0, comments, 259)
     return failures
 }
@@ -165,18 +169,22 @@ def test_token_helpers() -> int {
         if kind == 260 { precedence = 2 }
         if kind == 256 or kind == 257 { precedence = 3 }
         if kind == 60 or kind == 62 or kind == 258 or kind == 259 { precedence = 4 }
-        if kind == 43 or kind == 45 { precedence = 5 }
-        if kind == 42 or kind == 47 or kind == 37 { precedence = 6 }
+        if kind == 124 { precedence = 5 }
+        if kind == 94 { precedence = 6 }
+        if kind == 38 { precedence = 7 }
+        if kind == 263 or kind == 264 { precedence = 8 }
+        if kind == 43 or kind == 45 { precedence = 9 }
+        if kind == 42 or kind == 47 or kind == 37 { precedence = 10 }
         failures = failures + expect_int("binary precedence", kind, binary_precedence(kind), precedence)
         failures = failures + expect_bool("binary operator", kind, is_binary_operator(kind), precedence > 0)
-        failures = failures + expect_bool("unary operator", kind, is_unary_operator(kind), kind == 33 or kind == 45)
+        failures = failures + expect_bool("unary operator", kind, is_unary_operator(kind), kind == 33 or kind == 45 or kind == 126)
         var width = 0
         if kind == 33 or kind == 37 or kind == 40 or kind == 41 or kind == 42 { width = 1 }
         if kind >= 43 and kind <= 45 { width = 1 }
         if kind == 47 or kind == 58 or kind == 59 { width = 1 }
         if kind >= 60 and kind <= 62 { width = 1 }
-        if kind == 123 or kind == 125 { width = 1 }
-        if kind >= 256 and kind <= 262 { width = 2 }
+        if kind == 123 or kind == 125 or kind == 38 or kind == 124 or kind == 94 or kind == 126 { width = 1 }
+        if kind >= 256 and kind <= 264 { width = 2 }
         failures = failures + expect_int("symbol width", kind, symbol_width(kind), width)
         if is_binary_operator(kind) { binary_count = binary_count + 1 }
         if is_unary_operator(kind) { unary_count = unary_count + 1 }
@@ -184,10 +192,10 @@ def test_token_helpers() -> int {
         if symbol_width(kind) == 2 { double_count = double_count + 1 }
         kind = kind + 1
     }
-    failures = failures + expect_int("binary operator count", 0, binary_count, 13)
-    failures = failures + expect_int("unary operator count", 0, unary_count, 2)
-    failures = failures + expect_int("one-byte symbol count", 0, single_count, 16)
-    failures = failures + expect_int("two-byte kind count", 0, double_count, 7)
+    failures = failures + expect_int("binary operator count", 0, binary_count, 18)
+    failures = failures + expect_int("unary operator count", 0, unary_count, 3)
+    failures = failures + expect_int("one-byte symbol count", 0, single_count, 20)
+    failures = failures + expect_int("two-byte kind count", 0, double_count, 9)
     failures = failures + expect_int("large invalid kind", 1000, symbol_width(1000), 0)
     return failures
 }

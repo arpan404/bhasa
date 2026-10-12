@@ -1133,11 +1133,15 @@ impl Checker {
                 body,
             } => {
                 *element_type = match source {
-                    ForSource::Range { start, end } => {
+                    ForSource::Range { start, end, step } => {
                         let left = self.check_expression(start);
                         self.require_type(left, Type::Int, start.span, "range bound");
                         let right = self.check_expression(end);
                         self.require_type(right, Type::Int, end.span, "range bound");
+                        if let Some(step) = step {
+                            let actual = self.check_expression(step);
+                            self.require_type(actual, Type::Int, step.span, "range step");
+                        }
                         Some(Type::Int)
                     }
                     ForSource::List(value) => {
@@ -1352,6 +1356,7 @@ impl Checker {
                         "unary '-'",
                     ),
                     UnaryOp::Not => (Type::Bool, "unary 'not'"),
+                    UnaryOp::BitNot => (Type::Int, "unary '~'"),
                 };
                 self.require_type(actual, expected, operand.span, context)
                     .then_some(expected)
@@ -1370,6 +1375,11 @@ impl Checker {
                     BinaryOp::Mul => (numeric, numeric, "*"),
                     BinaryOp::Div => (numeric, numeric, "/"),
                     BinaryOp::Rem => (Type::Int, Type::Int, "%"),
+                    BinaryOp::BitAnd => (Type::Int, Type::Int, "&"),
+                    BinaryOp::BitOr => (Type::Int, Type::Int, "|"),
+                    BinaryOp::BitXor => (Type::Int, Type::Int, "^"),
+                    BinaryOp::Shl => (Type::Int, Type::Int, "<<"),
+                    BinaryOp::Shr => (Type::Int, Type::Int, ">>"),
                     BinaryOp::Lt => (numeric, Type::Bool, "<"),
                     BinaryOp::Le => (numeric, Type::Bool, "<="),
                     BinaryOp::Gt => (numeric, Type::Bool, ">"),
@@ -1778,9 +1788,12 @@ fn normalize_enum_types(program: &mut Program) {
                         ty(value, ids);
                     }
                     match source {
-                        ForSource::Range { start, end } => {
+                        ForSource::Range { start, end, step } => {
                             expression(start, ids);
                             expression(end, ids);
+                            if let Some(step) = step {
+                                expression(step, ids);
+                            }
                         }
                         ForSource::List(value) => expression(value, ids),
                     }
@@ -1935,9 +1948,12 @@ fn call_graph(program: &Program) -> BTreeMap<String, BTreeSet<String>> {
                     ..
                 } => {
                     match source {
-                        ForSource::Range { start, end } => {
+                        ForSource::Range { start, end, step } => {
                             expression(start, calls);
                             expression(end, calls);
+                            if let Some(step) = step {
+                                expression(step, calls);
+                            }
                         }
                         ForSource::List(value) => expression(value, calls),
                     }
@@ -2796,9 +2812,12 @@ mod tests {
                         ..
                     } => {
                         match source {
-                            ForSource::Range { start, end } => {
+                            ForSource::Range { start, end, step } => {
                                 visit_expr(start);
                                 visit_expr(end);
+                                if let Some(step) = step {
+                                    visit_expr(step);
+                                }
                             }
                             ForSource::List(value) => visit_expr(value),
                         }

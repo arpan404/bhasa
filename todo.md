@@ -11,9 +11,10 @@ after verified increments. Existing caches are preserved.
 - [x] Verify typed task cleanup, lexical consumption, worker call graphs and unchanged scalar behavior.
 - [x] Commit the verified typed-task increment and update this checklist with evidence.
 - [x] Add read-only checked API/dependency inspection for agents, with JSON output and original-file locations.
-- [ ] Add checked integer bitwise/shifts and hexadecimal/binary literals in both frontends.
-- [ ] Add stepped/descending ranges with safe cursor advancement and complete host lowering.
-- [ ] Add checked local definitions, references and versioned rename with editor providers.
+- [x] Add checked integer bitwise/shifts and hexadecimal/binary literals in both frontends.
+- [x] Add stepped/descending ranges with safe cursor advancement and complete host lowering.
+- [x] Add checked local definitions, references and versioned rename with editor providers.
+- [ ] Next: snapshot iteration for buffer/ints/Map keys; contract prepared in `docs/status/collections-iteration-milestone.md`.
 
 Three workers may run alongside the coordinator in this session. The coordinator
 owns integration, checklist updates and commits. Workers have disjoint ownership;
@@ -36,7 +37,7 @@ Cargo operations remain serialized with two build jobs and one test thread.
 - [x] Persistent Cargo, native output and hybrid frontend archive caches.
 - [x] Reference/hybrid acceptance and Bhasa frontend A/B/C self-rebuild.
 
-Baseline evidence: `docs/status/integration.md`, 398 reference tests, 408 hybrid
+Baseline evidence: `docs/status/integration-iteration.md`, 398 reference tests, 408 hybrid
 tests and 38 editor tests. This evidence predates new work below.
 
 ## Ownership and memory
@@ -54,7 +55,7 @@ tests and 38 editor tests. This evidence predates new work below.
 
 - [ ] Fixed-width signed and unsigned integers and target-sized integers.
 - [ ] `f32` and explicit checked numeric conversions.
-- [ ] Bitwise operators, shifts and hexadecimal/binary literals.
+- [x] Bitwise operators, shifts and hexadecimal/binary literals.
 - [ ] Fixed arrays, slices and SIMD/vector types.
 - [ ] Tuples and destructuring.
 - [ ] Type aliases, immutable declarations and constants.
@@ -67,7 +68,8 @@ tests and 38 editor tests. This evidence predates new work below.
 - [ ] Inferred/default generic arguments and method-specific type parameters.
 - [ ] Nested match patterns, guards and match expressions.
 - [ ] Custom and borrowed iterator protocol.
-- [ ] Map/buffer/ints iteration and stepped/descending ranges.
+- [x] Stepped/descending ranges with overflow-ending cursors.
+- [ ] Map/buffer/ints snapshot iteration.
 - [ ] Convenient explicit Result propagation and typed runtime errors.
 - [ ] Stronger enforcement of unused failure results.
 
@@ -161,7 +163,7 @@ require deleting useful Rust integration before replacements are verified.
 
 ## Editor, agent and testing tools
 
-- [ ] Rename, references and local-variable navigation.
+- [x] Checked rename, references and local-variable navigation in loaded graphs rooted at open documents.
 - [ ] Signature help, code actions and semantic highlighting.
 - [ ] Workspace indexing, filesystem watching and broader incomplete-source recovery.
 - [ ] Project-wide formatting and API docs.
@@ -196,9 +198,17 @@ The coordinator records completed increments and their verification here.
   Independent review reproduced a public-declaration privacy false positive;
   repaired it and retained a regression. Evidence is in
   `build/verify-typed-tasks-focused-final.log` and `tests/agent_inspect.rs`.
-- Typed tasks: 411 reference / 422 full-hybrid tests, 38 editor tests, both
+- `cdd7a5b`: typed tasks; 411 reference / 422 full-hybrid tests, 38 editor tests, both
   Clippy configurations and formatting, refreshed releases and A/B/C pass.
   Sanitizers and atomic allocation counters cover owned frames and results.
   Release smoke records 22 native cache hits; four unchanged Rust adapter runs
   and two unchanged hybrid builds perform zero compilations. Evidence:
-  `docs/status/integration.md` and `docs/status/typed-tasks-milestone.md`.
+  `docs/status/integration-typed-tasks.md` and `docs/status/typed-tasks-milestone.md`.
+
+- Current systems/refactoring increment: 433 reference / 445 full-hybrid tests,
+  56 LSP and 80 editor tests; both Clippy configurations, formatting, refreshed
+  releases and A/B/C pass. Sanitizers and allocation counters cover owned loop
+  and task cleanup. Release smoke records 26 native hits; four unchanged Rust
+  adapter runs and two unchanged hybrid builds perform zero compilations.
+  Evidence: `docs/status/integration.md` and `systems-tooling-milestone.md`.
+  Git history records this progress commit's identity.
