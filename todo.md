@@ -10,6 +10,7 @@ after verified increments. Existing caches are preserved.
 - [ ] Generalize structured tasks to typed, independently owned arguments/results in both frontends.
 - [ ] Verify typed task cleanup, lexical consumption, worker call graphs and unchanged scalar behavior.
 - [ ] Commit the verified typed-task increment and update this checklist with evidence.
+- [x] Add read-only checked API/dependency inspection for agents, with JSON output and original-file locations.
 
 Three workers may run alongside the coordinator in this session. The coordinator
 owns integration, checklist updates and commits. Workers have disjoint ownership;
@@ -162,6 +163,8 @@ require deleting useful Rust integration before replacements are verified.
 - [ ] Workspace indexing, filesystem watching and broader incomplete-source recovery.
 - [ ] Project-wide formatting and API docs.
 - [ ] Structured project/type/API queries and dependency graphs for agents.
+  - [x] `bhasa inspect` provides checked concrete APIs, privacy flags, module/import edges and package/adapter metadata without build tools.
+  - [ ] Include unused generic template APIs and richer symbol/type queries.
 - [ ] Safe automated refactors and actionable repair suggestions.
 - [ ] Measured agent token efficiency and common-mistake prevention.
 - [ ] Assertion library, property testing, coverage and parallel/generic tests.
@@ -183,3 +186,10 @@ overloads and macros remain separate optional design choices.
 ## Progress commits
 
 The coordinator records completed increments and their verification here.
+
+- `62afd47`: verified compiler baseline, full backlog, and nested build/cache exclusions.
+- Checked agent inspection: three CLI tests pass, including original-file errors,
+  concrete generic names, deterministic output, privacy and absent native tools.
+  Independent review reproduced a public-declaration privacy false positive;
+  repaired it and retained a regression. Evidence is in
+  `build/verify-typed-tasks-reference.log` and `tests/agent_inspect.rs`.

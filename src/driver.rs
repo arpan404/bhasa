@@ -18,6 +18,7 @@ Usage:\n\
   bhasa test [FILE|DIRECTORY] [--filter TEXT] [--json] [--release]\n\
              [--frontend rust|bhasa] [--timeout SECONDS]\n\
   bhasa check [FILE] [--json]\n\
+  bhasa inspect [FILE] [--json]\n\
   bhasa emit-llvm FILE [--target TARGET] [-o FILE]\n\
   bhasa build [FILE] [-o FILE] [--target TARGET] [--release]\n\
               [--emit object] [--link FILE ...] [--gpu metal|cuda|vulkan]\n\
@@ -78,6 +79,7 @@ enum Invocation {
     New(String),
     Format { path: PathBuf, check: bool },
     Test(crate::test_runner::Options),
+    Inspect(Option<PathBuf>),
     Compile(Options),
 }
 
@@ -132,6 +134,31 @@ fn parse_args(args: &[String]) -> Result<Invocation, String> {
             return Ok(Invocation::Help);
         }
         return crate::test_runner::parse(&args[1..]).map(Invocation::Test);
+    }
+    if command == "inspect" {
+        if args.len() == 2 && matches!(args[1].as_str(), "--help" | "-h") {
+            return Ok(Invocation::Help);
+        }
+        let mut source = None;
+        let mut json = false;
+        let mut positional_only = false;
+        for argument in &args[1..] {
+            if !positional_only && argument == "--" {
+                positional_only = true;
+            } else if !positional_only && argument == "--json" && !json {
+                json = true;
+            } else if !argument.is_empty()
+                && (positional_only || !argument.starts_with('-'))
+                && source.is_none()
+            {
+                source = Some(PathBuf::from(argument));
+            } else {
+                return Err(format!(
+                    "unexpected inspect argument '{argument}'; use inspect [FILE] [--json]"
+                ));
+            }
+        }
+        return Ok(Invocation::Inspect(source));
     }
     let action = match command {
         "check" => Action::Check,
@@ -280,6 +307,9 @@ pub fn run(args: &[String]) -> i32 {
     let invocation = match parse_args(args) {
         Ok(invocation) => invocation,
         Err(message) => {
+            if args.first().is_some_and(|value| value == "inspect") {
+                return crate::inspect::usage_error(&message);
+            }
             let json = args.first().is_some_and(|value| value == "check")
                 && args.iter().any(|value| value == "--json");
             report_driver_error(&message, "", "<command line>", json);
@@ -317,6 +347,7 @@ pub fn run(args: &[String]) -> i32 {
         },
         Invocation::Format { path, check } => crate::format::run(&path, check),
         Invocation::Test(options) => crate::test_runner::run(options),
+        Invocation::Inspect(source) => crate::inspect::run(source.as_deref()),
         Invocation::Compile(options) => compile(options),
     }
 }

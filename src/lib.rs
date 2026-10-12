@@ -10,6 +10,7 @@ pub mod diagnostic;
 pub mod driver;
 pub mod format;
 pub mod generics;
+mod inspect;
 pub mod json;
 pub mod lexer;
 pub mod lsp;

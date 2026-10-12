@@ -45,6 +45,7 @@ bhasa new NAME
 bhasa fmt FILE [--check]
 bhasa lsp
 bhasa check [FILE] [--json]
+bhasa inspect [FILE] [--json]
 bhasa emit-llvm FILE [--target TARGET] [-o FILE]
 bhasa build [FILE] [-o FILE] [--target TARGET] [--release] [--emit object] [--link FILE ...] [--gpu metal|cuda|vulkan]
 bhasa run [FILE] [--release] [--link FILE ...] [--gpu metal|cuda|vulkan] [-- ARGS...]

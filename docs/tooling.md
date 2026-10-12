@@ -176,6 +176,21 @@ line/column fields are one-based character positions; their byte spans refer
 to the original source. LSP positions are zero-based UTF-16 code units. Tools
 must not interchange these coordinate systems.
 
+`bhasa inspect [FILE] [--json]` returns a deterministic JSON object containing
+the resolved module/import graph, package and Rust-adapter declarations, checked
+function signatures, records/fields/methods, enums/payloads, privacy flags and
+original file locations. Without FILE it uses the nearest lowercase manifest.
+The Rust host checks types without Clang, Cargo, execution or file writes. JSON
+is always the output format; `--json` is accepted for consistency with other
+agent commands. `schema_version` is 1, `ok` distinguishes success, and failures
+carry original-file diagnostics. Exit codes are 0 for success, 1 for source/load
+errors and 2 for usage/output-limit errors. Output is capped at 16 MiB.
+
+Inspection includes concrete generic instantiations. Unused generic templates
+are omitted, as the `declaration_scope` field explains. It includes private
+declarations in the user's loaded graph and labels them; this is an inspection
+tool, not a public API export or a privacy bypass for compilation.
+
 ## Verification
 
 ```sh
