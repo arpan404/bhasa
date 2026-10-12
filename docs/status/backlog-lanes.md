@@ -2,7 +2,9 @@
 
 The user requested dedicated Codex chats for all remaining todo.md work on
 October 11, 2026. This supersedes the old bounded monitor's no-extra-chat note.
-Historical six chats remain completed and the old heartbeat remains paused.
+Historical six chats remain completed. The existing heartbeat now coordinates
+these eight lanes every five minutes; it stays quiet on unchanged progress and
+stops when no meaningful work remains without a real external change.
 
 The integration chat at 01a12ba1-6cad-7f00-a505-1eb6a34b6e41 owns contracts,
 source integration, Cargo gates, releases, todo.md and authorized progress

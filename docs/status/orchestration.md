@@ -294,3 +294,16 @@ Binding-only let drafts are complete but unapplied under immutable-bindings-
 milestone.md. Independent review caught same-spelled `let let` editor identity;
 root repaired the host draft and still owes actual builds/editor acceptance.
 Do not treat any draft or active chat as integrated completion.
+
+Typed errors are committed and pushed as `86a99ed`. The existing heartbeat was
+repurposed for the eight new full-backlog chats and is confirmed ACTIVE every
+five minutes. This supersedes paused status for the old completed scope; no
+additional automation was created. It integrates concrete increments, preserves
+caches and unfinished work, and stays quiet when no actionable progress changes.
+Its prompt requires stopping once implementable work is verified or a real
+external gate prevents further meaningful work.
+
+Initial review reserved S037/BH221 for pending-result obligations to avoid the
+immutable S036/BH220 collision, and routed native parity before cache-planner
+integration. Generated/global byte offsets must not leak into diagnostic text.
+All new lane sources remain isolated drafts awaiting acceptance.

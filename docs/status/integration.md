@@ -72,8 +72,8 @@ chats own its sections in [backlog-lanes.md](backlog-lanes.md), with IDs/cursors
 in [backlog-state.json](backlog-state.json). Their implementations stay in
 isolated drafts until reviewed and integrated. Binding-only let is also drafted
 under [immutable-bindings-milestone.md](immutable-bindings-milestone.md); it is
-not yet applied or accepted. The historical six chats remain completed and the
-old heartbeat stays paused.
+not yet applied or accepted. The historical six chats remain completed. The existing heartbeat is repurposed
+for the eight new lanes, active every five minutes with quiet unchanged checks.
 
 Ownership transfer/read-only borrows, richer types/functions/generics, channels
 and cancellation, true async I/O, broader standard/backend libraries, package

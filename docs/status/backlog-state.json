@@ -1,7 +1,7 @@
 {
   "updated": "2026-10-11",
   "coordinator": "01a12ba1-6cad-7f00-a505-1eb6a34b6e41",
-  "sourceIntegration": "Error sources frozen; immutable let drafts reserved for root; new lanes draft only.",
+  "sourceIntegration": "Typed errors committed/pushed as 86a99ed; immutable let drafts reserved for root; new lanes draft only.",
   "threads": [
     {
       "lane": "safety-errors",
@@ -67,5 +67,11 @@
       "cursor": "6768ac7c-2dd0-42b9-9ec8-6609d9e4b463:1",
       "status": "active"
     }
-  ]
+  ],
+  "automation": {
+    "id": "orchestrate-bhasa-compiler-chats",
+    "kind": "heartbeat",
+    "status": "ACTIVE",
+    "interval_minutes": 5
+  }
 }
