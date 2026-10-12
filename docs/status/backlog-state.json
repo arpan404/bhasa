@@ -1,7 +1,7 @@
 {
   "updated": "2026-10-12",
   "coordinator": "01a12ba1-6cad-7f00-a505-1eb6a34b6e41",
-  "sourceIntegration": "Verified actual owned/file/TCP increment atop 591d1a7/60d7424, pending authorized progress commit/push. Complete649 reference/681 hybrid pass; post-broad exact structural Clippy fixes independently reconstruct original bytes and pass20 reference/22 hybrid focused groups. Final270input identities match;98 LSP/94 Node, both Clippy/fmt, refreshed16examples+5package tests each, A/B/C run.lWdKWpz3,38 scheduled native hits/four unchanged Rust adapterruns0Compiling/two unchanged hybrid builds0Compiling. Final archive cdd251ae2afa392702ef70570587f3500c3723875c4c6de2f8ed59419f096a8a (broad equivalent-source archive d825a66628aafcdcb8c8154449e667abac80bc35a52ccda02fcb3fccfe7a6459). Channel family/schema source/existingbinary independent replay closes finding; actual wiring later. Native explicit-borrow source prep assigned atop corrected family channel, modes0/1/2/3 and context40 floor. Typednet/process/TLS/HTTP contextual rebase independently reviewed; HTTP tail/body prevalidation and exact-wire-header boundary findings routed to std separate correction. Toolchain pure parser corrections independently replay clean; bounded production process-adapter draft assigned GPU, root CLI/configured-tool wiring later. Workspace/API/actions/resultparameters remain isolated. Preserve worker files/original failures/caches and diagnostic precedence.",
+  "sourceIntegration": "Owned buffer/ints transfer, typed regular-file streams and atomic TCP shared-owner copies are verified and pushed as 8316a89; do not restart them. Acceptance: 649 complete reference / 681 hybrid tests; 20 reference / 22 hybrid focused groups after independently reviewed structural lint fixes; 98 LSP per configuration / 94 Node; both Clippy/fmt; 16 examples and five package tests per frontend; A/B/C run.lWdKWpz3; 38 scheduled native hits, four Rust adapter runs and two hybrid builds with zero compilations. All 270 final input identities match. Final matching archive cdd251ae2afa392702ef70570587f3500c3723875c4c6de2f8ed59419f096a8a. Next: actual reviewed channel composition; native explicit-borrow source preparation active atop corrected family-bound channel seed. Independent channel replay closes DAG/family/schema findings. Typed network/process/TLS/HTTP rebase reviewed; separate public HTTP bounds/header-budget correction active in std chat. Toolchain public parser corrections independently replay clean; bounded production process-adapter draft active in GPU chat, actual CLI/configured-tool evidence later. Workspace/API/actions/Result parameters remain isolated. Preserve worker files, original failures, caches and diagnostic precedence.",
   "threads": [
     {
       "lane": "safety-errors",
@@ -24,7 +24,7 @@
       "threadId": "01a12e2d-07c5-7c40-bab3-8d50ed614b10",
       "hostId": "local",
       "title": "Bhasa compiler parity and performance",
-      "cursor": "a1cdda68-bfde-4dd8-b572-40489571e4cc:14",
+      "cursor": "a1cdda68-bfde-4dd8-b572-40489571e4cc:15",
       "status": "active"
     },
     {
@@ -40,7 +40,7 @@
       "threadId": "01a12e2d-836d-7423-aabe-7b1cb0bcd41a",
       "hostId": "local",
       "title": "Bhasa standard library and backend services",
-      "cursor": "da040e31-e681-479b-965b-3198152313d5:4",
+      "cursor": "da040e31-e681-479b-965b-3198152313d5:5",
       "status": "active"
     },
     {
@@ -64,7 +64,7 @@
       "threadId": "01a12e2e-1eb8-7680-8b70-e57c410dd92b",
       "hostId": "local",
       "title": "Bhasa GPU and portable targets",
-      "cursor": "0bd7f91d-8deb-427c-8e95-c8453e73e49f:8",
+      "cursor": "0bd7f91d-8deb-427c-8e95-c8453e73e49f:9",
       "status": "active"
     }
   ],
@@ -73,5 +73,26 @@
     "kind": "heartbeat",
     "status": "ACTIVE",
     "interval_minutes": 5
+  },
+  "delivered": {
+    "commit": "8316a89182d8fd03ea3e96570a4f2e6c232e7faf",
+    "reference_tests": 649,
+    "hybrid_tests": 681,
+    "post_clippy_focused": {
+      "reference": 20,
+      "hybrid": 22
+    },
+    "lsp_groups_per_configuration": 98,
+    "node_tests": 94,
+    "release_examples_per_configuration": 16,
+    "package_tests_per_configuration": 5,
+    "selfhost_run": "run.lWdKWpz3",
+    "native_repeat_hits": 38,
+    "unchanged_rust_adapter_runs": 4,
+    "unchanged_hybrid_builds": 2,
+    "rust_compiling_lines": 0,
+    "archive_key": "cdd251ae2afa392702ef70570587f3500c3723875c4c6de2f8ed59419f096a8a",
+    "frozen_input_count": 270,
+    "artifact_record": "build/verify-owned-artifact-identity.json"
   }
 }

@@ -5,15 +5,15 @@
 Owned buffer/ints transfer, FileHandle host/native support, regular-file runtime,
 typed stream wrappers, driver/cache markers and atomic TCP shared-owner copies
 are integrated and verified. Integration.md records delivered scope and limits;
-integration-aliases.md preserves the previous baseline. Root is committing and
-pushing this reviewed increment before applying channels or borrows.
+integration-aliases.md preserves the previous baseline. Root committed and
+pushed this reviewed increment as `8316a89` before applying channels or borrows.
 
-Complete reference649 and hybrid681 pass. Clippy's subsequent two structural
+Complete reference 649 and hybrid 681 pass. Clippy's subsequent two structural
 changes reconstruct the exact old source when reversed, independently reviewed;
-20 reference/22 hybrid focused groups pass afterward. All270 final input hashes
-match,98 LSP groups per configuration/94 Node pass, both Clippy/fmt pass, both
-refreshed releases execute16 examples/five package tests. A/B/C passes at
-run.lWdKWpz3.38 scheduled native hits,four unchanged Rust adapter runs and two
+20 reference / 22 hybrid focused groups pass afterward. All 270 final input hashes
+match, 98 LSP groups per configuration / 94 Node pass, both Clippy/fmt pass, both
+refreshed releases execute 16 examples/five package tests. A/B/C passes at
+run.lWdKWpz3. 38 scheduled native hits,four unchanged Rust adapter runs and two
 unchanged hybrid builds have zero Compiling lines. Final matching archive is
 cdd251ae2afa392702ef70570587f3500c3723875c4c6de2f8ed59419f096a8a;
 the broad suite used preceding equivalent-source d825a66628aafcdcb8c8154449e667abac80bc35a52ccda02fcb3fccfe7a6459.
@@ -28,27 +28,27 @@ frees; marked guest LLVM catches invalid heap accesses. Instrumentation claims
 remain ASan guest/C and UBSan C, with no internal-libc allocation claim.
 
 Channel traversal-local height memo and range-before-add family/schema guards
-now pass independent source and EXISTING-binary replay:24 malformed guards,
-seven authenticated DAGs,20 authority refusals,nine other source refusals and
-nine byte-identical handoffs. DAG100 work is202 visits/101 expansions. Reports
+now pass independent source and existing binary replay: 24 malformed guards,
+seven authenticated DAGs, 20 authority refusals, nine other source refusals and
+nine byte-identical handoffs. DAG100 work is 202 visits / 101 expansions. Reports
 are under build/native-channel-independent-review. Shared source remains unwired;
 raw synchronous manifests establish consistency, not cryptographic issuer proof.
 Native chat is preparing explicit-borrow source parity atop this corrected seed;
-context40+ and exact mode1 cleanup preserve channel37..39/ownership31..36 fields.
+context 40+ and exact mode1 cleanup preserve channel 37..39 / ownership 31..36 fields.
 
 Borrow host/FileHandle/channel effects and corrected imported editor hints are
 reviewed isolated handoffs. Result parameters, workspace/API renderer and S036
 actions remain later composition work; custom code-action client offers no edit.
-The current typed-network/process/TLS/HTTP rebase applies contextually with18
+The current typed-network/process/TLS/HTTP rebase applies contextually with 18
 independent emissions and no new transport/error contract finding. Independent
-HTTP review reproduced tail/body copying before bounds and exact16KiB empty-reason
+HTTP review reproduced tail/body copying before bounds and exact 16 KiB empty-reason
 header rejection; a separate std correction is assigned. Root owns classifier
 selection before the no-core driver return and C/header cache identity, without
 OpenSSL/net for scalar-only classifiers.
 
 Toolchain public-parser corrections close both findings under original probes:
-1.4MB duplicate metadata allocates0 and control-bearing descriptions reject;
-all16 contract/regression/boundary groups pass. A bounded production process
+1.4MB duplicate metadata allocates 0 and control-bearing descriptions reject;
+all 16 contract/regression/boundary groups pass. A bounded production process
 adapter is assigned in a separate GPU draft, with synthetic-child probes only.
 Actual CLI/configured-tool/SDK/target execution remain root gates. Existing chats
 are reused, no new user chat is created, and caches/unfinished lane files remain

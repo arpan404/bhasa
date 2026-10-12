@@ -1,7 +1,7 @@
 # Compiler integration status
 
 Owned buffer/ints transfer, regular-file streaming and atomic TCP shared-owner
-copies are integrated and verified on ARM64 macOS. The preceding alias report is
+copies are integrated, verified and pushed as `8316a89` on ARM64 macOS. The preceding alias report is
 preserved in [integration-aliases.md](integration-aliases.md). This is a bounded
 increment; the full [backlog](../../todo.md) remains open.
 

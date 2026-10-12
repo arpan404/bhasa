@@ -283,7 +283,7 @@ is 366a75f3c915ffe34aa5529155ad732dc7b5e977320d34a7bc527ad931538b69.
 See `docs/status/integration.md`. Generic aliases, constants, ownership transfers,
 streaming files, channels and broader failure obligations remain open.
 
-Owned/files/TCP increment: 649 complete reference / 681 full-hybrid tests,
+`8316a89`: owned/files/TCP increment; 649 complete reference / 681 full-hybrid tests,
 98 LSP groups per configuration and 94 Node tests. Independently reviewed
 structural Clippy corrections retain semantics and pass 20 reference / 22 hybrid
 focused groups. Both Clippy configurations, formatting, refreshed releases with
