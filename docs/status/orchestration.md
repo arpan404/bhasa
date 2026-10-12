@@ -11,7 +11,7 @@ A/B/C at run.DqAvmtmF and two unchanged builds pass. Archive
 366a75f3c915ffe34aa5529155ad732dc7b5e977320d34a7bc527ad931538b69
 matches frozen seeds; 34 native hits and four unchanged Rust adapter runs require
 zero compilations. All 56 frozen source hashes remain unchanged. Reviewed docs
-and runnable alias example are applied. Root is committing this verified increment;
+and runnable alias example are applied. The increment is committed and pushed as `591d1a7`;
 integration.md records scope and evidence, integration-tools.md preserves 621a977.
 
 Independent channel review reproduced real Clang target rejection (P1). The
@@ -23,11 +23,17 @@ integration checkbox is complete.
 
 S036 server/client review found malformed diagnostic admission, transient
 overlay-history and contextual marker gaps; the editor chat owns corrections.
-The custom client offers no edit. Workspace review reproduced 31 KiB to over
-19 MiB inventory amplification; the first preconstruction bound repairs it.
+The separate corrections pass root replay: eight server groups, 37 independent
+client tests and 107 authored client tests. All 20 original artifacts remain
+unchanged. The custom client offers no edit. Workspace review reproduced inventory
+amplification from 31 KiB to over 19 MiB; the first preconstruction bound repairs it.
 A second narrow correction addresses public API wrapper depth and allocation
-before lossy path charging. Independent final review is in progress. Original
-failing source/evidence remains intact.
+before lossy path charging. Independent final review confirms both corrections:
+16 rerun groups pass, all 36 prior artifacts remain unchanged and the original
+invalid-path allocation falls from 24 MB to 51 bytes. Original failing source and
+evidence remain intact. API docs real checked reports pass independent identity/
+privacy checks; a synthetic bare-CR literal rendering gap is routed for a separate
+correction before wiring. It is not a current checked type spelling.
 
 Corrected owned host/native drafts pass independent ownership/cleanup review;
 root is composing actual editor/API support before shared integration. Explicit

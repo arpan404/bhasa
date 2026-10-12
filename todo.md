@@ -267,7 +267,7 @@ Two unchanged hybrid builds reuse archive ccabbe47a921bfdd320a4844960bfd84f5db48
 with zero compilations. See `docs/status/integration-tools.md` for scope and limitations.
 Owned transfers, streaming files and channels remain unintegrated drafts.
 
-Transparent alias increment: 597 complete reference / 622 full-hybrid tests,
+`591d1a7`: transparent alias increment; 597 complete reference / 622 full-hybrid tests,
 93 LSP groups per configuration and 93 Node tests. Both Clippy configurations,
 formatting, fourteen release examples and five package tests per frontend pass.
 Independent corrected identity review passes 126 groups plus expansion allocation

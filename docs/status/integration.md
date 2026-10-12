@@ -1,7 +1,7 @@
 # Compiler integration status
 
 Transparent nongeneric type aliases, checked alias editor identity and inspection
-metadata are integrated and verified on ARM64 macOS. The previous package/editor/
+metadata are integrated, verified and pushed as `591d1a7` on ARM64 macOS. The previous package/editor/
 private-storage report is preserved in [integration-tools.md](integration-tools.md).
 This report covers a bounded increment; the full [backlog](../../todo.md) remains open.
 
@@ -70,10 +70,12 @@ independent review; the real Clang target-admission P1 is corrected and native
 manifest implementation is assigned. Draft readiness does not complete a checkbox.
 
 Workspace review found output amplification; two corrections now bound construction
-and public API depth/path conversion. Final correction review remains separate.
+and public API depth/path conversion. Independent final correction review passes 16 groups and retains all original
+evidence; actual workspace integration remains open.
 Server/client action review found malformed diagnostics, transient overlay history
-and contextual marker gaps; corrections are in progress and the custom client
-still offers no live edit. Result-parameter checks have an approved late staging
+and contextual marker gaps; independent corrected replay passes eight server
+groups, 37 independent client tests and 107 authored client tests. Shared action
+integration remains open and the custom client still offers no live edit. Result-parameter checks have an approved late staging
 seam preserving old type/local/worker/privacy precedence, but are unintegrated.
 Aggregate and interprocedural failure handling remain outside the guarantee.
 Fatal traps are uncatchable and do not unwind. No Rust-equivalent safety or complete
